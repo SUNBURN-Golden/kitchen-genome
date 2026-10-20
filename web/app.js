@@ -1,5 +1,6 @@
 // 판정(과대평가/저평가)은 데이터가 모일 때까지 비공개. true로 바꾸면 카드·배지·필터·#/gap이 다시 보여요.
 const SHOW_VERDICTS=false;
+const SHOW_NEWSLETTER=false;
 const {kitchens,restaurants,sources}=window.SEED;const K=Object.fromEntries(kitchens.map(k=>[k.id,k]));
 const $=s=>document.querySelector(s);const esc=s=>(s??'').toString().replace(/[&<>"]/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c]));
 const alumni=restaurants.filter(r=>r.type==='alumni');const ver=r=>r.lineage_status==='verified';
@@ -19,7 +20,7 @@ const vk=g=>g>TH?'under':g<-TH?'over':'even';const VT={under:'저평가',over:'�
 const badge=r=>ver(r)?'<span class="tag v">출처 확인</span>':r.lineage_status==='unverified'?'<span class="tag">미검증</span>':r.lineage_status==='conflict'?'<span class="tag">출처 상충</span>':r.lineage_status==='related'?'<span class="tag">관련 이력</span>':'';
 const link=(u,t)=>u?`<a href="${u}" target="_blank" rel="noopener">${t||'출처'}</a>`:'<span>출처 없음</span>';
 const sponsor=t=>`<aside class="sponsor" aria-label="Sponsored"><b>Sponsored</b>${t||'광고 자리예요. 순위와 점수에는 영향을 주지 않아요.'}</aside>`;
-const news=()=>`<section class="card" id="news"><h2 style="margin-top:0">뉴스레터</h2><p class="muted">새로 문 연 계보 식당과 셰프 이동 소식을 한 주에 한 번 보내 드려요. 지금은 준비 중이에요.</p><div class="news"><input type="email" placeholder="이메일 주소" aria-label="이메일 주소" disabled><button class="btn p" disabled>구독하기</button></div></section>`;
+const news=()=>!SHOW_NEWSLETTER?"":`<section class="card" id="news"><h2 style="margin-top:0">뉴스레터</h2><p class="muted">새로 문 연 계보 식당과 셰프 이동 소식을 한 주에 한 번 보내 드려요. 지금은 준비 중이에요.</p><div class="news"><input type="email" placeholder="이메일 주소" aria-label="이메일 주소" disabled><button class="btn p" disabled>구독하기</button></div></section>`;
 const cut=(t,n)=>{t=(t??'').toString();return t.length>n?t.slice(0,n-1)+'…':t};
 const legend=`<div class="legend"><span><i></i>출처 확인</span><span><i class="d"></i>미검증</span></div>`;
 // 판정: 기존 gap() 점수만 써요. 서울 밖이거나 신호가 하나도 없으면 '판정 대기'
