@@ -20,8 +20,9 @@ python3 build_data.py && python3 enrich_1.py && python3 enrich_2.py && python3 e
 - Cloudflare Pages 프로젝트 `kitchengenome` (account `aa6bf084982ee841c3ea39b45895a15e`) → https://kitchengenome.soulbound.co.kr
 - 자동 배포 없음. GitHub Actions 워크플로는 제거했어요. / No auto-deploy; the Actions workflow was removed.
 - 흐름 / Workflow: 변경 → PR → 머지 → 커넥터로 수동 배포 / change → PR → merge → deploy manually via the Cloudflare connector.
-  1. `main` 체크아웃 후 `python3 scripts/build_deploy.py` (needs `blake3`) → `dist/deploy_kitchengenome.js` 생성 (gitignored).
-  2. user-Cloudflare 커넥터의 `execute` 도구에 그 파일 내용을 `code`로 넣어 실행 (upload-token → assets upload → deployments).
+  1. `main` 체크아웃 후 `python3 scripts/build_deploy.py` (needs `blake3`) → `dist/deploy_kitchengenome.js` (gitignored).
+  2. user-Cloudflare `execute`로 `GET /accounts/{id}/pages/projects/kitchengenome/upload-token`의 `result.jwt`만 반환하게 해서 파일로 저장(write_to_file) → `python3 scripts/upload_assets.py <그 파일>` (커넥터 안에서는 asset 업로드가 403이라 박스에서 올림; 토큰 출력 금지).
+  2b. `execute`에 `dist/deploy_kitchengenome.js` 내용을 `code`로 넣어 배포 생성.
   3. 확인: https://kitchengenome.soulbound.co.kr 200, 제목 '키친 게놈', noindex.
 - 토큰이 있으면 `deploy.sh`(wrangler)로도 가능 / `deploy.sh` (wrangler) works if a Pages:Edit token is available.
 - 초안 기간 동안 noindex 유지: `<meta name="robots" content="noindex">` + `X-Robots-Tag: noindex, nofollow` 헤더. 지우지 마세요. / Keep noindex.
