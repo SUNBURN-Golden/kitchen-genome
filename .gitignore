@@ -1,0 +1,9 @@
+node_modules/
+.env
+.env.*
+__pycache__/
+*.pyc
+shots/
+*.png
+.wrangler/
+.DS_Store

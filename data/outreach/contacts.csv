@@ -1,0 +1,34 @@
+priority,id,name,chef,kitchen,city,lineage_status,instagram_restaurant,instagram_chef,public_email,website,source_urls,confidence,note
+1,soseoul,소설한남,엄태철,mosu,서울,verified,https://www.instagram.com/soseoul_hannam,,,,seed.json url,seed,"기존 시드 URL, 계정 소유 재확인 필요"
+1,bornyon,본연,배경준,mosu,서울,verified,https://www.instagram.com/bornyon_seoul,,,,seed.json url,seed,기존 시드 URL
+1,trid,트리드,강승원,mosu,서울,verified,https://www.instagram.com/tridseoul,,,,seed.json url,seed,기존 시드 URL
+1,mils,밀스,정영훈,mosu,서울,verified,https://www.instagram.com/milsishappy,,,,seed.json url,seed,기존 시드 URL
+1,mao,마오,정영훈,mosu,서울,verified,https://www.instagram.com/maophoga,,,,seed.json url,seed,기존 시드 URL; 밀스와 같은 셰프(정영훈)라 한 번에 연락
+1,orzo,오스테리아 오르조,김호윤,soigne,서울,verified,https://www.instagram.com/osteriaorzo,https://www.instagram.com/chefhoyoon,,,https://triple.guide/restaurants/65cd91e2-0c4f-42da-91e0-503642af9537,search_summary,"검색 요약 기반, 프로필 직접 확인 필요; 더 이탈리안 클럽과 같은 셰프"
+1,legume,레귬,성시우,soigne,서울,verified,https://www.instagram.com/legume.seoul,,legume.seoul@gmail.com,http://www.legume.kr,http://www.legume.kr/reservation,official_site,공식 홈페이지에 IG DM·이메일 문의 명시
+1,on,레스토랑 온,김준형,onjium,서울,verified,https://www.instagram.com/restaurant_on,https://www.instagram.com/restaurant_onchef,,http://restauranton.modoo.at,https://www.siksinhot.com/P/978576 ; https://world.nol.com/en/content/pois/2d91231b-74f6-416b-988f-5bbf258c0dae,directory,식신·NOL 디렉토리 기재; 셰프 계정은 femente.com 기재
+1,mamalee,마마리,송하슬람 (宋夏瑟蘭),mingles,서울,verified,https://www.instagram.com/mamaleemarket,https://www.instagram.com/songhaseulram,,,https://triple.guide/restaurants/e89c23df-145a-477d-bf17-2f5ae6668709 ; https://nahonjabonda.blogspot.com/2024/09/culinary-class-wars-cast-information-black-spoon-chefs.html,directory,마마리 다이닝 @mamalee_dining 도 있음(triple.guide)
+1,matthew,매튜,이원석,mingles,서울,verified,https://www.instagram.com/matthew.seoul,https://www.instagram.com/chefquail,,,http://www.bluer.co.kr/magazine/280 ; https://metizen.co.kr/,directory,블루리본 매거진에 IG 기재. 이메일 mt@matthewseoul.com 은 3자 집계(exa.ai)에만 있어 미기재 — 공식 확인 전 사용 금지
+1,matteo,마테오견문록,신왕열,mingles,서울,verified,https://www.instagram.com/matteo_travelog,https://www.instagram.com/mat_tteo,,,https://world.nol.com/en/content/pois/ff947712-0cb0-432a-a5fc-63f8e8d67f9f ; https://www.threads.com/@mat_tteo,directory,식신에는 @mto_travelog 로 표기 — 실제 계정 확인 필요
+1,vinho,빈호,"전성빈 (+김진호 소믈리에, 장하나 디저트)",mingles,서울,verified,https://www.instagram.com/restaurant.vinho,https://www.instagram.com/jeon_sb_,,https://restaurantvinho.kr,https://www.restaurantvinho.kr/CONTACT,search_summary,공식 사이트 CONTACT 페이지 있음 — 이메일은 직접 열어 확인 필요
+1,finz,핀즈,김범주 (파티시에),mingles,서울,verified,https://www.instagram.com/finz.seoul,,,,https://bakerynews.co.kr/article/1065600087105341,search_summary,검색 요약 기반
+1,mowa,모와,문원기,mingles,서울,verified,https://www.instagram.com/mowa.official,,,,https://korean.visitseoul.net/citycenter/2024-MOWa/KOPzrztmb,search_summary,호텔(르메르디앙) 내 업장 — 호텔 PR 경유 가능성
+1,midolim,미도림,박준희,jungsik,서울,verified,https://www.instagram.com/midolim_bar,https://www.instagram.com/oceanpark,,,https://www.siksinhot.com/P/1269597,search_summary,검색 요약 기반
+1,nooyster,노 오이스터 (No Oyster),김기재,jungsik,서울,verified,,,,,,not_found,공개 채널 못 찾음 — 네이버 플레이스 수동 확인
+1,goum,고움,정식당 출신 셰프 (이름 미기재),jungsik,서울,verified,,,,,,not_found,셰프 이름 미기재 — 업장 계정부터 찾아야 함
+1,iter,이테르 라클라스,노지민,kwonsooksoo,서울,verified,https://www.instagram.com/official_iter,https://www.instagram.com/chefroh,,,https://design.co.kr/article/146692/,search_summary,호텔(소테츠) 내 업장
+1,oct19,10월 19일,박지현·윤송이 (파티시에),kwonsooksoo,서울,verified,https://www.instagram.com/songi_19oct,,,,https://www.esquirekorea.co.kr/eee/1854,search_summary,윤송이 셰프 개인 계정일 수 있음
+1,oddhouse,오드하우스,권숙수 출신 헤드셰프 (이름 미기재),kwonsooksoo,서울,verified,,,,,,not_found,셰프 이름 미기재
+1,italianclub,더 이탈리안 클럽,김호윤,soigne,서울,verified,,https://www.instagram.com/chefhoyoon,,,https://www.esquirekorea.co.kr/eee/4204,search_summary,오르조와 같은 셰프 — 한 메시지로 두 곳 확인
+2,layered,레이어드,박성배,mingles,서울,conflict,,,,,,none,계보 출처 충돌로 제외 — 연락 보류
+2,gaongaok,가온가옥,박상진,gaon,서울,related,,,,,,not_searched,계보 related 단계 — 2차 배치
+2,arari,아라리,이지우,gaon,서울,related,,,,,,not_searched,계보 related 단계 — 2차 배치
+2,origin_numbers,오리지널 넘버스,이찬양,soigne,서울,unverified,https://www.instagram.com/original.numbers,,,,https://polle.com/place/2Icqeq/,search_summary,계보 unverified
+2,goni,스시 고니,조병곤,sushicho,서울,unverified,,,,,,not_found,공식 계정 미확인
+3,atomix,아토믹스,박정현,jungsik,뉴욕,verified,,,,,,overseas_later,서울 외 — 이번 배치 제외
+3,atoboy,아토보이,박정현,jungsik,뉴욕,verified,,,,,,overseas_later,서울 외 — 이번 배치 제외
+3,jua,주아,김호영,jungsik,뉴욕,verified,,,,,,overseas_later,서울 외 — 이번 배치 제외
+3,moono,무노,김호영,jungsik,뉴욕,verified,,,,,,overseas_later,서울 외 — 이번 배치 제외
+3,lysee,리제,이은지,jungsik,뉴욕,verified,,,,,,overseas_later,서울 외 — 이번 배치 제외
+3,odre,오드레,강창기,onjium,뉴욕,unverified,,,,,,overseas_later,서울 외 — 이번 배치 제외
+3,wanchun,완춘,김태완,onjium,울산,unverified,,,,,,overseas_later,서울 외 — 이번 배치 제외
