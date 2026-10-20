@@ -12,7 +12,7 @@ for d,_,fs in os.walk(root):
         h=blake3((b64+ext).encode()).hexdigest()[:32]; manifest[rel]=h
         files.append({'key':h,'value':b64,'metadata':{'contentType':mt.get(ext,'application/octet-stream')},'base64':True})
 tpl=open(os.path.join(here,'deploy_kitchengenome.js')).read()
-js=tpl.replace('__FILES__',json.dumps(files)).replace('__MANIFEST__',json.dumps(manifest))
+js=tpl.replace('__MANIFEST__',json.dumps(manifest))
 os.makedirs(os.path.join(here,'..','dist'),exist_ok=True)
 out=os.path.join(here,'..','dist','deploy_kitchengenome.js'); open(out,'w').write(js)
 print(out, len(js), 'bytes;', manifest)
