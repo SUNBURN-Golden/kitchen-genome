@@ -1,0 +1,55 @@
+"""Generate web/sitemap.xml, web/rss.xml, web/robots.txt from data/seed.json.
+Run by scripts/build_deploy.py so feeds always match the deployed data.
+Public fields only: never verdicts (과대평가/저평가), gap scores, or newsletter content."""
+import os, re, json, datetime
+from xml.sax.saxutils import escape as x
+BASE='https://kitchengenome.soulbound.co.kr'
+here=os.path.dirname(os.path.abspath(__file__)); root=os.path.join(here,'..')
+d=json.load(open(os.path.join(root,'data','seed.json'),encoding='utf-8'))
+web=os.path.join(root,'web'); gen=d['generated']
+K={k['id']:k for k in d['kitchens']}; R=d['restaurants']
+def ymd(s):
+    m=re.match(r'(\d{4})(?:-(\d{2}))?(?:-(\d{2}))?',str(s or ''))
+    return m and datetime.date(int(m[1]),int(m[2] or 1),int(m[3] or 1))
+def lastmod(*vals):
+    ds=[ymd(v) for v in vals if ymd(v)]; return max(ds).isoformat() if ds else gen
+# Sitemap: the site is a single-page app with hash routes (#/r/<id>, #/k/<id>). Only "/" resolves
+# server-side; crawlers drop fragments. We still list the hash URLs so feed/monitor bots can find
+# every page; search engines will treat them as "/". (Site stays noindex during draft; see README.)
+urls=[(BASE+'/',lastmod(gen,*[r.get('checked') for r in R],*[r.get('contacted_at') for r in R],*[r.get('closed_at') for r in R])),
+      (BASE+'/#/dir',gen),(BASE+'/#/rising',gen)]
+for k in d['kitchens']:
+    rs=[r for r in R if r['kitchen']==k['id']]
+    urls.append((f"{BASE}/#/k/{k['id']}",lastmod(k.get('checked'),*[r.get('checked') for r in rs],*[r.get('contacted_at') for r in rs],*[r.get('closed_at') for r in rs])))
+for r in R: urls.append((f"{BASE}/#/r/{r['id']}",lastmod(r.get('checked'),r.get('contacted_at'),r.get('confirmed_at'),r.get('closed_at'))))
+sm=['<?xml version="1.0" encoding="UTF-8"?>','<urlset xmlns="http://www.sitemaps.org/schemas/sitemap/0.9">']
+sm+=[f'  <url><loc>{x(u)}</loc><lastmod>{m}</lastmod></url>' for u,m in urls]+['</urlset>','']
+open(os.path.join(web,'sitemap.xml'),'w',encoding='utf-8').write('\n'.join(sm))
+def pub(r):
+    dt=ymd(r.get('contacted_at')) or ymd(r.get('opened')) or ymd(gen)
+    return datetime.datetime(dt.year,dt.month,dt.day,9,0,tzinfo=datetime.timezone(datetime.timedelta(hours=9)))
+def desc(r):
+    bad=lambda v:not v or re.search('미확인|미기재',str(v))
+    k=K.get(r.get('kitchen'),{}).get('name'); role=r.get('role')
+    head=(f"{r['chef']} 셰프" if not bad(r.get('chef')) else '셰프 이름 미확인')
+    if k: head+=f" · {k} 출신"+(f" ({role})" if not bad(role) and role!='출신' else '')
+    p=[head]
+    p.append(' · '.join(v for v in (r.get('city'),r.get('area'),r.get('cuisine')) if v and v!='미확인'))
+    if ymd(r.get('opened')): p.append(f"오픈 {r['opened']}")
+    if r.get('closed_at'): p.append(f"폐업 {r['closed_at']}")
+    p.append('공개 자료 기준, 식당 확인 전' if r.get('verification_status')!='confirmed' else '식당 확인 완료')
+    return ' / '.join(v for v in p if v)
+items=sorted(R,key=lambda r:(pub(r),r['id']),reverse=True)
+fmt=lambda t:t.strftime('%a, %d %b %Y %H:%M:%S %z')
+rss=['<?xml version="1.0" encoding="UTF-8"?>','<rss version="2.0" xmlns:atom="http://www.w3.org/2005/Atom"><channel>',
+ '<title>키친 게놈 · Kitchen Genome</title>',f'<link>{BASE}/</link>',
+ f'<atom:link href="{BASE}/rss.xml" rel="self" type="application/rss+xml"/>',
+ '<description>서울 최고 주방 출신 셰프들이 연 식당 계보, 출처와 함께</description><language>ko</language>',
+ f'<lastBuildDate>{fmt(pub(items[0]) if items else datetime.datetime.now(datetime.timezone.utc))}</lastBuildDate>']
+for r in items:
+    u=f"{BASE}/#/r/{r['id']}"
+    rss.append(f"<item><title>{x(r['name'])}</title><link>{x(u)}</link><guid isPermaLink=\"false\">kitchengenome:{x(r['id'])}</guid><pubDate>{fmt(pub(r))}</pubDate><description>{x(desc(r))}</description></item>")
+rss+=['</channel></rss>','']
+open(os.path.join(web,'rss.xml'),'w',encoding='utf-8').write('\n'.join(rss))
+open(os.path.join(web,'robots.txt'),'w').write(f'User-agent: *\nAllow: /\nSitemap: {BASE}/sitemap.xml\n')
+print('feeds:',len(urls),'sitemap urls,',len(items),'rss items')
