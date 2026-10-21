@@ -692,7 +692,9 @@
    "chef_en": "Junghyun Park",
    "chef_en_src": "https://guide.michelin.com/us/en/new-york-state/new-york/restaurant/atomix",
    "chef_en_official": true,
-   "chef_en_type": "official"
+   "chef_en_type": "official",
+   "instagram": "atomixnyc",
+   "instagram_src": "https://culinaryagents.com/entities/134036-Atomix (links official site)"
   },
   {
    "id": "atoboy",
@@ -734,7 +736,9 @@
    "chef_en": "Junghyun Park",
    "chef_en_src": "https://guide.michelin.com/us/en/new-york-state/new-york/restaurant/atoboy",
    "chef_en_official": true,
-   "chef_en_type": "official"
+   "chef_en_type": "official",
+   "instagram": "atoboynyc",
+   "instagram_src": "https://www.atoboynyc.com (official site link)"
   },
   {
    "id": "jua",
@@ -776,7 +780,9 @@
    "chef_en": "Hoyoung Kim",
    "chef_en_src": "https://guide.michelin.com/us/en/new-york-state/new-york/restaurant/jua",
    "chef_en_official": true,
-   "chef_en_type": "official"
+   "chef_en_type": "official",
+   "instagram": "jua.nyc",
+   "instagram_src": "https://www.juanyc.com (official site link)"
   },
   {
    "id": "moono",
@@ -818,7 +824,9 @@
    "chef_en": "Hoyoung Kim",
    "chef_en_src": "https://guide.michelin.com/us/en/new-york-state/new-york/restaurant/jua",
    "chef_en_official": true,
-   "chef_en_type": "official"
+   "chef_en_type": "official",
+   "instagram": "moono.nyc",
+   "instagram_src": "https://www.moononyc.com (official site link)"
   },
   {
    "id": "lysee",
@@ -906,7 +914,9 @@
    "chef_en": "Mingoo Kang",
    "chef_en_src": "https://guide.michelin.com/kr/en/seoul-capital-area/kr-seoul/restaurant/mingles",
    "chef_en_official": true,
-   "chef_en_type": "official"
+   "chef_en_type": "official",
+   "instagram": "mingles_restaurant",
+   "instagram_src": "https://dafanew.com/FoodInterview/?bmode=view&idx=160496248 ; https://thebestchefawards.com/chefs/kang-min/"
   },
   {
    "id": "mosu_r",
@@ -1128,7 +1138,9 @@
    "chef_en": "Joseph Lidgerwood",
    "chef_en_src": "https://guide.michelin.com/kr/en/seoul-capital-area/kr-seoul/restaurant/evett",
    "chef_en_official": true,
-   "chef_en_type": "official"
+   "chef_en_type": "official",
+   "instagram": "restaurantevett",
+   "instagram_src": "https://www.restaurantevett.com (official site link)"
   },
   {
    "id": "kwon_r",
@@ -1426,7 +1438,9 @@
    "chef_en": null,
    "chef_en_src": null,
    "chef_en_official": null,
-   "chef_en_type": null
+   "chef_en_type": null,
+   "instagram": "jueun_restaurant",
+   "instagram_src": "https://www.restaurantjueun.com (official site link)"
   },
   {
    "id": "lamant",
@@ -1991,7 +2005,9 @@
    "chef_en": "Noh Ji-min",
    "chef_en_src": "Revised Romanization (automatic)",
    "chef_en_official": false,
-   "chef_en_type": "romanized"
+   "chef_en_type": "romanized",
+   "instagram": "official_iter",
+   "instagram_src": "https://iter-restaurants.com/ko/ (official site link)"
   },
   {
    "id": "oct19",
@@ -2432,7 +2448,9 @@
    "chef_en": "Cho Eun-hui",
    "chef_en_src": "Revised Romanization (automatic)",
    "chef_en_official": false,
-   "chef_en_type": "romanized"
+   "chef_en_type": "romanized",
+   "instagram": "onjium_restaurant",
+   "instagram_src": "https://www.eater.com/venue/90304/onjieum"
   }
  ]
 }
