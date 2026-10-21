@@ -43,6 +43,11 @@ for k in d["kitchens"]:
     else: k["official_source_url"]=None
     if k["id"]=="gaon": k["michelin"]=f"현재 미쉐린 서울 목록에 없음 ({D} 확인)"
     k["checked"]=D
+# 폐업 기록 (레코드는 지우지 않고 표시만)
+CLOSED={"soseoul":("2026-07-19","https://namdi.co.kr")}
+for r in d["restaurants"]:
+    c=CLOSED.get(r["id"])
+    if c: r["closed_at"],r["closed_src"]=c
 d["generated"]=D
 json.dump(d,open("data/seed.json","w"),ensure_ascii=False,indent=1)
 cols=["id","type","name","chef","kitchen","role","opened","area","cuisine","city","price","michelin","official_source_url","source_tier","bluer","lineage_status","lineage_src","note","checked"]
