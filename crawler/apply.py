@@ -64,7 +64,7 @@ def main():
     old = {(p['id'], p['kind'], p.get('new_name'), p.get('field')): p for p in load(os.path.join(H, 'pending.json'), [])}
     for p in pend:
         o = old.get((p['id'], p['kind'], p.get('new_name'), p.get('field')))
-        p['first_seen'] = (o or {}).get('first_seen', today); p['last_seen'] = today
+        p['first_seen'] = (o or {}).get('first_seen', today)  # no last_seen: avoids a daily no-op PR
     json.dump(pend, open(os.path.join(H, 'pending.json'), 'w', encoding='utf-8'), ensure_ascii=False, indent=1)
     log = load(os.path.join(H, 'applied.json'), []) + applied
     json.dump(log, open(os.path.join(H, 'applied.json'), 'w', encoding='utf-8'), ensure_ascii=False, indent=1)
