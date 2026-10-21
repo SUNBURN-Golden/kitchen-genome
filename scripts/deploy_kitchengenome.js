@@ -6,8 +6,7 @@
 async () => {
 const PROJECT='kitchengenome';
 const manifest=__MANIFEST__;
-// Site-wide noindex while rankings/verdicts are draft. Keep this.
-const headersTxt="/*\n  X-Robots-Tag: noindex, nofollow\n  X-Content-Type-Options: nosniff\n  Referrer-Policy: strict-origin-when-cross-origin\n";
+const headersTxt="/*\n  X-Content-Type-Options: nosniff\n  Referrer-Policy: strict-origin-when-cross-origin\n";
 const out={};
 const b='----F'+Date.now();
 const parts=[['manifest',JSON.stringify(manifest)],['branch','main'],['_headers',headersTxt]];
