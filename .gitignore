@@ -8,3 +8,4 @@ shots/
 .wrangler/
 .DS_Store
 dist/
+crawler/out/

@@ -1,0 +1,126 @@
+[
+ {
+  "id": "origin_numbers",
+  "kind": "rename",
+  "new_name": "칸티크",
+  "url": "https://www.mingchu.io/people/article-korean/1801",
+  "host": "mingchu.io",
+  "date": "2026-10-21",
+  "title": "이찬양 셰프 인터뷰: 오리지널 넘버스를 지나 같은 자리·같은 사람들과 '칸티크'로 독립"
+ },
+ {
+  "id": "origin_numbers",
+  "kind": "rename",
+  "new_name": "칸티크",
+  "url": "https://guide.michelin.com/kr/ko/seoul-capital-area/kr-seoul/restaurant/original-numbers",
+  "host": "guide.michelin.com",
+  "date": "2026-10-20",
+  "title": "미쉐린 공식 페이지 제목 '칸티크' (사람이 확인, 자동 수집 아님)"
+ },
+ {
+  "id": "origin_numbers",
+  "kind": "rename",
+  "new_name": "칸티크",
+  "url": "https://www.catchtable.net/shop/original_numbers",
+  "host": "catchtable.net",
+  "date": "2026-10-21",
+  "title": "캐치테이블 shop/original_numbers 매장명 '칸티크' (보조)"
+ },
+ {
+  "id": "origin_numbers",
+  "kind": "field",
+  "field": "lineage_src",
+  "value": "https://www.mingchu.io/people/article-korean/1801",
+  "url": "https://www.mingchu.io/people/article-korean/1801",
+  "host": "mingchu.io",
+  "date": "2026-10-21",
+  "title": "원문: 스와니예 4년 근무, 이준 셰프 제안으로 오리지널 넘버스 합류"
+ },
+ {
+  "id": "origin_numbers",
+  "kind": "field",
+  "field": "lineage_src",
+  "value": "https://www.mingchu.io/people/article-korean/1801",
+  "url": "https://dealseoul.com/eats/original-numbers",
+  "host": "dealseoul.com",
+  "date": "2026-10-21",
+  "title": "Chef Lee Chan-yang ... cooked at Soigne, which also runs this room"
+ },
+ {
+  "id": "finz",
+  "kind": "closure",
+  "url": "https://polle.com/place/2FzhOs/%ED%95%80%EC%A6%88",
+  "host": "polle.com",
+  "date": "2026-10-21",
+  "title": "뽈레: 핀즈 '폐점' 표시",
+  "note": "성수 매장 폐업 정황은 리뷰 플랫폼·블로그뿐. 공공 인허가 자료는 '영업/정상'(2025-12-15 갱신), 잠실 롯데백화점 분점 언급도 있어 브랜드 전체 폐업인지 불명"
+ },
+ {
+  "id": "finz",
+  "kind": "closure",
+  "url": "https://www.diningcode.com/profile.php?rid=4WsUhCfW08k0",
+  "host": "diningcode.com",
+  "date": "2026-10-21",
+  "title": "다이닝코드 블로그 후기 '성수 핀즈 폐업 / 마지막 케이크'"
+ },
+ {
+  "id": "oct19",
+  "kind": "field",
+  "field": "note",
+  "value": "2024-11 보도 기준 운영 중(6년째). 2024-04 블로그 기준 강남구 테헤란로77길 43(삼성·선릉)으로 이전 → 현재 위치 재확인 필요",
+  "url": "https://bakerynews.co.kr/article/1065593862148996",
+  "host": "bakerynews.co.kr",
+  "date": "2024-11-28",
+  "title": "월간 베이커리뉴스: 10월 19일 세이버리 디저트 코스, 두 셰프 운영"
+ },
+ {
+  "id": "oct19",
+  "kind": "field",
+  "field": "note",
+  "value": "2024-11 보도 기준 운영 중(6년째). 2024-04 블로그 기준 강남구 테헤란로77길 43(삼성·선릉)으로 이전 → 현재 위치 재확인 필요",
+  "url": "https://artist-yoo.tistory.com/99",
+  "host": "artist-yoo.tistory.com",
+  "date": "2024-04-15",
+  "title": "블로그: 위치 강남구 테헤란로 77길 43, 캐치테이블 예약"
+ },
+ {
+  "id": "origin_numbers",
+  "kind": "field",
+  "field": "note",
+  "value": "2026년 오리지널 넘버스 → 칸티크로 상호 변경 (같은 자리, 같은 팀; 이찬양 셰프 독립)",
+  "url": "https://www.mingchu.io/people/article-korean/1801",
+  "host": "mingchu.io",
+  "date": "2026-10-21",
+  "title": "상호 변경 메모"
+ },
+ {
+  "id": "origin_numbers",
+  "kind": "field",
+  "field": "note",
+  "value": "2026년 오리지널 넘버스 → 칸티크로 상호 변경 (같은 자리, 같은 팀; 이찬양 셰프 독립)",
+  "url": "https://guide.michelin.com/kr/ko/seoul-capital-area/kr-seoul/restaurant/original-numbers",
+  "host": "guide.michelin.com",
+  "date": "2026-10-21",
+  "title": "상호 변경 메모"
+ },
+ {
+  "id": "origin_numbers",
+  "kind": "field",
+  "field": "lineage_status",
+  "value": "verified",
+  "url": "https://www.mingchu.io/people/article-korean/1801",
+  "host": "mingchu.io",
+  "date": "2026-10-21",
+  "title": "스와니예(이준 셰프) 출신 원문 확인"
+ },
+ {
+  "id": "origin_numbers",
+  "kind": "field",
+  "field": "lineage_status",
+  "value": "verified",
+  "url": "https://dealseoul.com/eats/original-numbers",
+  "host": "dealseoul.com",
+  "date": "2026-10-21",
+  "title": "스와니예(이준 셰프) 출신 원문 확인"
+ }
+]

@@ -1,0 +1,30 @@
+#!/usr/bin/env bash
+# Kitchen Genome daily pipeline: crawl -> apply -> build -> PR/squash-merge -> deploy prep.
+# Headless up to the Cloudflare deploy; the deploy itself needs the user-Cloudflare connector (see README "자동 크롤러").
+# Usage: bash scripts/daily_pipeline.sh [/path/to/clone]   (default /tmp/kg)
+# Exit 0 always on success; last line is one of: RESULT=NO_CHANGE | RESULT=MERGED_NO_DEPLOY pr=<url> | RESULT=NEEDS_DEPLOY pr=<url>
+set -euo pipefail
+REPO="${1:-/tmp/kg}"; cd "$REPO"
+DAY=$(date +%Y%m%d); BR="crawl/$DAY"
+git checkout -q main && git pull -q --ff-only
+git branch -D "$BR" >/dev/null 2>&1 || true; git checkout -q -b "$BR"
+python3 crawler/crawl.py
+python3 crawler/apply.py
+python3 data/enrich_en.py
+python3 scripts/build_deploy.py >/dev/null
+# guards: verdicts and newsletter stay hidden, no noindex anywhere
+grep -q '^const SHOW_VERDICTS=false;' web/app.js
+grep -q '^const SHOW_NEWSLETTER=false;' web/app.js
+if grep -rqi 'noindex' web; then echo "GUARD FAIL: noindex found"; exit 3; fi
+git add -A data crawler web scripts .gitignore
+if git diff --cached --quiet; then git checkout -q main; git branch -D "$BR" -q; echo "RESULT=NO_CHANGE"; exit 0; fi
+WEB_CHANGED=0; git diff --cached --quiet -- web || WEB_CHANGED=1
+SUM=$(python3 -c "import json;s=json.load(open('crawler/out/last_summary.json'));print('; '.join(f\"{a['name']}: {a['kind']} {a.get('new_name') or a.get('field') or ''}\" for a in s['applied']) or 'pending queue only', '| pending', s['pending_count'])")
+git commit -q -m "crawl $DAY: $SUM"
+git push -q -u origin "$BR" --force
+PR=$(gh pr create --repo SUNBURN-Golden/kitchen-genome --base main --head "$BR" --title "crawl $DAY: $SUM" \
+  --body "Automated daily crawl (scripts/daily_pipeline.sh). Applied only with >=2 independent reliable sources; see crawler/applied.json. Review queue: crawler/pending.json. SHOW_VERDICTS/SHOW_NEWSLETTER=false, no noindex (guards passed).")
+gh pr merge "$PR" --squash --delete-branch
+git checkout -q main && git pull -q --ff-only
+python3 scripts/build_deploy.py >/dev/null   # dist/deploy_kitchengenome.js from merged main
+if [ "$WEB_CHANGED" = 1 ]; then echo "RESULT=NEEDS_DEPLOY pr=$PR"; else echo "RESULT=MERGED_NO_DEPLOY pr=$PR"; fi

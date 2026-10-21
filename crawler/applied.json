@@ -1,0 +1,92 @@
+[
+ {
+  "id": "origin_numbers",
+  "name": "오리지널 넘버스",
+  "kind": "field",
+  "new_name": null,
+  "field": "lineage_src",
+  "value": "https://www.mingchu.io/people/article-korean/1801",
+  "reliable_hosts": [
+   "dealseoul.com",
+   "mingchu.io"
+  ],
+  "sources": [
+   "https://dealseoul.com/eats/original-numbers",
+   "https://www.mingchu.io/people/article-korean/1801"
+  ],
+  "dates": [
+   "2026-10-21",
+   "2026-10-21"
+  ],
+  "note": null,
+  "applied_at": "2026-10-21"
+ },
+ {
+  "id": "origin_numbers",
+  "name": "오리지널 넘버스",
+  "kind": "rename",
+  "new_name": "칸티크",
+  "field": null,
+  "value": null,
+  "reliable_hosts": [
+   "guide.michelin.com",
+   "mingchu.io"
+  ],
+  "sources": [
+   "https://guide.michelin.com/kr/ko/seoul-capital-area/kr-seoul/restaurant/original-numbers",
+   "https://www.catchtable.net/shop/original_numbers",
+   "https://www.mingchu.io/people/article-korean/1801"
+  ],
+  "dates": [
+   "2026-10-20",
+   "2026-10-21",
+   "2026-10-21"
+  ],
+  "note": null,
+  "applied_at": "2026-10-21"
+ },
+ {
+  "id": "origin_numbers",
+  "name": "칸티크",
+  "kind": "field",
+  "new_name": null,
+  "field": "lineage_status",
+  "value": "verified",
+  "reliable_hosts": [
+   "dealseoul.com",
+   "mingchu.io"
+  ],
+  "sources": [
+   "https://dealseoul.com/eats/original-numbers",
+   "https://www.mingchu.io/people/article-korean/1801"
+  ],
+  "dates": [
+   "2026-10-21",
+   "2026-10-21"
+  ],
+  "note": null,
+  "applied_at": "2026-10-21"
+ },
+ {
+  "id": "origin_numbers",
+  "name": "칸티크",
+  "kind": "field",
+  "new_name": null,
+  "field": "note",
+  "value": "2026년 오리지널 넘버스 → 칸티크로 상호 변경 (같은 자리, 같은 팀; 이찬양 셰프 독립)",
+  "reliable_hosts": [
+   "guide.michelin.com",
+   "mingchu.io"
+  ],
+  "sources": [
+   "https://guide.michelin.com/kr/ko/seoul-capital-area/kr-seoul/restaurant/original-numbers",
+   "https://www.mingchu.io/people/article-korean/1801"
+  ],
+  "dates": [
+   "2026-10-21",
+   "2026-10-21"
+  ],
+  "note": null,
+  "applied_at": "2026-10-21"
+ }
+]

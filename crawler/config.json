@@ -1,0 +1,19 @@
+{
+ "user_agent": "KitchenGenomeBot/1.0 (+https://kitchengenome.soulbound.co.kr; kitchengenome@soulbound.co.kr)",
+ "delay_sec": 2.0,
+ "max_items_per_query": 15,
+ "lookback_days": 120,
+ "banned_hosts": ["instagram.com", "naver.com", "naver.me", "guide.michelin.com", "dcinside.com", "yna.co.kr"],
+ "banned_note": "guide.michelin.com robots.txt prohibits automated browsing (legal notice) -> MICHELIN status is checked by hand only. Instagram/Naver never.",
+ "unreliable_hosts": ["tistory.com", "blog.", "brunch.co.kr", "polle.com", "diningcode.com", "siksinhot.com", "catchtable.net", "autoreserve.com", "bing.com", "youtube.com", "reddit.com"],
+ "keywords": {
+  "closure": ["폐업", "폐점", "문을 닫", "영업 종료", "영업을 종료", "마지막 영업", "closed", "closing", "shut"],
+  "rename": ["상호 변경", "이름을 바꾸", "새 이름", "리브랜딩", "재오픈", "새롭게 문을", "renamed", "rebrand"],
+  "chef_move": ["합류", "부임", "새 헤드셰프", "새 총괄", "떠나", "독립", "이직", "joins", "new chef", "departs"],
+  "opening": ["오픈", "개업", "문을 연", "opens", "opening"]
+ },
+ "publisher_feeds": [
+  "https://www.foodnews.news/rss/allArticle.xml",
+  "https://bakerynews.co.kr/rss/allArticle.xml"
+ ]
+}
