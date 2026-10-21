@@ -247,9 +247,11 @@
    "name_en": "Soseoul Hannam",
    "name_en_src": "https://www.instagram.com/soseoul_hannam (Instagram handle)",
    "name_en_official": true,
+   "name_en_type": "official",
    "chef_en": "Eom Tae-cheol",
    "chef_en_src": "Revised Romanization (automatic)",
-   "chef_en_official": false
+   "chef_en_official": false,
+   "chef_en_type": "romanized"
   },
   {
    "id": "bornyon",
@@ -287,9 +289,11 @@
    "name_en": "Bornyon",
    "name_en_src": "https://www.instagram.com/bornyon_seoul (Instagram handle)",
    "name_en_official": true,
+   "name_en_type": "official",
    "chef_en": "Bae Gyeong-jun",
    "chef_en_src": "Revised Romanization (automatic)",
-   "chef_en_official": false
+   "chef_en_official": false,
+   "chef_en_type": "romanized"
   },
   {
    "id": "trid",
@@ -329,9 +333,11 @@
    "name_en": "trid",
    "name_en_src": "https://guide.michelin.com/kr/en/seoul-capital-area/kr-seoul/restaurant/trid",
    "name_en_official": true,
+   "name_en_type": "official",
    "chef_en": "Kang Seung-won",
    "chef_en_src": "Revised Romanization (automatic)",
-   "chef_en_official": false
+   "chef_en_official": false,
+   "chef_en_type": "romanized"
   },
   {
    "id": "mils",
@@ -369,9 +375,11 @@
    "name_en": "Mils",
    "name_en_src": "https://www.instagram.com/milsishappy (Instagram handle)",
    "name_en_official": true,
+   "name_en_type": "official",
    "chef_en": "Jung Yeong-hun",
    "chef_en_src": "Revised Romanization (automatic)",
-   "chef_en_official": false
+   "chef_en_official": false,
+   "chef_en_type": "romanized"
   },
   {
    "id": "mao",
@@ -409,9 +417,11 @@
    "name_en": "Mao",
    "name_en_src": "https://www.instagram.com/maophoga (Instagram handle)",
    "name_en_official": true,
+   "name_en_type": "official",
    "chef_en": "Jung Yeong-hun",
    "chef_en_src": "Revised Romanization (automatic)",
-   "chef_en_official": false
+   "chef_en_official": false,
+   "chef_en_type": "romanized"
   },
   {
    "id": "orzo",
@@ -451,9 +461,11 @@
    "name_en": "Osteria Orzo",
    "name_en_src": "https://guide.michelin.com/kr/en/seoul-capital-area/kr-seoul/restaurant/osteria-orzo",
    "name_en_official": true,
+   "name_en_type": "official",
    "chef_en": "Kim Ho-yun",
    "chef_en_src": "Revised Romanization (automatic)",
-   "chef_en_official": false
+   "chef_en_official": false,
+   "chef_en_type": "romanized"
   },
   {
    "id": "legume",
@@ -494,9 +506,11 @@
    "name_en": "Légume",
    "name_en_src": "https://guide.michelin.com/kr/en/seoul-capital-area/kr-seoul/restaurant/legume",
    "name_en_official": true,
+   "name_en_type": "official",
    "chef_en": "Si-woo Sung",
    "chef_en_src": "https://guide.michelin.com/kr/en/seoul-capital-area/kr-seoul/restaurant/legume",
-   "chef_en_official": true
+   "chef_en_official": true,
+   "chef_en_type": "official"
   },
   {
    "id": "on",
@@ -534,9 +548,11 @@
    "name_en": "ON",
    "name_en_src": "https://guide.michelin.com/kr/en/seoul-capital-area/kr-seoul/restaurant/on565623",
    "name_en_official": true,
+   "name_en_type": "official",
    "chef_en": "Kim Jun-hyung",
    "chef_en_src": "https://guide.michelin.com/kr/en/seoul-capital-area/kr-seoul/restaurant/on565623",
-   "chef_en_official": true
+   "chef_en_official": true,
+   "chef_en_type": "official"
   },
   {
    "id": "layered",
@@ -572,12 +588,14 @@
    "contacted_at": null,
    "confirmed_at": null,
    "verification_note": "",
-   "name_en": "Reieodeu",
-   "name_en_src": "Revised Romanization (automatic)",
+   "name_en": "Layered",
+   "name_en_src": "https://restaurantsforkings.com/city/seoul/layered",
    "name_en_official": false,
+   "name_en_type": "press",
    "chef_en": "Park Seong-bae",
    "chef_en_src": "Revised Romanization (automatic)",
-   "chef_en_official": false
+   "chef_en_official": false,
+   "chef_en_type": "romanized"
   },
   {
    "id": "mamalee",
@@ -613,12 +631,14 @@
    "contacted_at": null,
    "confirmed_at": null,
    "verification_note": "",
-   "name_en": "Mamari",
-   "name_en_src": "Revised Romanization (automatic)",
-   "name_en_official": false,
+   "name_en": "Mamalee",
+   "name_en_src": "https://www.instagram.com/mamalee_pub/ (Instagram: MAMALEE PUB; also @mamaleemarket)",
+   "name_en_official": true,
+   "name_en_type": "official",
    "chef_en": "Song Haseullam",
    "chef_en_src": "Revised Romanization (automatic)",
-   "chef_en_official": false
+   "chef_en_official": false,
+   "chef_en_type": "romanized"
   },
   {
    "id": "atomix",
@@ -656,9 +676,11 @@
    "name_en": "Atomix",
    "name_en_src": "https://guide.michelin.com/us/en/new-york-state/new-york/restaurant/atomix",
    "name_en_official": true,
+   "name_en_type": "official",
    "chef_en": "Junghyun Park",
    "chef_en_src": "https://guide.michelin.com/us/en/new-york-state/new-york/restaurant/atomix",
-   "chef_en_official": true
+   "chef_en_official": true,
+   "chef_en_type": "official"
   },
   {
    "id": "atoboy",
@@ -696,9 +718,11 @@
    "name_en": "Atoboy",
    "name_en_src": "https://guide.michelin.com/us/en/new-york-state/new-york/restaurant/atoboy",
    "name_en_official": true,
+   "name_en_type": "official",
    "chef_en": "Junghyun Park",
    "chef_en_src": "https://guide.michelin.com/us/en/new-york-state/new-york/restaurant/atoboy",
-   "chef_en_official": true
+   "chef_en_official": true,
+   "chef_en_type": "official"
   },
   {
    "id": "jua",
@@ -736,9 +760,11 @@
    "name_en": "Jua",
    "name_en_src": "https://guide.michelin.com/us/en/new-york-state/new-york/restaurant/jua",
    "name_en_official": true,
+   "name_en_type": "official",
    "chef_en": "Hoyoung Kim",
    "chef_en_src": "https://guide.michelin.com/us/en/new-york-state/new-york/restaurant/jua",
-   "chef_en_official": true
+   "chef_en_official": true,
+   "chef_en_type": "official"
   },
   {
    "id": "moono",
@@ -776,9 +802,11 @@
    "name_en": "Moono",
    "name_en_src": "https://guide.michelin.com/us/en/new-york-state/new-york/restaurant/moono",
    "name_en_official": true,
+   "name_en_type": "official",
    "chef_en": "Hoyoung Kim",
    "chef_en_src": "https://guide.michelin.com/us/en/new-york-state/new-york/restaurant/jua",
-   "chef_en_official": true
+   "chef_en_official": true,
+   "chef_en_type": "official"
   },
   {
    "id": "lysee",
@@ -813,12 +841,14 @@
    "contacted_at": null,
    "confirmed_at": null,
    "verification_note": "",
-   "name_en": "Rije",
-   "name_en_src": "Revised Romanization (automatic)",
-   "name_en_official": false,
-   "chef_en": "Lee Eun-ji",
-   "chef_en_src": "Revised Romanization (automatic)",
-   "chef_en_official": false
+   "name_en": "Lysée",
+   "name_en_src": "https://www.lyseenyc.com/about (restaurant site)",
+   "name_en_official": true,
+   "name_en_type": "official",
+   "chef_en": "Eunji Lee",
+   "chef_en_src": "https://www.lyseenyc.com/about",
+   "chef_en_official": true,
+   "chef_en_type": "official"
   },
   {
    "id": "mingles_r",
@@ -860,9 +890,11 @@
    "name_en": "Mingles",
    "name_en_src": "https://guide.michelin.com/kr/en/seoul-capital-area/kr-seoul/restaurant/mingles",
    "name_en_official": true,
+   "name_en_type": "official",
    "chef_en": "Mingoo Kang",
    "chef_en_src": "https://guide.michelin.com/kr/en/seoul-capital-area/kr-seoul/restaurant/mingles",
-   "chef_en_official": true
+   "chef_en_official": true,
+   "chef_en_type": "official"
   },
   {
    "id": "mosu_r",
@@ -905,9 +937,11 @@
    "name_en": "Mosu",
    "name_en_src": "https://guide.michelin.com/kr/en/seoul-capital-area/kr-seoul/restaurant/mosu",
    "name_en_official": true,
-   "chef_en": "Ahn Seong-jae",
-   "chef_en_src": "Revised Romanization (automatic)",
-   "chef_en_official": false
+   "name_en_type": "official",
+   "chef_en": "Sung Anh",
+   "chef_en_src": "https://www.cnn.com/travel/culinary-class-wars-netflix-judge-chef-sung-anh-mosu-intl-hnk (press; Wikipedia: Sung Anh)",
+   "chef_en_official": false,
+   "chef_en_type": "press"
   },
   {
    "id": "san",
@@ -948,9 +982,11 @@
    "name_en": "SAN",
    "name_en_src": "https://guide.michelin.com/kr/en/seoul-capital-area/kr-seoul/restaurant/san",
    "name_en_official": true,
+   "name_en_type": "official",
    "chef_en": "Seong-hyun Jo",
    "chef_en_src": "https://guide.michelin.com/kr/en/seoul-capital-area/kr-seoul/restaurant/san",
-   "chef_en_official": true
+   "chef_en_official": true,
+   "chef_en_type": "official"
   },
   {
    "id": "jungsik_r",
@@ -989,9 +1025,11 @@
    "name_en": "Jungsik",
    "name_en_src": "https://guide.michelin.com/kr/en/seoul-capital-area/kr-seoul/restaurant/jungsik511965",
    "name_en_official": true,
+   "name_en_type": "official",
    "chef_en": "Yim Jung-sik",
    "chef_en_src": "https://guide.michelin.com/kr/en/seoul-capital-area/kr-seoul/restaurant/jungsik511965",
-   "chef_en_official": true
+   "chef_en_official": true,
+   "chef_en_type": "official"
   },
   {
    "id": "soigne_r",
@@ -1030,9 +1068,11 @@
    "name_en": "Soigné",
    "name_en_src": "https://guide.michelin.com/kr/en/seoul-capital-area/kr-seoul/restaurant/soigne",
    "name_en_official": true,
+   "name_en_type": "official",
    "chef_en": "Jun Lee",
    "chef_en_src": "https://guide.michelin.com/kr/en/seoul-capital-area/kr-seoul/restaurant/soigne",
-   "chef_en_official": true
+   "chef_en_official": true,
+   "chef_en_type": "official"
   },
   {
    "id": "evett_r",
@@ -1072,9 +1112,11 @@
    "name_en": "Evett",
    "name_en_src": "https://guide.michelin.com/kr/en/seoul-capital-area/kr-seoul/restaurant/evett",
    "name_en_official": true,
+   "name_en_type": "official",
    "chef_en": "Joseph Lidgerwood",
    "chef_en_src": "https://guide.michelin.com/kr/en/seoul-capital-area/kr-seoul/restaurant/evett",
-   "chef_en_official": true
+   "chef_en_official": true,
+   "chef_en_type": "official"
   },
   {
    "id": "kwon_r",
@@ -1114,9 +1156,11 @@
    "name_en": "Kwonsooksoo",
    "name_en_src": "https://guide.michelin.com/kr/en/seoul-capital-area/kr-seoul/restaurant/kwonsooksoo",
    "name_en_official": true,
+   "name_en_type": "official",
    "chef_en": "Kwon Woo-joong",
    "chef_en_src": "https://guide.michelin.com/kr/en/seoul-capital-area/kr-seoul/restaurant/kwonsooksoo",
-   "chef_en_official": true
+   "chef_en_official": true,
+   "chef_en_type": "official"
   },
   {
    "id": "allen_r",
@@ -1153,9 +1197,11 @@
    "name_en": "Restaurant Allen",
    "name_en_src": "https://guide.michelin.com/kr/en/seoul-capital-area/kr-seoul/restaurant/restaurant-allen",
    "name_en_official": true,
+   "name_en_type": "official",
    "chef_en": null,
    "chef_en_src": null,
-   "chef_en_official": null
+   "chef_en_official": null,
+   "chef_en_type": null
   },
   {
    "id": "sosuheon",
@@ -1195,9 +1241,11 @@
    "name_en": "Sosuheon",
    "name_en_src": "https://guide.michelin.com/kr/en/seoul-capital-area/kr-seoul/restaurant/sosuheon",
    "name_en_official": true,
+   "name_en_type": "official",
    "chef_en": "Kyung-jae Park",
    "chef_en_src": "https://guide.michelin.com/kr/en/seoul-capital-area/kr-seoul/restaurant/sosuheon",
-   "chef_en_official": true
+   "chef_en_official": true,
+   "chef_en_type": "official"
   },
   {
    "id": "layeon_r",
@@ -1234,9 +1282,11 @@
    "name_en": "La Yeon",
    "name_en_src": "https://guide.michelin.com/kr/en/seoul-capital-area/kr-seoul/restaurant/la-yeon",
    "name_en_official": true,
+   "name_en_type": "official",
    "chef_en": null,
    "chef_en_src": null,
-   "chef_en_official": null
+   "chef_en_official": null,
+   "chef_en_type": null
   },
   {
    "id": "mitou_r",
@@ -1274,9 +1324,11 @@
    "name_en": "Mitou",
    "name_en_src": "https://guide.michelin.com/kr/en/seoul-capital-area/kr-seoul/restaurant/mitou",
    "name_en_official": true,
+   "name_en_type": "official",
    "chef_en": null,
    "chef_en_src": null,
-   "chef_en_official": null
+   "chef_en_official": null,
+   "chef_en_type": null
   },
   {
    "id": "allaprima_r",
@@ -1315,9 +1367,11 @@
    "name_en": "alla prima",
    "name_en_src": "https://guide.michelin.com/kr/en/seoul-capital-area/kr-seoul/restaurant/alla-prima",
    "name_en_official": true,
+   "name_en_type": "official",
    "chef_en": null,
    "chef_en_src": null,
-   "chef_en_official": null
+   "chef_en_official": null,
+   "chef_en_type": null
   },
   {
    "id": "jueun",
@@ -1356,9 +1410,11 @@
    "name_en": "JUEUN",
    "name_en_src": "https://guide.michelin.com/kr/en/seoul-capital-area/kr-seoul/restaurant/restaurant-jueun",
    "name_en_official": true,
+   "name_en_type": "official",
    "chef_en": null,
    "chef_en_src": null,
-   "chef_en_official": null
+   "chef_en_official": null,
+   "chef_en_type": null
   },
   {
    "id": "lamant",
@@ -1397,9 +1453,11 @@
    "name_en": "L'Amant Secret",
    "name_en_src": "https://guide.michelin.com/kr/en/seoul-capital-area/kr-seoul/restaurant/l-amant-secret",
    "name_en_official": true,
+   "name_en_type": "official",
    "chef_en": "Son Jong-won",
    "chef_en_src": "https://guide.michelin.com/kr/en/seoul-capital-area/kr-seoul/restaurant/l-amant-secret",
-   "chef_en_official": true
+   "chef_en_official": true,
+   "chef_en_type": "official"
   },
   {
    "id": "eatanic",
@@ -1439,9 +1497,11 @@
    "name_en": "Eatanic Garden",
    "name_en_src": "https://guide.michelin.com/kr/en/seoul-capital-area/kr-seoul/restaurant/eatanic-garden",
    "name_en_official": true,
+   "name_en_type": "official",
    "chef_en": "Son Jong-won",
    "chef_en_src": "https://guide.michelin.com/kr/en/seoul-capital-area/kr-seoul/restaurant/l-amant-secret",
-   "chef_en_official": true
+   "chef_en_official": true,
+   "chef_en_type": "official"
   },
   {
    "id": "yeast",
@@ -1480,9 +1540,11 @@
    "name_en": "y'east",
    "name_en_src": "https://guide.michelin.com/kr/en/seoul-capital-area/kr-seoul/restaurant/y-east",
    "name_en_official": true,
+   "name_en_type": "official",
    "chef_en": null,
    "chef_en_src": null,
-   "chef_en_official": null
+   "chef_en_official": null,
+   "chef_en_type": null
   },
   {
    "id": "matthew",
@@ -1521,9 +1583,11 @@
    "name_en": "Matthew",
    "name_en_src": "https://www.instagram.com/matthew.seoul/ (Instagram; Blue Ribbon magazine/280 lists '매튜 Matthew')",
    "name_en_official": true,
+   "name_en_type": "official",
    "chef_en": "Lee Won-seok",
    "chef_en_src": "Revised Romanization (automatic)",
-   "chef_en_official": false
+   "chef_en_official": false,
+   "chef_en_type": "romanized"
   },
   {
    "id": "matteo",
@@ -1558,12 +1622,14 @@
    "contacted_at": null,
    "confirmed_at": null,
    "verification_note": "",
-   "name_en": "Mateogyeonmunrok",
-   "name_en_src": "Revised Romanization (automatic)",
+   "name_en": "Matteo Gyeonmunnok",
+   "name_en_src": "transliterated loanword (no published English form found)",
    "name_en_official": false,
+   "name_en_type": "transliterated",
    "chef_en": "Shin Wang-yeol",
    "chef_en_src": "Revised Romanization (automatic)",
-   "chef_en_official": false
+   "chef_en_official": false,
+   "chef_en_type": "romanized"
   },
   {
    "id": "vinho",
@@ -1605,9 +1671,11 @@
    "name_en": "VINHO",
    "name_en_src": "https://guide.michelin.com/kr/en/seoul-capital-area/kr-seoul/restaurant/vinho",
    "name_en_official": true,
+   "name_en_type": "official",
    "chef_en": "Sung-bin Jeon",
    "chef_en_src": "https://guide.michelin.com/kr/en/seoul-capital-area/kr-seoul/restaurant/vinho",
-   "chef_en_official": true
+   "chef_en_official": true,
+   "chef_en_type": "official"
   },
   {
    "id": "finz",
@@ -1642,12 +1710,14 @@
    "contacted_at": null,
    "confirmed_at": null,
    "verification_note": "",
-   "name_en": "Pinjeu",
-   "name_en_src": "Revised Romanization (automatic)",
-   "name_en_official": false,
+   "name_en": "FINZ",
+   "name_en_src": "https://www.instagram.com/finz.seoul/ (Instagram)",
+   "name_en_official": true,
+   "name_en_type": "official",
    "chef_en": "Kim Beom-ju",
    "chef_en_src": "Revised Romanization (automatic)",
-   "chef_en_official": false
+   "chef_en_official": false,
+   "chef_en_type": "romanized"
   },
   {
    "id": "mowa",
@@ -1682,12 +1752,14 @@
    "contacted_at": null,
    "confirmed_at": null,
    "verification_note": "",
-   "name_en": "Mowa",
-   "name_en_src": "Revised Romanization (automatic)",
+   "name_en": "MOWa",
+   "name_en_src": "https://eemoong.tistory.com/entry/restaurant-mowa (reviews; Instagram @mowa.official)",
    "name_en_official": false,
+   "name_en_type": "press",
    "chef_en": "Moon Won-gi",
    "chef_en_src": "Revised Romanization (automatic)",
-   "chef_en_official": false
+   "chef_en_official": false,
+   "chef_en_type": "romanized"
   },
   {
    "id": "midolim",
@@ -1722,12 +1794,14 @@
    "contacted_at": null,
    "confirmed_at": null,
    "verification_note": "",
-   "name_en": "Midorim",
-   "name_en_src": "Revised Romanization (automatic)",
-   "name_en_official": false,
+   "name_en": "Midolim",
+   "name_en_src": "https://www.instagram.com/midolim_bar (Instagram)",
+   "name_en_official": true,
+   "name_en_type": "official",
    "chef_en": "Park Jun-hui",
    "chef_en_src": "Revised Romanization (automatic)",
-   "chef_en_official": false
+   "chef_en_official": false,
+   "chef_en_type": "romanized"
   },
   {
    "id": "nooyster",
@@ -1765,9 +1839,11 @@
    "name_en": "No Oyster",
    "name_en_src": "English form in source name",
    "name_en_official": true,
+   "name_en_type": "official",
    "chef_en": "Kim Gi-jae",
    "chef_en_src": "Revised Romanization (automatic)",
-   "chef_en_official": false
+   "chef_en_official": false,
+   "chef_en_type": "romanized"
   },
   {
    "id": "goum",
@@ -1803,12 +1879,14 @@
    "contacted_at": null,
    "confirmed_at": null,
    "verification_note": "",
-   "name_en": "Goum",
-   "name_en_src": "Revised Romanization (automatic)",
+   "name_en": "GOUM",
+   "name_en_src": "https://korean.visitseoul.net/restaurants/GOUM/KOPpl8jdv (Visit Seoul)",
    "name_en_official": false,
+   "name_en_type": "press",
    "chef_en": null,
    "chef_en_src": null,
-   "chef_en_official": null
+   "chef_en_official": null,
+   "chef_en_type": null
   },
   {
    "id": "iter",
@@ -1839,6 +1917,8 @@
    "michelin_official": null,
    "bluer_official_url": null,
    "source_tier": "secondary_only",
+   "closed_at": "2024-12-31",
+   "closed_src": "https://sotetsu-hotels.com/splaisir/myeong-dong/news/182/",
    "verification_status": "unverified",
    "contacted_at": null,
    "confirmed_at": null,
@@ -1846,9 +1926,54 @@
    "name_en": "ITER LACLASS",
    "name_en_src": "https://sotetsu-hotels.com/splaisir/myeong-dong/news/182/ (hotel site)",
    "name_en_official": true,
+   "name_en_type": "official",
    "chef_en": "Noh Ji-min",
    "chef_en_src": "Revised Romanization (automatic)",
-   "chef_en_official": false
+   "chef_en_official": false,
+   "chef_en_type": "romanized"
+  },
+  {
+   "id": "iter_md",
+   "name": "이테르 명동",
+   "chef": "노지민",
+   "kitchen": "kwonsooksoo",
+   "role": "출신(직책 미기재)",
+   "opened": "2025",
+   "area": "소공동 (시청)",
+   "cuisine": "이탈리안·한식",
+   "price": null,
+   "michelin": "미쉐린 서울 공식 목록에 없음 (2026-10-20 확인)",
+   "michelin_src": null,
+   "lineage_src": "https://m.blog.naver.com/dks900409/223517649576",
+   "lineage_status": "verified",
+   "note": "이테르 라클라스(2024-12-31 폐업) 후속 업장. 공식 사이트 대표자에 노지민 셰프",
+   "url": "https://iter-restaurants.com/ko/",
+   "city": "서울",
+   "checked": "2026-10-20",
+   "type": "alumni",
+   "reddit_threads": [],
+   "press": [
+    "https://iter-restaurants.com/ko/",
+    "https://m.blog.naver.com/dks900409/223517649576"
+   ],
+   "bluer": "2027 3리본 목록에 없음 (1·2리본 여부 미확인)",
+   "official_source_url": "https://iter-restaurants.com/ko/",
+   "official_source_type": "restaurant_site",
+   "michelin_official": null,
+   "bluer_official_url": null,
+   "source_tier": "secondary_only",
+   "verification_status": "unverified",
+   "contacted_at": null,
+   "confirmed_at": null,
+   "verification_note": "",
+   "name_en": "iter Myeongdong",
+   "name_en_src": "https://iter-restaurants.com/ko/ (restaurant site)",
+   "name_en_official": true,
+   "name_en_type": "official",
+   "chef_en": "Noh Ji-min",
+   "chef_en_src": "Revised Romanization (automatic)",
+   "chef_en_official": false,
+   "chef_en_type": "romanized"
   },
   {
    "id": "oct19",
@@ -1884,11 +2009,13 @@
    "confirmed_at": null,
    "verification_note": "",
    "name_en": "October 19",
-   "name_en_src": "translation of 10월 19일 (no official English form found)",
+   "name_en_src": "transliterated: translation of 10월 19일 (no official English form found; Instagram @songi_19oct)",
    "name_en_official": false,
+   "name_en_type": "transliterated",
    "chef_en": "Park Ji-hyeon & Yoon Song-i",
    "chef_en_src": "Revised Romanization (automatic)",
-   "chef_en_official": false
+   "chef_en_official": false,
+   "chef_en_type": "romanized"
   },
   {
    "id": "oddhouse",
@@ -1923,12 +2050,14 @@
    "contacted_at": null,
    "confirmed_at": null,
    "verification_note": "",
-   "name_en": "Odeuhauseu",
-   "name_en_src": "Revised Romanization (automatic)",
-   "name_en_official": false,
+   "name_en": "Odd Haus",
+   "name_en_src": "https://www.instagram.com/odd_haus (Instagram)",
+   "name_en_official": true,
+   "name_en_type": "official",
    "chef_en": null,
    "chef_en_src": null,
-   "chef_en_official": null
+   "chef_en_official": null,
+   "chef_en_type": null
   },
   {
    "id": "gaongaok",
@@ -1968,9 +2097,11 @@
    "name_en": "Gaongaok",
    "name_en_src": "Revised Romanization (automatic)",
    "name_en_official": false,
+   "name_en_type": "romanized",
    "chef_en": "Park Sang-jin",
    "chef_en_src": "Revised Romanization (automatic)",
-   "chef_en_official": false
+   "chef_en_official": false,
+   "chef_en_type": "romanized"
   },
   {
    "id": "arari",
@@ -2006,11 +2137,13 @@
    "confirmed_at": null,
    "verification_note": "",
    "name_en": "Arari",
-   "name_en_src": "Revised Romanization (automatic)",
-   "name_en_official": false,
+   "name_en_src": "https://www.instagram.com/arari_seoul (Instagram; design.co.kr writes ARARI)",
+   "name_en_official": true,
+   "name_en_type": "official",
    "chef_en": "Lee Ji-u",
    "chef_en_src": "Revised Romanization (automatic)",
-   "chef_en_official": false
+   "chef_en_official": false,
+   "chef_en_type": "romanized"
   },
   {
    "id": "italianclub",
@@ -2048,9 +2181,11 @@
    "name_en": "The Italian Club",
    "name_en_src": "https://the-italian-club.lovable.app/ (restaurant site)",
    "name_en_official": true,
+   "name_en_type": "official",
    "chef_en": "Kim Ho-yun",
    "chef_en_src": "Revised Romanization (automatic)",
-   "chef_en_official": false
+   "chef_en_official": false,
+   "chef_en_type": "romanized"
   },
   {
    "id": "origin_numbers",
@@ -2085,12 +2220,14 @@
    "contacted_at": null,
    "confirmed_at": null,
    "verification_note": "",
-   "name_en": "Orijineol Neombeoseu",
-   "name_en_src": "Revised Romanization (automatic)",
+   "name_en": "Original Numbers",
+   "name_en_src": "https://dealseoul.com/eats/original-numbers (now operating as Cantique)",
    "name_en_official": false,
+   "name_en_type": "press",
    "chef_en": "Lee Chan-yang",
    "chef_en_src": "Revised Romanization (automatic)",
-   "chef_en_official": false
+   "chef_en_official": false,
+   "chef_en_type": "romanized"
   },
   {
    "id": "goni",
@@ -2125,12 +2262,14 @@
    "contacted_at": null,
    "confirmed_at": null,
    "verification_note": "",
-   "name_en": "Seusi Goni",
-   "name_en_src": "Revised Romanization (automatic)",
+   "name_en": "GONI",
+   "name_en_src": "http://www.bluer.co.kr/magazine/303 (Blue Ribbon; Instagram @gonichef)",
    "name_en_official": false,
+   "name_en_type": "press",
    "chef_en": "Cho Byeong-gon",
    "chef_en_src": "Revised Romanization (automatic)",
-   "chef_en_official": false
+   "chef_en_official": false,
+   "chef_en_type": "romanized"
   },
   {
    "id": "odre",
@@ -2165,12 +2304,14 @@
    "contacted_at": null,
    "confirmed_at": null,
    "verification_note": "",
-   "name_en": "Odeure",
-   "name_en_src": "Revised Romanization (automatic)",
-   "name_en_official": false,
-   "chef_en": "Kang Chang-gi",
-   "chef_en_src": "Revised Romanization (automatic)",
-   "chef_en_official": false
+   "name_en": "Odre",
+   "name_en_src": "https://odrenyc.com/homepage (restaurant site; MICHELIN Guide NY)",
+   "name_en_official": true,
+   "name_en_type": "official",
+   "chef_en": "Changki Kang",
+   "chef_en_src": "https://ny.eater.com/2024/8/19/24223842/odre-opening-korean-east-village-restaurant-hand-hospitality (press)",
+   "chef_en_official": false,
+   "chef_en_type": "press"
   },
   {
    "id": "wanchun",
@@ -2208,9 +2349,11 @@
    "name_en": "Wanchun",
    "name_en_src": "Revised Romanization (automatic)",
    "name_en_official": false,
+   "name_en_type": "romanized",
    "chef_en": "Kim Tae-wan",
    "chef_en_src": "Revised Romanization (automatic)",
-   "chef_en_official": false
+   "chef_en_official": false,
+   "chef_en_type": "romanized"
   },
   {
    "id": "onjium_r",
@@ -2248,9 +2391,11 @@
    "name_en": "Onjium",
    "name_en_src": "https://guide.michelin.com/kr/en/seoul-capital-area/kr-seoul/restaurant/onjium",
    "name_en_official": true,
+   "name_en_type": "official",
    "chef_en": "Cho Eun-hui",
    "chef_en_src": "Revised Romanization (automatic)",
-   "chef_en_official": false
+   "chef_en_official": false,
+   "chef_en_type": "romanized"
   }
  ]
 }
