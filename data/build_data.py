@@ -42,8 +42,8 @@ kitchens=[dict(id=a,name=b,en=c,michelin=d,michelin_src=S.get(e) if e else None,
 # alumni restaurants: id,name,chef,kitchen,role,opened,area,cuisine,price,michelin,michelin_src,lineage_src,verified,note,url,city
 A=[
 ("soseoul","소설한남","엄태철","mosu","수셰프","미확인","한남","현대 한식",None,"1스타 (2022–2024, 2026 재확인 필요)","dafanew","dafanew","verified","2차 출처(매체 정리글)","https://www.instagram.com/soseoul_hannam","서울"),
-("bornyon","본연","배경준","mosu","출신(직책 미기재)","미확인","논현","화덕·발효 우드파이어 한식",None,"미확인",None,"dafanew","verified","흑백요리사 출연 셰프","https://www.instagram.com/bornyon_seoul","서울"),
-("trid","트리드","강승원","mosu","출신(직책 미기재)","미확인","청담(선릉로)","컨템퍼러리",None,"미쉐린 등재 (2024 기사 기준)","dafanew","dafanew","verified","흑백요리사 출연 셰프","https://www.instagram.com/tridseoul","서울"),
+("bornyon","본연","배경준","mosu","출신(직책 미기재)","2024-05","논현","화덕·발효 우드파이어 한식",None,"미확인",None,"dafanew","verified","흑백요리사 출연 셰프","https://www.instagram.com/bornyon_seoul","서울"),
+("trid","트리드","강승원","mosu","출신(직책 미기재)","2020-08","청담(선릉로)","컨템퍼러리",None,"미쉐린 등재 (2024 기사 기준)","dafanew","dafanew","verified","흑백요리사 출연 셰프","https://www.instagram.com/tridseoul","서울"),
 ("mils","밀스","정영훈","mosu","출신(직책 미기재)","미확인","성수","베이커리·샤퀴테리",None,"미확인",None,"dafanew","verified","","https://www.instagram.com/milsishappy","서울"),
 ("mao","마오","정영훈","mosu","출신(직책 미기재)","미확인","성수","베트남",None,"미확인",None,"dafanew","verified","","https://www.instagram.com/maophoga","서울"),
 ("orzo","오스테리아 오르조","김호윤","soigne","수석 셰프","미확인","한남","이탈리안",None,"미쉐린 선정 (2020–2025)","orzo","orzo","verified","Reddit r/seoul '가성비' 추천에 언급","https://www.catchtable.co.kr","서울"),
