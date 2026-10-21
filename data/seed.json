@@ -210,7 +210,7 @@
    "chef": "배경준",
    "kitchen": "mosu",
    "role": "출신(직책 미기재)",
-   "opened": "미확인",
+   "opened": "2024-05",
    "area": "논현",
    "cuisine": "화덕·발효 우드파이어 한식",
    "price": null,
@@ -233,10 +233,10 @@
    "michelin_official": null,
    "bluer_official_url": null,
    "source_tier": "secondary_only",
-   "verification_status": "unverified",
-   "contacted_at": null,
+   "verification_status": "contacted",
+   "contacted_at": "2026-10-21",
    "confirmed_at": null,
-   "verification_note": ""
+   "verification_note": "email batch1_v2 via Resend 01a15b94-e26e-7d70-ad18-fb30b36cf543"
   },
   {
    "id": "trid",
@@ -244,7 +244,7 @@
    "chef": "강승원",
    "kitchen": "mosu",
    "role": "출신(직책 미기재)",
-   "opened": "미확인",
+   "opened": "2020-08",
    "area": "청담(선릉로)",
    "cuisine": "컨템퍼러리",
    "price": null,
@@ -269,10 +269,10 @@
    "michelin_official": "plate",
    "bluer_official_url": null,
    "source_tier": "official",
-   "verification_status": "unverified",
-   "contacted_at": null,
+   "verification_status": "contacted",
+   "contacted_at": "2026-10-21",
    "confirmed_at": null,
-   "verification_note": ""
+   "verification_note": "email batch1_v2 via Resend 01a15b94-e30f-7213-90d4-b136bafc20e3"
   },
   {
    "id": "mils",
@@ -410,10 +410,10 @@
    "michelin_official": "1 star",
    "bluer_official_url": null,
    "source_tier": "official",
-   "verification_status": "unverified",
-   "contacted_at": null,
+   "verification_status": "contacted",
+   "contacted_at": "2026-10-21",
    "confirmed_at": null,
-   "verification_note": ""
+   "verification_note": "email batch1_v2 via Resend 01a15b94-d707-71bd-bc8d-6cf023ece6c0"
   },
   {
    "id": "on",
@@ -1332,7 +1332,7 @@
    "chef": "전성빈 (+김진호 소믈리에, 장하나 디저트)",
    "kitchen": "mingles",
    "role": "출신(직책 미기재)",
-   "opened": "2023 (블루리본 2023 새맛집)",
+   "opened": "2022-07",
    "area": "논현",
    "cuisine": "와인 다이닝",
    "price": "디너코스 13만 (2023)",
@@ -1359,10 +1359,10 @@
    "michelin_official": "1 star",
    "bluer_official_url": null,
    "source_tier": "official",
-   "verification_status": "unverified",
-   "contacted_at": null,
+   "verification_status": "contacted",
+   "contacted_at": "2026-10-21",
    "confirmed_at": null,
-   "verification_note": ""
+   "verification_note": "email batch1_v2 via Resend 01a15b94-e53a-75bb-a8b3-ea2a520ab422"
   },
   {
    "id": "finz",
