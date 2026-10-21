@@ -9,7 +9,9 @@ DAY=$(date +%Y%m%d); BR="crawl/$DAY"
 git checkout -q main && git pull -q --ff-only
 git branch -D "$BR" >/dev/null 2>&1 || true; git checkout -q -b "$BR"
 python3 crawler/crawl.py
-timeout 600 python3 crawler/instagram.py || echo "IG step failed (ignored)"
+IG_OUT=$(timeout 900 python3 crawler/instagram.py 2>&1 | grep -E '^IG_(OK|SKIPPED|BLOCKED)' | tail -1) || true
+[ -n "$IG_OUT" ] || IG_OUT="IG_BLOCKED reason=ig_step_crashed_or_timeout"
+echo "$IG_OUT"   # routine: on IG_BLOCKED, tell 준태님 and notify BabyShower; never retry the same day
 python3 crawler/apply.py
 python3 data/enrich_en.py
 python3 scripts/build_deploy.py >/dev/null
@@ -18,7 +20,7 @@ grep -q '^const SHOW_VERDICTS=false;' web/app.js
 grep -q '^const SHOW_NEWSLETTER=false;' web/app.js
 if grep -rqi 'noindex' web; then echo "GUARD FAIL: noindex found"; exit 3; fi
 git add -A data crawler web scripts .gitignore
-if git diff --cached --quiet; then git checkout -q main; git branch -D "$BR" -q; echo "RESULT=NO_CHANGE"; exit 0; fi
+if git diff --cached --quiet; then git checkout -q main; git branch -D "$BR" -q; echo "$IG_OUT"; echo "RESULT=NO_CHANGE"; exit 0; fi
 WEB_CHANGED=0; git diff --cached --quiet -- web || WEB_CHANGED=1
 SUM=$(python3 -c "import json;s=json.load(open('crawler/out/last_summary.json'));print('; '.join(f\"{a['name']}: {a['kind']} {a.get('new_name') or a.get('field') or ''}\" for a in s['applied']) or 'pending queue only', '| pending', s['pending_count'])")
 git commit -q -m "crawl $DAY: $SUM"
@@ -28,4 +30,5 @@ PR=$(gh pr create --repo SUNBURN-Golden/kitchen-genome --base main --head "$BR" 
 gh pr merge "$PR" --squash --delete-branch
 git checkout -q main && git pull -q --ff-only
 python3 scripts/build_deploy.py >/dev/null   # dist/deploy_kitchengenome.js from merged main
+echo "$IG_OUT"
 if [ "$WEB_CHANGED" = 1 ]; then echo "RESULT=NEEDS_DEPLOY pr=$PR"; else echo "RESULT=MERGED_NO_DEPLOY pr=$PR"; fi

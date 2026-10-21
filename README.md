@@ -46,9 +46,10 @@ bash scripts/daily_pipeline.sh /tmp/kg
   2. `python3 scripts/upload_assets.py /tmp/kg_jwt.txt`
   3. user-Cloudflare `execute`에 `dist/deploy_kitchengenome.js` 내용을 code로 넣어 배포 생성 → 결과의 deployment id 기록, 사이트맵 URL 200 확인.
 
-### 인스타그램 단계 / Instagram step (`crawler/instagram.py`, 준태님 결정 2026-10-21)
-- 로그아웃 상태만. 로그인·계정 정보·쿠키·브라우저 세션 사용 안 함. 로그인 벽·429·챌린지는 우회하지 않고 `blocked`로 기록, 하루 3번 막히면 그날 IG 단계 중단.
-- 대상: `seed.json`의 `instagram` 필드(공식 사이트·언론에서 확인된 핸들). 하루 1회, 요청 간 8초, 최대 25개.
-- 공개 프로필 HTML만 읽음. 저장: 40자 이하 발췌, 게시물 URL, 날짜. 이미지·전체 캡션 저장 안 함.
-- IG 결과는 단독으로 절대 반영 안 됨(검토 대기열). 신뢰 출처 1곳 + IG = 2곳으로 인정.
-- `daily_pipeline.sh`에서 실패해도 나머지는 계속 진행. 결과: `crawler/out/ig-YYYYMMDD.json`.
+### 인스타그램 단계 / Instagram step (`crawler/instagram.py`, 준태님 결정 2026-10-21: 아가마중 계정으로 로그인)
+- **06:45–08:00 KST에만 실행.** 그 외 시간엔 `IG_SKIPPED`.
+- 로그인 ID는 스크립트에 고정, 비밀번호는 환경변수 `AGAMAJUNG_IG_PASSWORD`에서 실행 중에만 읽음 (출력·로그·커밋 금지). 세션은 레포 밖 `/home/box/.secrets/kg_ig_agamajung.session`(600)에 저장해 재사용. 세션 만료 시 같은 날 재로그인 안 함.
+- 체크포인트·챌린지·2FA·이메일 코드·의심 로그인·429·로그인 실패: 즉시 중단, 재시도·우회 없음, `crawler/out/ig_blocked.flag`에 사유 기록, `IG_BLOCKED reason=…` 출력. 플래그가 있으면 사람이 지울 때까지 IG 단계 안 돌림.
+- 하루 25개 핸들 이하, 요청 간 8초 이상, 프로필 + 최근 게시물 6개 캡션·날짜만. 발췌 40자 이하, 게시물 URL, 날짜만 저장. IG 결과는 검토 대기열 전용 (신뢰 출처 1곳 + IG = 2곳으로 인정).
+- 의존성: `pip install --break-system-packages instaloader`. 테스트(목, 네트워크 없음): `python3 -m unittest tests/test_instagram.py`.
+- 파이프라인 출력 한 줄: `IG_OK handles=N findings=M` | `IG_SKIPPED reason=…` | `IG_BLOCKED reason=…` (→ 준태님 보고 + BabyShower 알림).
