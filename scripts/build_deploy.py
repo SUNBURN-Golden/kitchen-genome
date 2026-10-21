@@ -2,7 +2,7 @@
 import os, base64, json
 from blake3 import blake3
 import subprocess, sys
-subprocess.run([sys.executable, os.path.join(os.path.dirname(os.path.abspath(__file__)),'build_feeds.py')], check=True)
+for _s in ('build_pages.py','build_feeds.py'): subprocess.run([sys.executable, os.path.join(os.path.dirname(os.path.abspath(__file__)),_s)], check=True)
 here=os.path.dirname(os.path.abspath(__file__)); root=os.path.join(here,'..','web')
 mt={'html':'text/html','css':'text/css','js':'application/javascript','svg':'image/svg+xml','png':'image/png','txt':'text/plain','xml':'application/xml'}
 files=[];manifest={}
