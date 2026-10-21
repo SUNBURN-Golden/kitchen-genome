@@ -9,6 +9,7 @@ DAY=$(date +%Y%m%d); BR="crawl/$DAY"
 git checkout -q main && git pull -q --ff-only
 git branch -D "$BR" >/dev/null 2>&1 || true; git checkout -q -b "$BR"
 python3 crawler/crawl.py
+timeout 600 python3 crawler/instagram.py || echo "IG step failed (ignored)"
 python3 crawler/apply.py
 python3 data/enrich_en.py
 python3 scripts/build_deploy.py >/dev/null
