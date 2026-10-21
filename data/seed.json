@@ -199,6 +199,8 @@
    "michelin_official": "1 star",
    "bluer_official_url": null,
    "source_tier": "official",
+   "closed_at": "2026-07-19",
+   "closed_src": "https://namdi.co.kr",
    "verification_status": "unverified",
    "contacted_at": null,
    "confirmed_at": null,

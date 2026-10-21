@@ -103,3 +103,6 @@ button.tn:focus-visible,.chip:focus-visible,.btn:focus-visible{outline:2px solid
 .panel::backdrop{background:rgba(0,0,0,.35)}.pclose{float:right}
 .tn .vb{margin:var(--s1) 0 0}
 .panel .why{margin:var(--s2) 0;line-height:2}
+
+.tn.x{opacity:.6;border-style:dashed;border-color:var(--dash)}
+.cl{display:inline-block;font-size:12px;font-weight:600;line-height:20px;padding:0 var(--s1);border-radius:10px;background:var(--line);color:var(--ink-2);margin-left:var(--s1);vertical-align:middle}
