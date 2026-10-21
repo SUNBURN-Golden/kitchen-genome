@@ -21,8 +21,13 @@ for k in d['kitchens']:
     rs=[r for r in R if r['kitchen']==k['id']]
     urls.append((f"{BASE}/k/{k['id']}/",lastmod(k.get('checked'),*[r.get('checked') for r in rs],*[r.get('contacted_at') for r in rs],*[r.get('closed_at') for r in rs])))
 for r in R: urls.append((f"{BASE}/r/{r['id']}/",lastmod(r.get('checked'),r.get('contacted_at'),r.get('confirmed_at'),r.get('closed_at'))))
-sm=['<?xml version="1.0" encoding="UTF-8"?>','<urlset xmlns="http://www.sitemaps.org/schemas/sitemap/0.9">']
-sm+=[f'  <url><loc>{x(u)}</loc><lastmod>{m}</lastmod></url>' for u,m in urls]+['</urlset>','']
+def alt(u):
+    ko=u; en=u.replace(BASE,BASE+'/en',1)
+    return ''.join(f'<xhtml:link rel="alternate" hreflang="{l}" href="{x(h)}"/>' for l,h in (('ko',ko),('en',en),('x-default',ko)))
+sm=['<?xml version="1.0" encoding="UTF-8"?>','<urlset xmlns="http://www.sitemaps.org/schemas/sitemap/0.9" xmlns:xhtml="http://www.w3.org/1999/xhtml">']
+for u,m in urls:
+    for v in (u,u.replace(BASE,BASE+'/en',1)): sm.append(f'  <url><loc>{x(v)}</loc><lastmod>{m}</lastmod>{alt(u)}</url>')
+sm+=['</urlset>','']
 open(os.path.join(web,'sitemap.xml'),'w',encoding='utf-8').write('\n'.join(sm))
 def pub(r):
     dt=ymd(r.get('contacted_at')) or ymd(r.get('opened')) or ymd(gen)
@@ -50,5 +55,14 @@ for r in items:
     rss.append(f"<item><title>{x(r['name'])}</title><link>{x(u)}</link><guid isPermaLink=\"false\">kitchengenome:{x(r['id'])}</guid><pubDate>{fmt(pub(r))}</pubDate><description>{x(desc(r))}</description></item>")
 rss+=['</channel></rss>','']
 open(os.path.join(web,'rss.xml'),'w',encoding='utf-8').write('\n'.join(rss))
+en=['<?xml version="1.0" encoding="UTF-8"?>','<rss version="2.0" xmlns:atom="http://www.w3.org/2005/Atom"><channel>',
+ '<title>Kitchen Genome · Seoul chef lineage</title>',f'<link>{BASE}/en/</link>',f'<atom:link href="{BASE}/en/rss.xml" rel="self" type="application/rss+xml"/>',
+ '<description>Restaurants opened by alumni of top Seoul kitchens, with sources</description><language>en</language>',rss[6]]
+for r in items:
+    kk=K.get(r.get('kitchen'),{}); kname=kk.get('name_en') or kk.get('en')
+    dsc=(f"Chef {r['chef_en']}" if r.get('chef_en') else 'Chef not confirmed')+(f", trained at {kname}" if kname else '')+(f". Opened {ymd(r.get('opened')).isoformat()[:7]}" if ymd(r.get('opened')) else '')+(f". Closed {r['closed_at']}" if r.get('closed_at') else '')+'.'
+    en.append(f"<item><title>{x(r['name_en'])}</title><link>{BASE}/en/r/{x(r['id'])}/</link><guid isPermaLink=\"false\">kitchengenome:en:{x(r['id'])}</guid><pubDate>{fmt(pub(r))}</pubDate><description>{x(dsc)}</description></item>")
+en+=['</channel></rss>','']
+os.makedirs(os.path.join(web,'en'),exist_ok=True); open(os.path.join(web,'en','rss.xml'),'w',encoding='utf-8').write('\n'.join(en))
 open(os.path.join(web,'robots.txt'),'w').write(f'User-agent: *\nAllow: /\nSitemap: {BASE}/sitemap.xml\n')
-print('feeds:',len(urls),'sitemap urls,',len(items),'rss items')
+print('feeds:',2*len(urls),'sitemap urls,',len(items),'rss items')

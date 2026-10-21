@@ -14,15 +14,15 @@ def chef(r): return None if bad(r.get('chef')) else r['chef']
 def role(r): v=r.get('role'); return None if bad(v) or v=='출신' else v
 LOGO='<svg class="mark" viewBox="0 0 24 32" width="18" height="24" aria-hidden="true"><path d="M6 2C6 10 18 10 18 16S6 22 6 30" /><path d="M18 2C18 10 6 10 6 16S18 22 18 30" /><path class="r" d="M8 6H16M8 26H16" /></svg>'
 def page(path,title,desc,body,ld):
-    url=BASE+path
+    url=BASE+path; en=BASE+'/en'+(path if path!='/' else '/')
     return f'''<!doctype html><html lang="ko"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><meta name="color-scheme" content="light dark">
-<title>{e(title)}</title><meta name="description" content="{e(desc)}"><link rel="canonical" href="{url}">
+<title>{e(title)}</title><meta name="description" content="{e(desc)}"><link rel="canonical" href="{url}"><link rel="alternate" hreflang="ko" href="{url}"><link rel="alternate" hreflang="en" href="{en}"><link rel="alternate" hreflang="x-default" href="{url}">
 <meta property="og:title" content="{e(title)}"><meta property="og:description" content="{e(desc)}"><meta property="og:url" content="{url}"><meta property="og:type" content="website"><meta property="og:site_name" content="키친 게놈"><meta property="og:locale" content="ko_KR">
 <meta name="theme-color" content="#FAF8F3" media="(prefers-color-scheme: light)"><meta name="theme-color" content="#161513" media="(prefers-color-scheme: dark)">
 <link rel="alternate" type="application/rss+xml" title="키친 게놈" href="/rss.xml"><link rel="stylesheet" href="/style.css">
 <script type="application/ld+json">{json.dumps(ld,ensure_ascii=False).replace("</","<\\/")}</script></head><body>
 <header class="top"><div class="wrap bar"><a class="logo" href="/" aria-label="키친 게놈 홈">{LOGO}<span class="wm">키친 게놈<small>KITCHEN GENOME</small></span></a>
-<nav id="nav" aria-label="주요 메뉴"><a href="/">계보</a><a href="/directory/">디렉토리</a><a href="/#/rising">다음에 뜰 집</a><a href="/#/submit">제보</a></nav></div></header>
+<nav id="nav" aria-label="주요 메뉴"><a href="/">계보</a><a href="/directory/">디렉토리</a><a href="/#/rising">다음에 뜰 집</a><a href="/#/submit">제보</a><a href="/en{path}" hreflang="en" lang="en">EN</a></nav></div></header>
 <main class="wrap">{body}</main>
 <footer class="wrap foot">키친 게놈 · 계보마다 출처와 확인일을 붙였어요. 틀린 곳이 있으면 <a href="/#/submit">제보</a>해 주세요.</footer></body></html>
 '''
