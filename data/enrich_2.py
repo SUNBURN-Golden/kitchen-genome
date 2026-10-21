@@ -44,10 +44,20 @@ for k in d["kitchens"]:
     if k["id"]=="gaon": k["michelin"]=f"현재 미쉐린 서울 목록에 없음 ({D} 확인)"
     k["checked"]=D
 # 폐업 기록 (레코드는 지우지 않고 표시만)
-CLOSED={"soseoul":("2026-07-19","https://namdi.co.kr")}
+CLOSED={"soseoul":("2026-07-19","https://namdi.co.kr"),
+        "iter":("2024-12-31","https://sotetsu-hotels.com/splaisir/myeong-dong/news/182/")}  # 호텔 공식 공지: ITER LACLASS 2024-12-31 영업 종료
 for r in d["restaurants"]:
     c=CLOSED.get(r["id"])
     if c: r["closed_at"],r["closed_src"]=c
+# 같은 셰프(노지민)의 후속 업장: 공식 사이트 사업자 정보에 대표자 '신이래 · 노지민', since 2025
+if not any(r["id"]=="iter_md" for r in d["restaurants"]):
+    base=next(r for r in d["restaurants"] if r["id"]=="iter")
+    n=dict(base); n.pop("closed_at",None); n.pop("closed_src",None)
+    n.update(id="iter_md",name="이테르 명동",opened="2025",area="소공동 (시청)",cuisine="이탈리안·한식",url="https://iter-restaurants.com/ko/",
+             official_source_url="https://iter-restaurants.com/ko/",official_source_type="restaurant_site",lineage_src=base["lineage_src"],
+             press=["https://iter-restaurants.com/ko/","https://m.blog.naver.com/dks900409/223517649576"],
+             note="이테르 라클라스(2024-12-31 폐업) 후속 업장. 공식 사이트 대표자에 노지민 셰프",checked=D,reddit_threads=[])
+    d["restaurants"].insert(d["restaurants"].index(base)+1,n)
 d["generated"]=D
 json.dump(d,open("data/seed.json","w"),ensure_ascii=False,indent=1)
 cols=["id","type","name","chef","kitchen","role","opened","area","cuisine","city","price","michelin","official_source_url","source_tier","bluer","lineage_status","lineage_src","note","checked"]

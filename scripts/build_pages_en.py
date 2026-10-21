@@ -54,8 +54,9 @@ def rdesc(r):
     return s+' Sources and verification status included.'
 def rpage(r):
     kp=f"/r/{r['id']}/"; k=kof(r); c=r.get('chef_en')
-    nm_note='' if r.get('name_en_official') else ' <small class="muted">(romanized)</small>'
-    rows=[('Chef',e(c)+('' if r.get('chef_en_official') else ' <small class="muted">(romanized)</small>') if c else 'Not confirmed'),
+    LBL={'romanized':' <small class="muted">(romanized)</small>','transliterated':' <small class="muted">(transliterated)</small>'}
+    nm_note=LBL.get(r.get('name_en_type'),'')
+    rows=[('Chef',e(c)+LBL.get(r.get('chef_en_type'),'') if c else 'Not confirmed'),
           ('Trained at',f'<a href="/en/k/{k["id"]}/">{e(kn(k))}</a>' if k else 'Not confirmed'),('Role there',e(role(r) or 'Not stated in sources')),
           ('Location',e(area(r) or 'Not confirmed')),('Cuisine',e(cuisine(r) or 'Not confirmed')),('Opened',e(opened(r) or 'Not confirmed'))]
     if r.get('closed_at'): rows.append(('Closed',e(r['closed_at'])))
@@ -108,7 +109,7 @@ def home():
 <p>If you loved a tasting menu at a MICHELIN-starred restaurant, the chef who ran its kitchen line may now serve a smaller, more affordable menu across town. We track {len(R)} restaurants ({len(sr)} in Seoul) tied to {len(K)} origin kitchens. Every link cites a public source, such as the MICHELIN Guide, press interviews or the restaurant’s own channels, and shows when we last checked it. Where a restaurant has not yet confirmed a detail, we say so.</p>
 <p class="cta"><a class="btn p" href="/en/directory/">Browse all restaurants</a> <a class="btn g" href="/#/">Open the interactive lineage map (Korean)</a></p></section>
 <section class="card"><h2>Start from a kitchen you know</h2><ul>{ks}</ul></section>
-<section class="card"><h2>How to read it</h2><p>Names use the restaurant’s or chef’s official English form where we found one (MICHELIN Guide, the restaurant’s site or Instagram). Otherwise we use Revised Romanization and mark it “romanized”. Roles and dates come from the cited sources; “not confirmed” means we could not find them yet.</p></section>'''
+<section class="card"><h2>How to read it</h2><p>Names use the restaurant’s or chef’s official English form where we found one (MICHELIN Guide, the restaurant’s site or Instagram). Some follow the spelling used in English-language press or guides. Otherwise Korean words use Revised Romanization, marked “romanized”, and loanwords get a plain English spelling, marked “transliterated”. Roles and dates come from the cited sources; “not confirmed” means we could not find them yet.</p></section>'''
     ld={'@context':'https://schema.org','@type':'WebSite','name':'Kitchen Genome','alternateName':'키친 게놈','url':BASE+'/en/','inLanguage':'en','description':desc}
     return '/en/',page('/','Kitchen Genome — Seoul Chef Lineage: Where Top Kitchens’ Alumni Cook Now',desc,body,ld)
 shutil.rmtree(os.path.join(web,'en'),ignore_errors=True)
