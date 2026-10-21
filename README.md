@@ -5,7 +5,7 @@
 A Seoul chef-lineage tracker: maps alumni of top kitchens to the restaurants they opened, with public-data verdicts (undervalued / overrated / balanced) and a "next to rise" list.
 
 ## 구조 / Layout
-- `web/` — 정적 사이트 (index.html, app.js, style.css, data.js) / static site root
+- `web/` — 정적 사이트 (index.html, app.js, style.css, data.js) + 빌드 생성물 `r/<id>/`, `k/<id>/`, `directory/`, sitemap.xml, rss.xml (`scripts/build_pages.py`, `build_feeds.py`; `build_deploy.py`가 자동 실행) / static site root + generated SEO pages
 - `data/` — 시드 데이터와 빌드 스크립트, `outreach/` 식당 확인 절차 / seed data, build scripts, restaurant verification outreach
 - `deploy.sh` — 수동 배포 / manual deploy
 

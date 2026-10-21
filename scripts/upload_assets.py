@@ -5,9 +5,10 @@ jwt=re.search(r'eyJ[A-Za-z0-9._-]+',open(sys.argv[1]).read()).group(0)
 root=os.path.join(os.path.dirname(os.path.abspath(__file__)),'..','web')
 mt={'html':'text/html','css':'text/css','js':'application/javascript','svg':'image/svg+xml','png':'image/png','txt':'text/plain','xml':'application/xml'}
 files=[]
-for f in sorted(os.listdir(root)):
+for dd,_,fs in os.walk(root):
+  for f in sorted(fs):
     if f.startswith('_'):continue
-    b64=base64.b64encode(open(os.path.join(root,f),'rb').read()).decode();ext=f.rsplit('.',1)[-1]
+    b64=base64.b64encode(open(os.path.join(dd,f),'rb').read()).decode();ext=f.rsplit('.',1)[-1]
     files.append({'key':blake3((b64+ext).encode()).hexdigest()[:32],'value':b64,'metadata':{'contentType':mt.get(ext,'application/octet-stream')},'base64':True})
 def call(p,body):
     r=urllib.request.Request('https://api.cloudflare.com/client/v4'+p,json.dumps(body).encode(),{'Authorization':'Bearer '+jwt,'Content-Type':'application/json'})
