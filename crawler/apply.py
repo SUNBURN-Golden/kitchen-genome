@@ -26,7 +26,9 @@ def main():
     today = dt.date.today().isoformat()
     seed = json.load(open(SEED, encoding='utf-8')); R = {r['id']: r for r in seed['restaurants']}
     files = sorted(glob.glob(os.path.join(H, 'out', 'findings-*.json')))
+    igf = sorted(glob.glob(os.path.join(H, 'out', 'ig-*.json')))
     F = (load(files[-1], {}).get('findings', []) if files else []) + \
+        (load(igf[-1], {}).get('findings', []) if igf else []) + \
         [dict(f, manual=True) for f in load(os.path.join(H, 'manual_findings.json'), [])]
     groups = {}
     for f in F:
@@ -35,19 +37,21 @@ def main():
         groups.setdefault(key, []).append(f)
     applied, pend = [], []
     for (rid, kind, new, field, val), fs in sorted(groups.items()):
-        r = R[rid]; hosts = sorted({f['host'] for f in fs if reliable(f)})
+        r = R[rid]; hosts = sorted({f['host'] for f in fs if reliable(f) and not f.get('instagram')})
+        ig = any(f.get('instagram') for f in fs)
+        n_src = len(hosts) + (1 if ig and hosts else 0)   # IG corroborates one reliable source, never counts alone
         srcs = sorted({(f.get('date') or '', f['url']) for f in fs})
         if kind == 'closure' and r.get('closed_at'): continue
         if kind == 'rename' and r.get('name') == new: continue
         if kind == 'field' and (field not in FIELD_ALLOW or field in PROTECTED or r.get(field) == json.loads(val)):
             if field in FIELD_ALLOW and r.get(field) == json.loads(val): continue
-        ok = kind in AUTO_KINDS and len(hosts) >= 2 and not (kind == 'field' and field not in FIELD_ALLOW) \
+        ok = kind in AUTO_KINDS and n_src >= 2 and not (kind == 'field' and field not in FIELD_ALLOW) \
              and not (kind == 'rename' and not new)
         rec = dict(id=rid, name=r['name'], kind=kind, new_name=new or None, field=field or None,
                    value=json.loads(val) if field else None, reliable_hosts=hosts, sources=[u for _, u in srcs],
                    dates=[d for d, _ in srcs], note='; '.join(sorted({f['note'] for f in fs if f.get('note')})) or None)
         if not ok: pend.append(rec); continue
-        rel = sorted([f for f in fs if reliable(f)], key=lambda f: f.get('date') or '')
+        rel = sorted([f for f in fs if reliable(f) or f.get('instagram')], key=lambda f: f.get('date') or '')
         if kind == 'closure':
             r['closed_at'] = rel[0].get('closed_at') or rel[0]['date']; r['closed_src'] = rel[0]['url']
         elif kind == 'rename':

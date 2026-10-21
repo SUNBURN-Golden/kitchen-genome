@@ -45,3 +45,10 @@ bash scripts/daily_pipeline.sh /tmp/kg
   1. user-Cloudflare `execute`로 `GET /accounts/aa6bf084982ee841c3ea39b45895a15e/pages/projects/kitchengenome/upload-token` → JWT를 파일(예: /tmp/kg_jwt.txt)에 저장 (출력 금지)
   2. `python3 scripts/upload_assets.py /tmp/kg_jwt.txt`
   3. user-Cloudflare `execute`에 `dist/deploy_kitchengenome.js` 내용을 code로 넣어 배포 생성 → 결과의 deployment id 기록, 사이트맵 URL 200 확인.
+
+### 인스타그램 단계 / Instagram step (`crawler/instagram.py`, 준태님 결정 2026-10-21)
+- 로그아웃 상태만. 로그인·계정 정보·쿠키·브라우저 세션 사용 안 함. 로그인 벽·429·챌린지는 우회하지 않고 `blocked`로 기록, 하루 3번 막히면 그날 IG 단계 중단.
+- 대상: `seed.json`의 `instagram` 필드(공식 사이트·언론에서 확인된 핸들). 하루 1회, 요청 간 8초, 최대 25개.
+- 공개 프로필 HTML만 읽음. 저장: 40자 이하 발췌, 게시물 URL, 날짜. 이미지·전체 캡션 저장 안 함.
+- IG 결과는 단독으로 절대 반영 안 됨(검토 대기열). 신뢰 출처 1곳 + IG = 2곳으로 인정.
+- `daily_pipeline.sh`에서 실패해도 나머지는 계속 진행. 결과: `crawler/out/ig-YYYYMMDD.json`.
