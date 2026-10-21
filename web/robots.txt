@@ -1,0 +1,3 @@
+User-agent: *
+Allow: /
+Sitemap: https://kitchengenome.soulbound.co.kr/sitemap.xml
