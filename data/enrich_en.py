@@ -24,6 +24,7 @@ OWN.update({'mamalee':('Mamalee','https://www.instagram.com/mamalee_pub/ (Instag
  'odre':('Odre','https://odrenyc.com/homepage (restaurant site; MICHELIN Guide NY)'),'oddhouse':('Odd Haus','https://www.instagram.com/odd_haus (Instagram)'),
  'midolim':('Midolim','https://www.instagram.com/midolim_bar (Instagram)'),'arari':('Arari','https://www.instagram.com/arari_seoul (Instagram; design.co.kr writes ARARI)'),
  'iter_md':('iter Myeongdong','https://iter-restaurants.com/ko/ (restaurant site)')})
+OWN['origin_numbers']=('Cantique','https://www.catchtable.net/shop/original_numbers (CATCHTABLE English page title; renamed from Original Numbers, mingchu.io/people/article-korean/1801)')
 # English spelling used by credible press/directories, not the restaurant itself
 PRESS={'layered':('Layered','https://restaurantsforkings.com/city/seoul/layered'),'mowa':('MOWa','https://eemoong.tistory.com/entry/restaurant-mowa (reviews; Instagram @mowa.official)'),
  'goum':('GOUM','https://korean.visitseoul.net/restaurants/GOUM/KOPpl8jdv (Visit Seoul)'),'goni':('GONI','http://www.bluer.co.kr/magazine/303 (Blue Ribbon; Instagram @gonichef)'),
