@@ -113,6 +113,7 @@ def home():
     ld={'@context':'https://schema.org','@type':'WebSite','name':'Kitchen Genome','alternateName':'키친 게놈','url':BASE+'/en/','inLanguage':'en','description':desc}
     return '/en/',page('/','Kitchen Genome — Seoul Chef Lineage: Where Top Kitchens’ Alumni Cook Now',desc,body,ld)
 shutil.rmtree(os.path.join(web,'en'),ignore_errors=True)
+os.makedirs(os.path.join(web,'en','login'),exist_ok=True); shutil.copyfile(os.path.join(os.path.dirname(os.path.abspath(__file__)),'templates','en_login.html'),os.path.join(web,'en','login','index.html'))
 out=[home()]+[rpage(r) for r in R]+[kpage(k) for k in d['kitchens']]+[dirpage()]
 for path,html in out:
     p=os.path.join(web,path.strip('/'),'index.html'); os.makedirs(os.path.dirname(p),exist_ok=True); open(p,'w',encoding='utf-8').write(html)
