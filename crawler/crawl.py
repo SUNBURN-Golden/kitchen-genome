@@ -65,7 +65,7 @@ def main(day=None):
     rs = [r for r in seed['restaurants'] if not r.get('closed_at')]
     F = []; stats = dict(queries=0, items=0, robots_blocked=0, errors=0)
     def add(r, kind, it, extra=None):
-        if banned(it['url']) or (it['date'] and it['date'] < cutoff): return
+        if banned(it['url']) or it['url'] in set(C.get('ignored_urls', ())) or (it['date'] and it['date'] < cutoff): return
         f = dict(id=r['id'], kind=kind, url=it['url'], host=host(it['url']), date=it['date'] or day, title=it['text'][:200])
         f.update(extra or {}); F.append(f)
     # 1) per-restaurant news search

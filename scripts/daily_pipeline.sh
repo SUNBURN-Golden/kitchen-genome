@@ -31,4 +31,12 @@ gh pr merge "$PR" --squash --delete-branch
 git checkout -q main && git pull -q --ff-only
 python3 scripts/build_deploy.py >/dev/null   # dist/deploy_kitchengenome.js from merged main
 echo "$IG_OUT"
-if [ "$WEB_CHANGED" = 1 ]; then echo "RESULT=NEEDS_DEPLOY pr=$PR"; else echo "RESULT=MERGED_NO_DEPLOY pr=$PR"; fi
+if [ "$WEB_CHANGED" = 1 ]; then
+  if [ -f /home/box/.secrets/cloudflare_pages_token ]; then
+    ./deploy.sh main >/dev/null && echo "RESULT=DEPLOYED pr=$PR" || echo "RESULT=NEEDS_DEPLOY pr=$PR"
+  else
+    echo "RESULT=NEEDS_DEPLOY pr=$PR"
+  fi
+else
+  echo "RESULT=MERGED_NO_DEPLOY pr=$PR"
+fi
