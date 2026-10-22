@@ -3,17 +3,75 @@
  "delay_sec": 2.0,
  "max_items_per_query": 15,
  "lookback_days": 120,
- "banned_hosts": ["instagram.com", "naver.com", "naver.me", "guide.michelin.com", "dcinside.com", "yna.co.kr"],
+ "banned_hosts": [
+  "instagram.com",
+  "naver.com",
+  "naver.me",
+  "guide.michelin.com",
+  "dcinside.com",
+  "yna.co.kr"
+ ],
  "banned_note": "guide.michelin.com robots.txt prohibits automated browsing (legal notice) -> MICHELIN status is checked by hand only. Instagram/Naver never.",
- "unreliable_hosts": ["tistory.com", "blog.", "brunch.co.kr", "polle.com", "diningcode.com", "siksinhot.com", "catchtable.net", "autoreserve.com", "bing.com", "youtube.com", "reddit.com"],
+ "unreliable_hosts": [
+  "tistory.com",
+  "blog.",
+  "brunch.co.kr",
+  "polle.com",
+  "diningcode.com",
+  "siksinhot.com",
+  "catchtable.net",
+  "autoreserve.com",
+  "bing.com",
+  "youtube.com",
+  "reddit.com"
+ ],
  "keywords": {
-  "closure": ["폐업", "폐점", "문을 닫", "영업 종료", "영업을 종료", "마지막 영업", "closed", "closing", "shut"],
-  "rename": ["상호 변경", "이름을 바꾸", "새 이름", "리브랜딩", "재오픈", "새롭게 문을", "renamed", "rebrand"],
-  "chef_move": ["합류", "부임", "새 헤드셰프", "새 총괄", "떠나", "독립", "이직", "joins", "new chef", "departs"],
-  "opening": ["오픈", "개업", "문을 연", "opens", "opening"]
+  "closure": [
+   "폐업",
+   "폐점",
+   "문을 닫",
+   "영업 종료",
+   "영업을 종료",
+   "마지막 영업",
+   "closed",
+   "closing",
+   "shut"
+  ],
+  "rename": [
+   "상호 변경",
+   "이름을 바꾸",
+   "새 이름",
+   "리브랜딩",
+   "재오픈",
+   "새롭게 문을",
+   "renamed",
+   "rebrand"
+  ],
+  "chef_move": [
+   "합류",
+   "부임",
+   "새 헤드셰프",
+   "새 총괄",
+   "떠나",
+   "독립",
+   "이직",
+   "joins",
+   "new chef",
+   "departs"
+  ],
+  "opening": [
+   "오픈",
+   "개업",
+   "문을 연",
+   "opens",
+   "opening"
+  ]
  },
  "publisher_feeds": [
   "https://www.foodnews.news/rss/allArticle.xml",
   "https://bakerynews.co.kr/rss/allArticle.xml"
+ ],
+ "ignored_urls": [
+  "https://www.msn.com/ko-kr/%EC%9D%8C%EC%8B%9D-%EB%B0%8F-%EC%9D%8C%EB%A3%8C/%EB%A0%88%EC%8B%9C%ED%94%BC/%EC%84%9C%EC%9A%B8-%EC%B5%9C%EA%B3%A0-%EB%A7%9B%EC%A7%91%EC%97%90-%EA%B8%B0%EA%B0%80%EC%8A%A4-%EB%9D%BC%EC%97%B0-%ED%95%A9%EB%A5%98-%ED%88%AC%EC%8D%B8%EC%9D%80-%EA%B0%80%EB%82%98%EB%94%94-%ED%92%88%EC%97%88%EB%8B%A4-%EC%BF%A0%ED%82%B9/ar-AA2efpmn"
  ]
 }

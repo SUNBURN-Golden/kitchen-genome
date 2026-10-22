@@ -31,8 +31,9 @@ def main():
         (load(igf[-1], {}).get('findings', []) if igf else []) + \
         [dict(f, manual=True) for f in load(os.path.join(H, 'manual_findings.json'), [])]
     groups = {}
+    ignored = set(C.get('ignored_urls', ()))
     for f in F:
-        if f.get('id') not in R: continue
+        if f.get('id') not in R or f.get('url') in ignored: continue
         key = (f['id'], f['kind'], f.get('new_name') or '', f.get('field') or '', json.dumps(f.get('value'), ensure_ascii=False))
         groups.setdefault(key, []).append(f)
     applied, pend = [], []
