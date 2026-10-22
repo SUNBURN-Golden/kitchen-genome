@@ -70,3 +70,11 @@ class T(unittest.TestCase):
         with contextlib.redirect_stdout(buf): ig.main(now=IN, il=fake_il(login_exc=Exception('checkpoint')), sleep=lambda s: None)
         self.assertNotIn('dummy-not-real', buf.getvalue())
 if __name__ == '__main__': unittest.main()
+
+class TestBlackout(unittest.TestCase):
+    def test_blackout(self):
+        import datetime as dt
+        from zoneinfo import ZoneInfo
+        k = ZoneInfo('Asia/Seoul')
+        for h, m, exp in [(9, 30, True), (10, 29, True), (10, 30, False), (20, 45, True), (21, 30, False), (7, 0, False)]:
+            self.assertEqual(ig.in_blackout(dt.datetime(2026, 10, 23, h, m, tzinfo=k)), exp)

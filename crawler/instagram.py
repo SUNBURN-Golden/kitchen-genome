@@ -13,7 +13,7 @@ import json, os, re, sys, time, datetime as dt
 from zoneinfo import ZoneInfo
 H = os.path.dirname(os.path.abspath(__file__)); ROOT = os.path.dirname(H)
 OUT = os.path.join(H, 'out'); FLAG = os.path.join(OUT, 'ig_blocked.flag')
-LOGIN = 'jaytparkitrighthere@gmail.com'
+LOGIN = 'agamajung'
 SESSION = '/home/box/.secrets/kg_ig_agamajung.session'
 WINDOW = (dt.time(6, 45), dt.time(8, 0))
 DELAY, CAP, POSTS = 8, 25, 6
@@ -28,11 +28,18 @@ def in_window(now=None):
     now = now or dt.datetime.now(ZoneInfo('Asia/Seoul'))
     return WINDOW[0] <= now.time() < WINDOW[1]
 
+BLACKOUT = ((dt.time(9, 30), dt.time(10, 30)), (dt.time(20, 30), dt.time(21, 30)))  # never log in (KST)
+
+def in_blackout(now=None):
+    t = (now or dt.datetime.now(ZoneInfo('Asia/Seoul'))).time()
+    return any(a <= t < b for a, b in BLACKOUT)
+
 def block(reason):
     os.makedirs(OUT, exist_ok=True)
     reason = re.sub(r'\s+', ' ', str(reason))[:200]
     open(FLAG, 'w').write(json.dumps(dict(at=dt.datetime.now(ZoneInfo('Asia/Seoul')).isoformat(timespec='seconds'), reason=reason), ensure_ascii=False))
-    print(f'IG_BLOCKED reason={reason}'); return 2
+    notify = ' notify=BabyShower(BabyShower에게 알릴 것)' if 'checkpoint' in reason.lower() else ''
+    print(f'IG_BLOCKED reason={reason}{notify}'); return 2
 
 def classify_exc(e):
     """Every instaloader/network problem during login or fetch is treated as a stop signal."""
@@ -74,6 +81,7 @@ def login(L, il):
     os.chmod(SESSION, 0o600)
 
 def main(now=None, il=None, sleep=time.sleep):
+    if in_blackout(now): print('IG_SKIPPED reason=blackout_0930_1030_or_2030_2130_KST'); return 0
     if not in_window(now): print('IG_SKIPPED reason=outside_window_0645_0800_KST'); return 0
     if os.path.exists(FLAG): print('IG_SKIPPED reason=blocked_flag_present (clear crawler/out/ig_blocked.flag after a human check)'); return 0
     if il is None:
