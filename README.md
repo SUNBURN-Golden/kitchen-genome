@@ -53,3 +53,16 @@ bash scripts/daily_pipeline.sh /tmp/kg
 - 하루 25개 핸들 이하, 요청 간 8초 이상, 프로필 + 최근 게시물 6개 캡션·날짜만. 발췌 40자 이하, 게시물 URL, 날짜만 저장. IG 결과는 검토 대기열 전용 (신뢰 출처 1곳 + IG = 2곳으로 인정).
 - 의존성: `pip install --break-system-packages instaloader`. 테스트(목, 네트워크 없음): `python3 -m unittest tests/test_instagram.py`.
 - 파이프라인 출력 한 줄: `IG_OK handles=N findings=M` | `IG_SKIPPED reason=…` | `IG_BLOCKED reason=…` (→ 준태님 보고 + BabyShower 알림).
+
+## Login (Cloudflare Pages Functions + D1) — PR #16
+- Social login only (Google now; Kakao stubbed/disabled). Code: `functions/` (Pages Functions), `web/auth.js`, `/login/`, `/en/login/`.
+- Routes: `GET /auth/google/start?news=1|0&next=` → Google (scope `openid email`, state + PKCE in a signed 10-min `kg_oauth` cookie) → `GET /auth/google/callback` → upsert `users` in D1 → signed HttpOnly `kg_session` cookie (30 days). `POST|GET /auth/logout`. `GET /api/me` → `{config:{google,kakao}, user}`.
+- Newsletter checkbox "계보 업데이트 받아보기" is pre-checked; its value travels via `news=` in start and is saved at callback (`newsletter_opt_in`, `consent_at`).
+- D1: `kitchengenome` (`bb88b9ae-9380-4d86-ae8d-226f97c19274`), bound as `DB` on Pages project kitchengenome (production + preview). Schema: `migrations/0001_users.sql` (already applied).
+- Env (Pages → Settings → Variables, as **secrets**): `GOOGLE_CLIENT_ID`, `GOOGLE_CLIENT_SECRET`, `SESSION_SECRET` (random ≥32 bytes). Until all three exist, `/api/me` reports `google:false` and buttons show "준비 중".
+- Google OAuth client redirect URI: `https://kitchengenome.soulbound.co.kr/auth/google/callback` (add `https://kitchengenome.pages.dev/auth/google/callback` for preview if wanted).
+
+### Deploying with Functions
+The asset-only deploy (`upload_assets.py` + `deploy_kitchengenome.js`) does **not** ship Functions; an asset-only deployment simply has no `/api/me`, so login shows "준비 중" (safe). To ship Functions:
+- With a Pages:Edit token: `CLOUDFLARE_API_TOKEN=... npx wrangler pages deploy web --project-name kitchengenome --branch main` from the repo root (wrangler picks up `functions/` and `wrangler.toml`). Use `--branch preview` first to test.
+- Via the connector (no token): `npx wrangler pages functions build --outfile dist/_worker.bundle --output-routes-path dist/_routes.json` on the box, upload assets as usual, then add multipart fields `_worker.bundle` (file, the bundle) and `_routes.json` (file) to the deployments POST in `deploy_kitchengenome.js`. Test on a non-main branch first.

@@ -29,7 +29,7 @@ def page(kopath,title,desc,body,ld):
 <header class="top"><div class="wrap bar"><a class="logo" href="/en/" aria-label="Kitchen Genome home">{LOGO}<span class="wm">Kitchen Genome<small>SEOUL CHEF LINEAGE</small></span></a>
 <nav id="nav" aria-label="Main"><a href="/en/">Home</a><a href="/en/directory/">Directory</a><a href="/#/">Lineage map</a><a href="{kopath}" hreflang="ko" lang="ko">한국어</a></nav></div></header>
 <main class="wrap">{body}</main>
-<footer class="wrap foot">Kitchen Genome · Every link between a kitchen and a chef cites a public source and a check date. Spotted an error? <a href="/#/submit">Tell us</a> (form in Korean).</footer><script src="/auth-config.js"></script><script src="/auth.js"></script></body></html>
+<footer class="wrap foot">Kitchen Genome · Every link between a kitchen and a chef cites a public source and a check date. Spotted an error? <a href="/#/submit">Tell us</a> (form in Korean).</footer><script src="/auth.js"></script></body></html>
 '''
 def link(u,t): return f'<a href="{e(u)}" rel="nofollow noopener" target="_blank">{e(t)}</a>'
 def srcs(r):

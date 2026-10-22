@@ -1,0 +1,9 @@
+# Cloudflare Pages project 'kitchengenome' (used by `wrangler pages dev` / `wrangler pages functions build`).
+name = "kitchengenome"
+pages_build_output_dir = "web"
+compatibility_date = "2026-10-01"
+
+[[d1_databases]]
+binding = "DB"
+database_name = "kitchengenome"
+database_id = "bb88b9ae-9380-4d86-ae8d-226f97c19274"
