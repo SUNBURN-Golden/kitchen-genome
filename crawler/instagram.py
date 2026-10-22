@@ -13,7 +13,7 @@ import json, os, re, sys, time, datetime as dt
 from zoneinfo import ZoneInfo
 H = os.path.dirname(os.path.abspath(__file__)); ROOT = os.path.dirname(H)
 OUT = os.path.join(H, 'out'); FLAG = os.path.join(OUT, 'ig_blocked.flag')
-LOGIN = 'jaytparkitrighthere@gmail.com'
+LOGIN = 'agamajung'
 SESSION = '/home/box/.secrets/kg_ig_agamajung.session'
 WINDOW = (dt.time(6, 45), dt.time(8, 0))
 DELAY, CAP, POSTS = 8, 25, 6
