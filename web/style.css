@@ -106,3 +106,11 @@ button.tn:focus-visible,.chip:focus-visible,.btn:focus-visible{outline:2px solid
 
 .tn.x{opacity:.6;border-style:dashed;border-color:var(--dash)}
 .cl{display:inline-block;font-size:12px;font-weight:600;line-height:20px;padding:0 var(--s1);border-radius:10px;background:var(--line);color:var(--ink-2);margin-left:var(--s1);vertical-align:middle}
+
+.auth-card{max-width:480px;margin:var(--s3) auto}
+.consent{display:flex;gap:var(--s2);align-items:flex-start;margin:var(--s3) 0;line-height:1.5;cursor:pointer}
+.consent input{width:20px;height:20px;margin-top:2px;flex:none;accent-color:var(--accent)}
+.auth-btns{display:flex;flex-direction:column;gap:var(--s2)}
+.auth-btns .btn{justify-content:center}
+.small{font-size:12px}
+nav a.auth{font-weight:600;color:var(--accent)}

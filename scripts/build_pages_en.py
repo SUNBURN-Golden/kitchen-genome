@@ -29,7 +29,7 @@ def page(kopath,title,desc,body,ld):
 <header class="top"><div class="wrap bar"><a class="logo" href="/en/" aria-label="Kitchen Genome home">{LOGO}<span class="wm">Kitchen Genome<small>SEOUL CHEF LINEAGE</small></span></a>
 <nav id="nav" aria-label="Main"><a href="/en/">Home</a><a href="/en/directory/">Directory</a><a href="/#/">Lineage map</a><a href="{kopath}" hreflang="ko" lang="ko">한국어</a></nav></div></header>
 <main class="wrap">{body}</main>
-<footer class="wrap foot">Kitchen Genome · Every link between a kitchen and a chef cites a public source and a check date. Spotted an error? <a href="/#/submit">Tell us</a> (form in Korean).</footer></body></html>
+<footer class="wrap foot">Kitchen Genome · Every link between a kitchen and a chef cites a public source and a check date. Spotted an error? <a href="/#/submit">Tell us</a> (form in Korean).</footer><script src="/auth.js"></script></body></html>
 '''
 def link(u,t): return f'<a href="{e(u)}" rel="nofollow noopener" target="_blank">{e(t)}</a>'
 def srcs(r):
@@ -113,6 +113,7 @@ def home():
     ld={'@context':'https://schema.org','@type':'WebSite','name':'Kitchen Genome','alternateName':'키친 게놈','url':BASE+'/en/','inLanguage':'en','description':desc}
     return '/en/',page('/','Kitchen Genome — Seoul Chef Lineage: Where Top Kitchens’ Alumni Cook Now',desc,body,ld)
 shutil.rmtree(os.path.join(web,'en'),ignore_errors=True)
+os.makedirs(os.path.join(web,'en','login'),exist_ok=True); shutil.copyfile(os.path.join(os.path.dirname(os.path.abspath(__file__)),'templates','en_login.html'),os.path.join(web,'en','login','index.html'))
 out=[home()]+[rpage(r) for r in R]+[kpage(k) for k in d['kitchens']]+[dirpage()]
 for path,html in out:
     p=os.path.join(web,path.strip('/'),'index.html'); os.makedirs(os.path.dirname(p),exist_ok=True); open(p,'w',encoding='utf-8').write(html)
