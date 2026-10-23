@@ -9,7 +9,8 @@ from privacy_filter import extract_relevant_dom_region, sanitize_before_store
 
 OFFICIAL_HOSTS = {
     'lyseenyc.com', 'jungsik.com', 'odrenyc.com', 'iter-restaurants.com',
-    'the-italian-club.lovable.app', 'sotetsu-hotels.com'
+    'the-italian-club.lovable.app', 'sotetsu-hotels.com',
+    'cj.co.kr', 'cjnews.cj.net', 'cuisinekproject.com'
 }
 PRESS_HOSTS = {
     'mingchu.io', 'bluer.co.kr', 'hotelrestaurant.co.kr', 'esquirekorea.co.kr',
@@ -17,7 +18,9 @@ PRESS_HOSTS = {
     'vegannews.co.kr', 'imaeil.com', 'nyculturebeat.com', 'mk.co.kr',
     'heypop.kr', 'joongang.co.kr', 'economist.co.kr', 'dealseoul.com',
     'ny.eater.com', 'dafanew.com', 'metizen.co.kr', 'alive.businessweekly.com.tw',
-    'restaurantsforkings.com', 'winein.co.kr', 'ktriptips.com'
+    'restaurantsforkings.com', 'winein.co.kr', 'ktriptips.com',
+    'newsis.com', 'news1.kr', 'zdnet.co.kr', 'foodicon.co.kr', 'shinailbo.co.kr',
+    'businesspost.co.kr', 'creatrip.com', 'popply.co.kr'
 }
 BLOG_OR_COMMUNITY_HOSTS = {
     'tistory.com', 'brunch.co.kr', 'blog.naver.com', 'm.blog.naver.com',

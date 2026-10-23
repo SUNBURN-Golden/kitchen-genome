@@ -122,5 +122,75 @@
   "host": "dealseoul.com",
   "date": "2026-10-21",
   "title": "스와니예(이준 셰프) 출신 원문 확인"
+ },
+ {
+  "id": "belong",
+  "kind": "field",
+  "field": "lineage_src",
+  "value": "https://creatrip.com/en/spot/15912",
+  "url": "https://creatrip.com/en/spot/15912",
+  "host": "creatrip.com",
+  "date": "2026-10-23",
+  "title": "Cuisine.K Project Belong 공식 영문 예약 페이지: Chef Shin Yongwoo 이력 2016 Elbon the table, 2020 Evett, 2022 Jordnaer, 2023 Legume, 2024 L'Enclume"
+ },
+ {
+  "id": "belong",
+  "kind": "field",
+  "field": "lineage_src",
+  "value": "https://creatrip.com/en/spot/15912",
+  "url": "https://www.cj.co.kr/kr/newsroom/pressreleases/news-detail/1828",
+  "host": "cj.co.kr",
+  "date": "2026-10-02",
+  "title": "CJ제일제당 ‘퀴진케이’, 열 번째 팝업 레스토랑 ‘빌롱(Belong)’ 오픈… 퀴진케이 알럼나이 1기 신용우 셰프, 요드니에·렁클룸 근무 후 복귀"
+ },
+ {
+  "id": "belong",
+  "kind": "field",
+  "field": "lineage_src",
+  "value": "https://creatrip.com/en/spot/15912",
+  "url": "https://cjnews.cj.net/cj%ec%a0%9c%ec%9d%bc%ec%a0%9c%eb%8b%b9-%ed%80%b4%ec%a7%84%ec%bc%80%ec%9d%b4-%ec%97%b4-%eb%b2%88%ec%a7%b8-%ed%8c%9d%ec%97%85-%eb%a0%88%ec%8a%a4%ed%86%a0%eb%9e%91-%eb%b9%8c/",
+  "host": "cjnews.cj.net",
+  "date": "2026-10-02",
+  "title": "CJ제일제당 ‘퀴진케이’, 열 번째 팝업 레스토랑 ‘빌롱(Belong)’ 오픈… “계절 따라 새롭게 펼쳐지는 한식 다이닝” – CJ 뉴스룸"
+ },
+ {
+  "id": "belong",
+  "kind": "field",
+  "field": "lineage_status",
+  "value": "verified",
+  "url": "https://creatrip.com/en/spot/15912",
+  "host": "creatrip.com",
+  "date": "2026-10-23",
+  "title": "신용우 셰프 에빗(Evett, 2020)·레귬(Légume, 2023)·요드니에(2022)·렁클룸(2024) 경력 확인"
+ },
+ {
+  "id": "belong",
+  "kind": "field",
+  "field": "lineage_status",
+  "value": "verified",
+  "url": "https://cuisinekproject.com/kr/alumni/6",
+  "host": "cuisinekproject.com",
+  "date": "2026-10-23",
+  "title": "퀴진케이 공식 알럼나이 프로필: 신용우 셰프 (2023 Alumni, 빌롱)"
+ },
+ {
+  "id": "belong",
+  "kind": "field",
+  "field": "opened",
+  "value": "2026-10-07",
+  "url": "https://www.cj.co.kr/kr/newsroom/pressreleases/news-detail/1828",
+  "host": "cj.co.kr",
+  "date": "2026-10-02",
+  "title": "CJ 뉴스룸 공식 보도자료: 2026년 10월 7일부터 약 6개월간 강남구 퀴진케이 프로젝트에서 빌롱 오픈"
+ },
+ {
+  "id": "belong",
+  "kind": "field",
+  "field": "opened",
+  "value": "2026-10-07",
+  "url": "https://www.newsis.com/view/NISX20261002_0003811966",
+  "host": "newsis.com",
+  "date": "2026-10-02",
+  "title": "뉴시스: CJ제일제당 퀴진케이, 열 번째 팝업 레스토랑 '빌롱' 10월 7일 오픈"
  }
 ]

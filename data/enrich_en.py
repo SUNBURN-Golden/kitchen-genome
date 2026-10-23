@@ -25,6 +25,7 @@ OWN.update({'mamalee':('Mamalee','https://www.instagram.com/mamalee_pub/ (Instag
  'midolim':('Midolim','https://www.instagram.com/midolim_bar (Instagram)'),'arari':('Arari','https://www.instagram.com/arari_seoul (Instagram; design.co.kr writes ARARI)'),
  'iter_md':('iter Myeongdong','https://iter-restaurants.com/ko/ (restaurant site)')})
 OWN['origin_numbers']=('Cantique','https://www.catchtable.net/shop/original_numbers (CATCHTABLE English page title; renamed from Original Numbers, mingchu.io/people/article-korean/1801)')
+OWN['belong']=('Belong','https://www.cj.co.kr/kr/newsroom/pressreleases/news-detail/1828 (CJ Newsroom official press release; Instagram @belong_kr_)')
 # English spelling used by credible press/directories, not the restaurant itself
 PRESS={'layered':('Layered','https://restaurantsforkings.com/city/seoul/layered'),'mowa':('MOWa','https://eemoong.tistory.com/entry/restaurant-mowa (reviews; Instagram @mowa.official)'),
  'goum':('GOUM','https://korean.visitseoul.net/restaurants/GOUM/KOPpl8jdv (Visit Seoul)'),'goni':('GONI','http://www.bluer.co.kr/magazine/303 (Blue Ribbon; Instagram @gonichef)'),
@@ -36,7 +37,7 @@ TR={'oct19':('October 19','transliterated: translation of 10월 19일 (no offici
 MC={'lysee':('Eunji Lee','lysee'),'odre':('Changki Kang','odre'),'mosu_r':('Sung Anh','mosu_r'),
  'legume':'Si-woo Sung','on':'Kim Jun-hyung','atomix':'Junghyun Park','atoboy':'Junghyun Park','jua':'Hoyoung Kim','moono':('Hoyoung Kim','jua'),
  'mingles_r':'Mingoo Kang','san':'Seong-hyun Jo','jungsik_r':'Yim Jung-sik','soigne_r':'Jun Lee','evett_r':'Joseph Lidgerwood','kwon_r':'Kwon Woo-joong',
- 'sosuheon':'Kyung-jae Park','lamant':'Son Jong-won','eatanic':('Son Jong-won','lamant'),'vinho':'Sung-bin Jeon'}
+ 'sosuheon':'Kyung-jae Park','lamant':'Son Jong-won','eatanic':('Son Jong-won','lamant'),'vinho':'Sung-bin Jeon','belong':('Shin Yong-woo','belong')}
 TRANSLIT={'matteo':'Matteo Gyeonmunnok'}  # loanwords without a published English form
 byid={r['id']:r for r in d['restaurants']}
 off=rom=coff=crom=0
@@ -54,8 +55,8 @@ for r in d['restaurants']:
     c=r.get('chef') or ''
     if i in MC:
         v=MC[i]; n,src=(v if isinstance(v,tuple) else (v,i))
-        CS={'lysee':'https://www.lyseenyc.com/about','odre':'https://ny.eater.com/2024/8/19/24223842/odre-opening-korean-east-village-restaurant-hand-hospitality (press)','mosu_r':'https://www.cnn.com/travel/culinary-class-wars-netflix-judge-chef-sung-anh-mosu-intl-hnk (press; Wikipedia: Sung Anh)'}
-        r.update(chef_en=n,chef_en_src=CS.get(i) or M(byid[src]),chef_en_official=i not in ('odre','mosu_r'),chef_en_type='press' if i in ('odre','mosu_r') else 'official'); coff+=1
+        CS={'lysee':'https://www.lyseenyc.com/about','odre':'https://ny.eater.com/2024/8/19/24223842/odre-opening-korean-east-village-restaurant-hand-hospitality (press)','mosu_r':'https://www.cnn.com/travel/culinary-class-wars-netflix-judge-chef-sung-anh-mosu-intl-hnk (press; Wikipedia: Sung Anh)','belong':'https://creatrip.com/en/spot/15912 (Cuisine.K Project English listing: Chef Shin Yongwoo / Yongwoo Shin)'}
+        r.update(chef_en=n,chef_en_src=CS.get(i) or M(byid[src]),chef_en_official=i not in ('odre','mosu_r','belong'),chef_en_type='press' if i in ('odre','mosu_r','belong') else 'official'); coff+=1
     else:
         base=re.sub(r'\s*\(.*?\)','',c).strip()
         names=[x for x in re.split(r'[·,]',base) if re.fullmatch(r'[가-힣]{2,4}',x.strip())]

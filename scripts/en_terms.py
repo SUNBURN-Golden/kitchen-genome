@@ -12,7 +12,7 @@ CUISINE={'곰탕 다이닝 코스':'gomtang (beef bone soup) tasting course','�
  '해산물·스파클링 바':'seafood and sparkling wine bar','현대 한식':'contemporary Korean','화덕·발효 우드파이어 한식':'wood-fired, fermentation-led Korean'}
 ROLE={'2019년 합류 (디저트)':'joined 2019 (desserts)','2022년 합류 셰프':'chef, joined 2022','수석 셰프':'chef de cuisine','수셰프':'sous chef','실습 (CIA 재학 중)':'stage (internship) while at the CIA',
  '창립 멤버':'founding member','출신 (10여 년 한식)':'about 10 years in Korean kitchens',
- '파티시에':'pastry chef','파티시에 (소나 경력도)':'pastry chef','헤드 셰프':'head chef','헤드 셰프 (10년+)':'head chef (10+ years)','헤드 셰프 (6년)':'head chef (6 years)'}
+ '파티시에':'pastry chef','파티시에 (소나 경력도)':'pastry chef','헤드 셰프':'head chef','헤드 셰프 (10년+)':'head chef (10+ years)','헤드 셰프 (6년)':'head chef (6 years)','2020년 근무 (레귬·요드니에·렁클룸 경력도)':'worked in 2020; also Légume 2023, Jordnær 2022, L’Enclume 2024'}
 def michelin(s):
     if not s or '미확인' in s and '스타' not in s: return None
     if '없음' in s: return 'Not in the current MICHELIN Guide Seoul (checked 2026-10-20)'
