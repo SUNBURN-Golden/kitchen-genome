@@ -1,0 +1,27 @@
+{
+  "manifest_version": 3,
+  "name": "Kitchen Genome Clipper (이 자료 담기)",
+  "version": "1.0.0",
+  "description": "현재 보고 있는 공개 페이지에서 필요한 영역만 추출해 개인정보 필터링 후 Kitchen Genome 수집함으로 전달합니다.",
+  "permissions": [
+    "activeTab",
+    "scripting",
+    "storage",
+    "alarms"
+  ],
+  "optional_host_permissions": [
+    "https://www.lyseenyc.com/*",
+    "https://www.jungsik.com/*",
+    "https://www.mingchu.io/*",
+    "http://www.bluer.co.kr/*",
+    "https://www.hotelrestaurant.co.kr/*",
+    "https://www.esquirekorea.co.kr/*"
+  ],
+  "background": {
+    "service_worker": "background.js"
+  },
+  "action": {
+    "default_popup": "popup.html",
+    "default_title": "이 자료 담기 (Kitchen Genome)"
+  }
+}

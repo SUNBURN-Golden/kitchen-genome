@@ -1,8 +1,57 @@
 {
+ "brand": "kitchengenome",
  "user_agent": "KitchenGenomeBot/1.0 (+https://kitchengenome.soulbound.co.kr; kitchengenome@soulbound.co.kr)",
- "delay_sec": 2.0,
+ "delay_sec": 5.0,
+ "min_delay_sec": 5.0,
+ "per_domain_concurrency": 1,
+ "daily_candidate_url_limit": 500,
+ "daily_content_fetch_limit": 200,
+ "max_link_depth": 2,
  "max_items_per_query": 15,
  "lookback_days": 120,
+ "recheck_priority_kinds": [
+  "closure",
+  "relocation",
+  "rename",
+  "price"
+ ],
+ "trapped_url_patterns": [
+  "calendar",
+  "date=",
+  "year=",
+  "month=",
+  "page=",
+  "paged=",
+  "offset=",
+  "sort=",
+  "order=",
+  "filter=",
+  "facet=",
+  "replytocom=",
+  "login",
+  "signin",
+  "signup",
+  "checkout",
+  "cart"
+ ],
+ "allowed_browser_hosts": [
+  "lyseenyc.com",
+  "jungsik.com",
+  "mingchu.io",
+  "bluer.co.kr",
+  "hotelrestaurant.co.kr",
+  "esquirekorea.co.kr",
+  "foodnews.news",
+  "bakerynews.co.kr",
+  "cooknchefnews.com",
+  "maisonkorea.com",
+  "heypop.kr",
+  "dealseoul.com",
+  "ny.eater.com"
+ ],
+ "fulltext_allowed_hosts": [
+  "kitchengenome.soulbound.co.kr"
+ ],
  "banned_hosts": [
   "instagram.com",
   "naver.com",
@@ -11,7 +60,7 @@
   "dcinside.com",
   "yna.co.kr"
  ],
- "banned_note": "guide.michelin.com robots.txt prohibits automated browsing (legal notice) -> MICHELIN status is checked by hand only. Instagram/Naver never.",
+ "banned_note": "guide.michelin.com robots.txt prohibits automated browsing (legal notice) -> MICHELIN status is checked by hand only. Unattended crawler never fetches robots.txt-blocked hosts.",
  "unreliable_hosts": [
   "tistory.com",
   "blog.",
@@ -47,6 +96,14 @@
    "renamed",
    "rebrand"
   ],
+  "relocation": [
+   "이전",
+   "확장 이전",
+   "자리로 옮",
+   "새 보금자리",
+   "relocated",
+   "moved to"
+  ],
   "chef_move": [
    "합류",
    "부임",
@@ -55,9 +112,14 @@
    "떠나",
    "독립",
    "이직",
+   "출신",
+   "사사",
+   "거쳐",
    "joins",
    "new chef",
-   "departs"
+   "departs",
+   "alum",
+   "former"
   ],
   "opening": [
    "오픈",

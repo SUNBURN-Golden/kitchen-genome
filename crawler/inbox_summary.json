@@ -1,0 +1,22 @@
+{
+ "brand": "kitchengenome",
+ "generated_at": "2026-10-23",
+ "auto_publish_connected": false,
+ "limits": {
+  "daily_candidate_url_limit": 500,
+  "daily_content_fetch_limit": 200,
+  "per_domain_concurrency": 1,
+  "min_delay_sec": 5.0,
+  "max_link_depth": 2
+ },
+ "stage_counts": {
+  "candidate": 5,
+  "source_checked": 10,
+  "dedup_excluded": 3,
+  "verified": 42,
+  "ready_to_publish": 4
+ },
+ "total_records": 64,
+ "conflict_count": 3,
+ "homonym_review_count": 0
+}
