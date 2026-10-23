@@ -20,7 +20,7 @@ import datetime as dt
 
 from privacy_filter import extract_relevant_dom_region, sanitize_before_store
 from extractor import classify_source_tier, extract_kitchen_genome_facts
-from vault import compute_dedup_cluster, build_vault_From_seed_and_findings
+from vault import compute_dedup_cluster, build_vault_From_seed_and_findings, sync_sqlite_db
 
 H = os.path.dirname(os.path.abspath(__file__))
 ROOT = os.path.dirname(H)
@@ -29,6 +29,7 @@ STATE_PATH = os.path.join(H, 'worker_state.json')
 INBOX_PATH = os.path.join(H, 'inbox.json')
 VAULT_PATH = os.path.join(H, 'vault.json')
 SUMMARY_PATH = os.path.join(H, 'inbox_summary.json')
+DB_PATH = os.path.join(H, 'vault.db')
 
 
 def load_config() -> dict:
@@ -179,6 +180,7 @@ def sync_vault() -> dict:
     manual_path = os.path.join(H, 'manual_findings.json')
     pending_path = os.path.join(H, 'pending.json')
     vault_data = build_vault_From_seed_and_findings(seed_path, manual_path, pending_path, cfg)
+    sync_sqlite_db(vault_data, DB_PATH)
     json.dump(vault_data, open(VAULT_PATH, 'w', encoding='utf-8'), ensure_ascii=False, indent=1)
     json.dump(vault_data['summary'], open(SUMMARY_PATH, 'w', encoding='utf-8'), ensure_ascii=False, indent=1)
     return vault_data['summary']

@@ -279,3 +279,74 @@ def build_vault_From_seed_and_findings(seed_path: str, manual_findings_path: str
     }
 
     return {'summary': summary, 'records': raw_items}
+
+
+def sync_sqlite_db(vault_data: dict, db_path: str) -> None:
+    """Persist structured vault records and queue metadata into local SQLite (crawler/vault.db)
+    with indexes on verification_status, dedup_cluster_id, target_id, and chef_entity_id."""
+    import sqlite3
+    conn = sqlite3.connect(db_path)
+    cur = conn.cursor()
+    cur.execute("""
+        CREATE TABLE IF NOT EXISTS vault_records (
+            record_id TEXT PRIMARY KEY,
+            brand TEXT NOT NULL,
+            collection_path TEXT NOT NULL,
+            url TEXT NOT NULL,
+            canonical_url TEXT,
+            title TEXT,
+            source_host TEXT,
+            source_tier TEXT,
+            published_at TEXT,
+            collected_at TEXT,
+            target_id TEXT,
+            kind TEXT,
+            chef_entity_id TEXT,
+            homonym_conflict INTEGER DEFAULT 0,
+            conflict INTEGER DEFAULT 0,
+            dedup_cluster_id TEXT,
+            verification_status TEXT NOT NULL,
+            extracted_facts_json TEXT,
+            evidence_locator_json TEXT,
+            privacy_audit_json TEXT
+        )
+    """)
+    cur.execute('CREATE INDEX IF NOT EXISTS idx_vault_status ON vault_records(verification_status)')
+    cur.execute('CREATE INDEX IF NOT EXISTS idx_vault_cluster ON vault_records(dedup_cluster_id)')
+    cur.execute('CREATE INDEX IF NOT EXISTS idx_vault_target ON vault_records(target_id)')
+    cur.execute('CREATE INDEX IF NOT EXISTS idx_vault_chef ON vault_records(chef_entity_id)')
+
+    for rec in vault_data.get('records', []):
+        facts = rec.get('extracted_facts') or {}
+        sigs = rec.get('dedup_signals') or {}
+        cur.execute("""
+            INSERT OR REPLACE INTO vault_records (
+                record_id, brand, collection_path, url, canonical_url, title,
+                source_host, source_tier, published_at, collected_at, target_id,
+                kind, chef_entity_id, homonym_conflict, conflict, dedup_cluster_id,
+                verification_status, extracted_facts_json, evidence_locator_json, privacy_audit_json
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        """, (
+            rec['record_id'],
+            rec.get('brand', 'kitchengenome'),
+            rec.get('collection_path', 'auto'),
+            rec.get('url', ''),
+            sigs.get('canonical_url', ''),
+            rec.get('title', ''),
+            rec.get('source_host', ''),
+            rec.get('source_tier', ''),
+            rec.get('published_at', ''),
+            rec.get('collected_at', ''),
+            rec.get('target_id', ''),
+            rec.get('kind', ''),
+            facts.get('chef_entity_id', ''),
+            1 if facts.get('homonym_conflict') else 0,
+            1 if rec.get('conflict') else 0,
+            rec.get('dedup_cluster_id', ''),
+            rec.get('verification_status', 'candidate'),
+            json.dumps(facts, ensure_ascii=False),
+            json.dumps(rec.get('evidence_locator') or {}, ensure_ascii=False),
+            json.dumps(rec.get('privacy_audit') or {}, ensure_ascii=False),
+        ))
+    conn.commit()
+    conn.close()

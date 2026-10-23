@@ -9,3 +9,4 @@ shots/
 .DS_Store
 dist/
 crawler/out/
+crawler/vault.db
