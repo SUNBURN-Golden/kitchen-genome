@@ -84,5 +84,48 @@
    "syndication_sig": "8a58759d3935",
    "event_sig": "ff11a9c5c424"
   }
+ },
+ {
+  "record_id": "clip:1792798019:manual_lead_gyehyanggak",
+  "brand": "kitchengenome",
+  "collection_path": "manual_clip",
+  "url": "https://news.unn.net/news/articleView.html?idxno=524980",
+  "title": "계향각(신계숙) 종로구 동숭길 86 수원식단 중식, 2021-12 개업 — 출신 향원(이향방, 8년), 추적 주방 아님",
+  "source_host": "news.unn.net",
+  "source_tier": "search_lead",
+  "published_at": "2026-10-24",
+  "collected_at": "2026-10-24",
+  "target_id": "manual_lead_gyehyanggak",
+  "kind": "lineage_clue",
+  "extracted_facts": {
+   "chef": "신계숙",
+   "chef_entity_id": "chef:신계숙@manual_lead_gyehyanggak",
+   "restaurant": "계향각 (Gyehyanggak)",
+   "origin_kitchen": "향원(이향방) — not tracked",
+   "tenure_period": "약 8년, 1980s-90s",
+   "role": "조리사(시다)",
+   "price_clue": null,
+   "price_is_official": false
+  },
+  "evidence_locator": {
+   "url": "https://news.unn.net/news/articleView.html?idxno=524980",
+   "paragraph_idx": 0,
+   "char_start": 0,
+   "char_end": 94,
+   "quote": "신계숙 배화여대 교수 2021년 말 대학로에 중식당 계향각 개업. 중식 대가 이향방 선생의 향원에서 20대에 일을 배움(8년, 시다/조리사). 원래 후암동 요리 연구소."
+  },
+  "privacy_audit": {
+   "pii_redacted": false,
+   "prompt_injection_detected": false,
+   "redaction_types": []
+  },
+  "verification_status": "candidate",
+  "dedup_cluster_id": "kg-cluster-manual_lead_gyehyanggak-c3c25ba0",
+  "dedup_signals": {
+   "canonical_url": "https://news.unn.net/news/articleView.html?idxno=524980",
+   "url_sig": "daea2cbe9d15",
+   "syndication_sig": "e2965acbac9e",
+   "event_sig": "c3c25ba061d5"
+  }
  }
 ]
