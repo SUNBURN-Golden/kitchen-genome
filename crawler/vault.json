@@ -13,11 +13,11 @@
   "stage_counts": {
    "candidate": 5,
    "source_checked": 10,
-   "dedup_excluded": 3,
-   "verified": 42,
-   "ready_to_publish": 4
+   "dedup_excluded": 5,
+   "verified": 43,
+   "ready_to_publish": 9
   },
-  "total_records": 64,
+  "total_records": 72,
   "conflict_count": 3,
   "homonym_review_count": 0
  },
@@ -2626,6 +2626,57 @@
    }
   },
   {
+   "record_id": "seed:belong",
+   "brand": "kitchengenome",
+   "collection_path": "auto",
+   "url": "https://creatrip.com/en/spot/15912",
+   "title": "빌롱 — 신용우 계보·운영 프로필",
+   "source_host": "creatrip.com",
+   "source_tier": "press",
+   "published_at": "2026-10-23",
+   "collected_at": "2026-10-23",
+   "target_id": "belong",
+   "kind": "lineage_profile",
+   "extracted_facts": {
+    "chef": "신용우",
+    "chef_entity_id": "chef:신용우@evett",
+    "homonym_conflict": false,
+    "homonym_note": null,
+    "restaurant": "빌롱",
+    "origin_kitchen": "evett",
+    "tenure_period": null,
+    "role": "2020년 근무 (레귬·요드니에·렁클룸 경력도)",
+    "independence": "2026-10-07",
+    "relocation": false,
+    "closure": null,
+    "price_clue": "티 페어링 50,000원 / 하프 페어링 70,000원 / 풀 페어링 120,000원 (코스 가격 별도)",
+    "price_is_official": false
+   },
+   "evidence_locator": {
+    "url": "https://creatrip.com/en/spot/15912",
+    "paragraph_idx": 0,
+    "char_start": 0,
+    "char_end": 200,
+    "quote": "CJ제일제당 퀴진케이(Cuisine.K) 알럼나이 1기. 2016 엘본더테이블, 2020 에빗(Evett), 2022 덴마크 요드니에(Jordnær), 2023 레귬(Légume)·퀴진케이 3기 팝업 '빌롱', 2024 영국 렁클룸(L'Enclume) 근무 후 2026-10-07~2027-04-10(약 6개월, 화~토) 강남구 삼성로85길 34 '퀴진케이 "
+   },
+   "fulltext_retained": false,
+   "conflict": false,
+   "conflict_notes": [],
+   "privacy_audit": {
+    "pii_redacted": false,
+    "prompt_injection_detected": false,
+    "redaction_types": []
+   },
+   "verification_status": "verified",
+   "dedup_cluster_id": "kg-cluster-belong-feda15c7",
+   "dedup_signals": {
+    "canonical_url": "https://creatrip.com/en/spot/15912",
+    "url_sig": "8d94ef7ad263",
+    "syndication_sig": "8e86507fc08a",
+    "event_sig": "feda15c7402a"
+   }
+  },
+  {
    "record_id": "finding:0:origin_numbers",
    "brand": "kitchengenome",
    "collection_path": "browser",
@@ -3290,6 +3341,363 @@
     "url_sig": "ef69145a1c68",
     "syndication_sig": "976df011b60d",
     "event_sig": "cd03046aef8a"
+   }
+  },
+  {
+   "record_id": "finding:13:belong",
+   "brand": "kitchengenome",
+   "collection_path": "auto",
+   "url": "https://creatrip.com/en/spot/15912",
+   "title": "Cuisine.K Project Belong 공식 영문 예약 페이지: Chef Shin Yongwoo 이력 2016 Elbon the table, 2020 Evett, 2022 Jordnaer, 2023 Legume, 2024 L'Enclume",
+   "source_host": "creatrip.com",
+   "source_tier": "press",
+   "published_at": "2026-10-23",
+   "collected_at": "2026-10-23",
+   "target_id": "belong",
+   "kind": "field",
+   "extracted_facts": {
+    "chef": "신용우",
+    "chef_entity_id": "chef:신용우@evett",
+    "homonym_conflict": false,
+    "homonym_note": null,
+    "restaurant": "빌롱",
+    "origin_kitchen": "evett",
+    "tenure_period": null,
+    "role": "2020년 근무 (레귬·요드니에·렁클룸 경력도)",
+    "independence": "2026-10-07",
+    "relocation": false,
+    "closure": false,
+    "price_clue": "티 페어링 50,000원 / 하프 페어링 70,000원 / 풀 페어링 120,000원 (코스 가격 별도)",
+    "price_is_official": false
+   },
+   "evidence_locator": {
+    "url": "https://creatrip.com/en/spot/15912",
+    "paragraph_idx": 0,
+    "char_start": 0,
+    "char_end": 136,
+    "quote": "Cuisine.K Project Belong 공식 영문 예약 페이지: Chef Shin Yongwoo 이력 2016 Elbon the table, 2020 Evett, 2022 Jordnaer, 2023 Legume, 2024 L'Enclume"
+   },
+   "fulltext_retained": false,
+   "conflict": false,
+   "conflict_notes": [],
+   "privacy_audit": {
+    "pii_redacted": false,
+    "prompt_injection_detected": false,
+    "redaction_types": []
+   },
+   "verification_status": "ready_to_publish",
+   "dedup_cluster_id": "kg-cluster-belong-4c1f8718",
+   "dedup_signals": {
+    "canonical_url": "https://creatrip.com/en/spot/15912",
+    "url_sig": "8d94ef7ad263",
+    "syndication_sig": "fa26e512bcf8",
+    "event_sig": "4c1f87186759"
+   }
+  },
+  {
+   "record_id": "finding:14:belong",
+   "brand": "kitchengenome",
+   "collection_path": "auto",
+   "url": "https://www.cj.co.kr/kr/newsroom/pressreleases/news-detail/1828",
+   "title": "CJ제일제당 ‘퀴진케이’, 열 번째 팝업 레스토랑 ‘빌롱(Belong)’ 오픈… 퀴진케이 알럼나이 1기 신용우 셰프, 요드니에·렁클룸 근무 후 복귀",
+   "source_host": "cj.co.kr",
+   "source_tier": "official",
+   "published_at": "2026-10-02",
+   "collected_at": "2026-10-23",
+   "target_id": "belong",
+   "kind": "field",
+   "extracted_facts": {
+    "chef": "신용우",
+    "chef_entity_id": "chef:신용우@evett",
+    "homonym_conflict": false,
+    "homonym_note": null,
+    "restaurant": "빌롱",
+    "origin_kitchen": "evett",
+    "tenure_period": null,
+    "role": "2020년 근무 (레귬·요드니에·렁클룸 경력도)",
+    "independence": "2026-10-07",
+    "relocation": false,
+    "closure": false,
+    "price_clue": "티 페어링 50,000원 / 하프 페어링 70,000원 / 풀 페어링 120,000원 (코스 가격 별도)",
+    "price_is_official": false
+   },
+   "evidence_locator": {
+    "url": "https://www.cj.co.kr/kr/newsroom/pressreleases/news-detail/1828",
+    "paragraph_idx": 0,
+    "char_start": 0,
+    "char_end": 82,
+    "quote": "CJ제일제당 ‘퀴진케이’, 열 번째 팝업 레스토랑 ‘빌롱(Belong)’ 오픈… 퀴진케이 알럼나이 1기 신용우 셰프, 요드니에·렁클룸 근무 후 복귀"
+   },
+   "fulltext_retained": false,
+   "conflict": false,
+   "conflict_notes": [],
+   "privacy_audit": {
+    "pii_redacted": false,
+    "prompt_injection_detected": false,
+    "redaction_types": []
+   },
+   "verification_status": "ready_to_publish",
+   "dedup_cluster_id": "kg-cluster-belong-4c1f8718",
+   "dedup_signals": {
+    "canonical_url": "https://cj.co.kr/kr/newsroom/pressreleases/news-detail/1828",
+    "url_sig": "c12490c356b0",
+    "syndication_sig": "fa18a0ce4435",
+    "event_sig": "4c1f87186759"
+   }
+  },
+  {
+   "record_id": "finding:15:belong",
+   "brand": "kitchengenome",
+   "collection_path": "auto",
+   "url": "https://cjnews.cj.net/cj%ec%a0%9c%ec%9d%bc%ec%a0%9c%eb%8b%b9-%ed%80%b4%ec%a7%84%ec%bc%80%ec%9d%b4-%ec%97%b4-%eb%b2%88%ec%a7%b8-%ed%8c%9d%ec%97%85-%eb%a0%88%ec%8a%a4%ed%86%a0%eb%9e%91-%eb%b9%8c/",
+   "title": "CJ제일제당 ‘퀴진케이’, 열 번째 팝업 레스토랑 ‘빌롱(Belong)’ 오픈… “계절 따라 새롭게 펼쳐지는 한식 다이닝” – CJ 뉴스룸",
+   "source_host": "cjnews.cj.net",
+   "source_tier": "official",
+   "published_at": "2026-10-02",
+   "collected_at": "2026-10-23",
+   "target_id": "belong",
+   "kind": "field",
+   "extracted_facts": {
+    "chef": "신용우",
+    "chef_entity_id": "chef:신용우@evett",
+    "homonym_conflict": false,
+    "homonym_note": null,
+    "restaurant": "빌롱",
+    "origin_kitchen": "evett",
+    "tenure_period": null,
+    "role": "2020년 근무 (레귬·요드니에·렁클룸 경력도)",
+    "independence": "2026-10-07",
+    "relocation": false,
+    "closure": false,
+    "price_clue": "티 페어링 50,000원 / 하프 페어링 70,000원 / 풀 페어링 120,000원 (코스 가격 별도)",
+    "price_is_official": false
+   },
+   "evidence_locator": {
+    "url": "https://cjnews.cj.net/cj%ec%a0%9c%ec%9d%bc%ec%a0%9c%eb%8b%b9-%ed%80%b4%ec%a7%84%ec%bc%80%ec%9d%b4-%ec%97%b4-%eb%b2%88%ec%a7%b8-%ed%8c%9d%ec%97%85-%eb%a0%88%ec%8a%a4%ed%86%a0%eb%9e%91-%eb%b9%8c/",
+    "paragraph_idx": 0,
+    "char_start": 0,
+    "char_end": 77,
+    "quote": "CJ제일제당 ‘퀴진케이’, 열 번째 팝업 레스토랑 ‘빌롱(Belong)’ 오픈… “계절 따라 새롭게 펼쳐지는 한식 다이닝” – CJ 뉴스룸"
+   },
+   "fulltext_retained": false,
+   "conflict": false,
+   "conflict_notes": [],
+   "privacy_audit": {
+    "pii_redacted": false,
+    "prompt_injection_detected": false,
+    "redaction_types": []
+   },
+   "verification_status": "ready_to_publish",
+   "dedup_cluster_id": "kg-cluster-belong-4c1f8718",
+   "dedup_signals": {
+    "canonical_url": "https://cjnews.cj.net/cj%ec%a0%9c%ec%9d%bc%ec%a0%9c%eb%8b%b9-%ed%80%b4%ec%a7%84%ec%bc%80%ec%9d%b4-%ec%97%b4-%eb%b2%88%ec%a7%b8-%ed%8c%9d%ec%97%85-%eb%a0%88%ec%8a%a4%ed%86%a0%eb%9e%91-%eb%b9%8c",
+    "url_sig": "f3c7da42256d",
+    "syndication_sig": "00e11d0c2c69",
+    "event_sig": "4c1f87186759"
+   }
+  },
+  {
+   "record_id": "finding:16:belong",
+   "brand": "kitchengenome",
+   "collection_path": "auto",
+   "url": "https://creatrip.com/en/spot/15912",
+   "title": "신용우 셰프 에빗(Evett, 2020)·레귬(Légume, 2023)·요드니에(2022)·렁클룸(2024) 경력 확인",
+   "source_host": "creatrip.com",
+   "source_tier": "press",
+   "published_at": "2026-10-23",
+   "collected_at": "2026-10-23",
+   "target_id": "belong",
+   "kind": "field",
+   "extracted_facts": {
+    "chef": "신용우",
+    "chef_entity_id": "chef:신용우@evett",
+    "homonym_conflict": false,
+    "homonym_note": null,
+    "restaurant": "빌롱",
+    "origin_kitchen": "evett",
+    "tenure_period": null,
+    "role": "2020년 근무 (레귬·요드니에·렁클룸 경력도)",
+    "independence": "2026-10-07",
+    "relocation": false,
+    "closure": false,
+    "price_clue": "티 페어링 50,000원 / 하프 페어링 70,000원 / 풀 페어링 120,000원 (코스 가격 별도)",
+    "price_is_official": false
+   },
+   "evidence_locator": {
+    "url": "https://creatrip.com/en/spot/15912",
+    "paragraph_idx": 0,
+    "char_start": 0,
+    "char_end": 66,
+    "quote": "신용우 셰프 에빗(Evett, 2020)·레귬(Légume, 2023)·요드니에(2022)·렁클룸(2024) 경력 확인"
+   },
+   "fulltext_retained": false,
+   "conflict": false,
+   "conflict_notes": [],
+   "privacy_audit": {
+    "pii_redacted": false,
+    "prompt_injection_detected": false,
+    "redaction_types": []
+   },
+   "verification_status": "dedup_excluded",
+   "dedup_cluster_id": "kg-cluster-belong-4c1f8718",
+   "dedup_signals": {
+    "canonical_url": "https://creatrip.com/en/spot/15912",
+    "url_sig": "8d94ef7ad263",
+    "syndication_sig": "a21159e97aa1",
+    "event_sig": "4c1f87186759"
+   }
+  },
+  {
+   "record_id": "finding:17:belong",
+   "brand": "kitchengenome",
+   "collection_path": "auto",
+   "url": "https://cuisinekproject.com/kr/alumni/6",
+   "title": "퀴진케이 공식 알럼나이 프로필: 신용우 셰프 (2023 Alumni, 빌롱)",
+   "source_host": "cuisinekproject.com",
+   "source_tier": "official",
+   "published_at": "2026-10-23",
+   "collected_at": "2026-10-23",
+   "target_id": "belong",
+   "kind": "field",
+   "extracted_facts": {
+    "chef": "신용우",
+    "chef_entity_id": "chef:신용우@evett",
+    "homonym_conflict": false,
+    "homonym_note": null,
+    "restaurant": "빌롱",
+    "origin_kitchen": "evett",
+    "tenure_period": null,
+    "role": "2020년 근무 (레귬·요드니에·렁클룸 경력도)",
+    "independence": "2026-10-07",
+    "relocation": false,
+    "closure": false,
+    "price_clue": "티 페어링 50,000원 / 하프 페어링 70,000원 / 풀 페어링 120,000원 (코스 가격 별도)",
+    "price_is_official": false
+   },
+   "evidence_locator": {
+    "url": "https://cuisinekproject.com/kr/alumni/6",
+    "paragraph_idx": 0,
+    "char_start": 0,
+    "char_end": 42,
+    "quote": "퀴진케이 공식 알럼나이 프로필: 신용우 셰프 (2023 Alumni, 빌롱)"
+   },
+   "fulltext_retained": false,
+   "conflict": false,
+   "conflict_notes": [],
+   "privacy_audit": {
+    "pii_redacted": false,
+    "prompt_injection_detected": false,
+    "redaction_types": []
+   },
+   "verification_status": "ready_to_publish",
+   "dedup_cluster_id": "kg-cluster-belong-4c1f8718",
+   "dedup_signals": {
+    "canonical_url": "https://cuisinekproject.com/kr/alumni/6",
+    "url_sig": "b662b4ac3162",
+    "syndication_sig": "03f21f8814ef",
+    "event_sig": "4c1f87186759"
+   }
+  },
+  {
+   "record_id": "finding:18:belong",
+   "brand": "kitchengenome",
+   "collection_path": "auto",
+   "url": "https://www.cj.co.kr/kr/newsroom/pressreleases/news-detail/1828",
+   "title": "CJ 뉴스룸 공식 보도자료: 2026년 10월 7일부터 약 6개월간 강남구 퀴진케이 프로젝트에서 빌롱 오픈",
+   "source_host": "cj.co.kr",
+   "source_tier": "official",
+   "published_at": "2026-10-02",
+   "collected_at": "2026-10-23",
+   "target_id": "belong",
+   "kind": "field",
+   "extracted_facts": {
+    "chef": "신용우",
+    "chef_entity_id": "chef:신용우@evett",
+    "homonym_conflict": false,
+    "homonym_note": null,
+    "restaurant": "빌롱",
+    "origin_kitchen": "evett",
+    "tenure_period": null,
+    "role": "2020년 근무 (레귬·요드니에·렁클룸 경력도)",
+    "independence": "2026-10-07",
+    "relocation": false,
+    "closure": false,
+    "price_clue": "티 페어링 50,000원 / 하프 페어링 70,000원 / 풀 페어링 120,000원 (코스 가격 별도)",
+    "price_is_official": false
+   },
+   "evidence_locator": {
+    "url": "https://www.cj.co.kr/kr/newsroom/pressreleases/news-detail/1828",
+    "paragraph_idx": 0,
+    "char_start": 0,
+    "char_end": 59,
+    "quote": "CJ 뉴스룸 공식 보도자료: 2026년 10월 7일부터 약 6개월간 강남구 퀴진케이 프로젝트에서 빌롱 오픈"
+   },
+   "fulltext_retained": false,
+   "conflict": false,
+   "conflict_notes": [],
+   "privacy_audit": {
+    "pii_redacted": false,
+    "prompt_injection_detected": false,
+    "redaction_types": []
+   },
+   "verification_status": "dedup_excluded",
+   "dedup_cluster_id": "kg-cluster-belong-4c1f8718",
+   "dedup_signals": {
+    "canonical_url": "https://cj.co.kr/kr/newsroom/pressreleases/news-detail/1828",
+    "url_sig": "c12490c356b0",
+    "syndication_sig": "241ef94e545e",
+    "event_sig": "4c1f87186759"
+   }
+  },
+  {
+   "record_id": "finding:19:belong",
+   "brand": "kitchengenome",
+   "collection_path": "auto",
+   "url": "https://www.newsis.com/view/NISX20261002_0003811966",
+   "title": "뉴시스: CJ제일제당 퀴진케이, 열 번째 팝업 레스토랑 '빌롱' 10월 7일 오픈",
+   "source_host": "newsis.com",
+   "source_tier": "press",
+   "published_at": "2026-10-02",
+   "collected_at": "2026-10-23",
+   "target_id": "belong",
+   "kind": "field",
+   "extracted_facts": {
+    "chef": "신용우",
+    "chef_entity_id": "chef:신용우@evett",
+    "homonym_conflict": false,
+    "homonym_note": null,
+    "restaurant": "빌롱",
+    "origin_kitchen": "evett",
+    "tenure_period": null,
+    "role": "2020년 근무 (레귬·요드니에·렁클룸 경력도)",
+    "independence": "2026-10-07",
+    "relocation": false,
+    "closure": false,
+    "price_clue": "티 페어링 50,000원 / 하프 페어링 70,000원 / 풀 페어링 120,000원 (코스 가격 별도)",
+    "price_is_official": false
+   },
+   "evidence_locator": {
+    "url": "https://www.newsis.com/view/NISX20261002_0003811966",
+    "paragraph_idx": 0,
+    "char_start": 0,
+    "char_end": 45,
+    "quote": "뉴시스: CJ제일제당 퀴진케이, 열 번째 팝업 레스토랑 '빌롱' 10월 7일 오픈"
+   },
+   "fulltext_retained": false,
+   "conflict": false,
+   "conflict_notes": [],
+   "privacy_audit": {
+    "pii_redacted": false,
+    "prompt_injection_detected": false,
+    "redaction_types": []
+   },
+   "verification_status": "ready_to_publish",
+   "dedup_cluster_id": "kg-cluster-belong-4c1f8718",
+   "dedup_signals": {
+    "canonical_url": "https://newsis.com/view/NISX20261002_0003811966",
+    "url_sig": "bf40e7354fc9",
+    "syndication_sig": "af06a1774f55",
+    "event_sig": "4c1f87186759"
    }
   }
  ]

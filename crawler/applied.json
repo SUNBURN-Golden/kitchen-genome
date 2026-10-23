@@ -88,5 +88,74 @@
   ],
   "note": null,
   "applied_at": "2026-10-21"
+ },
+ {
+  "id": "belong",
+  "name": "빌롱",
+  "kind": "field",
+  "new_name": null,
+  "field": "lineage_src",
+  "value": "https://creatrip.com/en/spot/15912",
+  "reliable_hosts": [
+   "cj.co.kr",
+   "cjnews.cj.net",
+   "creatrip.com"
+  ],
+  "sources": [
+   "https://cjnews.cj.net/cj%ec%a0%9c%ec%9d%bc%ec%a0%9c%eb%8b%b9-%ed%80%b4%ec%a7%84%ec%bc%80%ec%9d%b4-%ec%97%b4-%eb%b2%88%ec%a7%b8-%ed%8c%9d%ec%97%85-%eb%a0%88%ec%8a%a4%ed%86%a0%eb%9e%91-%eb%b9%8c/",
+   "https://www.cj.co.kr/kr/newsroom/pressreleases/news-detail/1828",
+   "https://creatrip.com/en/spot/15912"
+  ],
+  "dates": [
+   "2026-10-02",
+   "2026-10-02",
+   "2026-10-23"
+  ],
+  "note": null,
+  "applied_at": "2026-10-23"
+ },
+ {
+  "id": "belong",
+  "name": "빌롱",
+  "kind": "field",
+  "new_name": null,
+  "field": "lineage_status",
+  "value": "verified",
+  "reliable_hosts": [
+   "creatrip.com",
+   "cuisinekproject.com"
+  ],
+  "sources": [
+   "https://creatrip.com/en/spot/15912",
+   "https://cuisinekproject.com/kr/alumni/6"
+  ],
+  "dates": [
+   "2026-10-23",
+   "2026-10-23"
+  ],
+  "note": null,
+  "applied_at": "2026-10-23"
+ },
+ {
+  "id": "belong",
+  "name": "빌롱",
+  "kind": "field",
+  "new_name": null,
+  "field": "opened",
+  "value": "2026-10-07",
+  "reliable_hosts": [
+   "cj.co.kr",
+   "newsis.com"
+  ],
+  "sources": [
+   "https://www.cj.co.kr/kr/newsroom/pressreleases/news-detail/1828",
+   "https://www.newsis.com/view/NISX20261002_0003811966"
+  ],
+  "dates": [
+   "2026-10-02",
+   "2026-10-02"
+  ],
+  "note": null,
+  "applied_at": "2026-10-23"
  }
 ]

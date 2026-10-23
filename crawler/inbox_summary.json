@@ -12,11 +12,11 @@
  "stage_counts": {
   "candidate": 5,
   "source_checked": 10,
-  "dedup_excluded": 3,
-  "verified": 42,
-  "ready_to_publish": 4
+  "dedup_excluded": 5,
+  "verified": 43,
+  "ready_to_publish": 9
  },
- "total_records": 64,
+ "total_records": 72,
  "conflict_count": 3,
  "homonym_review_count": 0
 }
