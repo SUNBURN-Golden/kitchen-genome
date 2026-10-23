@@ -1,0 +1,88 @@
+[
+ {
+  "record_id": "clip:1792797526:manual_lead_sourblessyou",
+  "brand": "kitchengenome",
+  "collection_path": "manual_clip",
+  "url": "https://polle.com/place/2cGz0D/%EC%82%AC%EC%9A%B0%EC%96%B4",
+  "title": "사우어(Sour bless you, @sourblessyou) 서교동 동교로13길 20 재오픈 — 셰프·계보 미확인",
+  "source_host": "polle.com",
+  "source_tier": "specialist_blog",
+  "published_at": "2026-10-24",
+  "collected_at": "2026-10-24",
+  "target_id": "manual_lead_sourblessyou",
+  "kind": "lineage_clue",
+  "extracted_facts": {
+   "chef": null,
+   "chef_entity_id": "chef:unknown@manual_lead_sourblessyou",
+   "restaurant": "사우어 (Sour bless you), 서울 마포구 동교로13길 20 1층(서교동); 구 동교로 41 매장 2024-06 폐점",
+   "origin_kitchen": null,
+   "tenure_period": null,
+   "role": null,
+   "price_clue": null,
+   "price_is_official": false
+  },
+  "evidence_locator": {
+   "url": "https://polle.com/place/2cGz0D/%EC%82%AC%EC%9A%B0%EC%96%B4",
+   "paragraph_idx": 0,
+   "char_start": 0,
+   "char_end": 112,
+   "quote": "사우어 요리주점 서울 마포구 동교로 41 1층. 사워·람빅 보틀 펍, 동남아풍 안주 한국식 재해석(도라지쏨땀, 골동면, 양고기 쯔꾸네). 폴레 표기 폐점(6월) 후 재오픈 언급. 셰프·계보 출처 없음."
+  },
+  "privacy_audit": {
+   "pii_redacted": false,
+   "prompt_injection_detected": false,
+   "redaction_types": []
+  },
+  "verification_status": "candidate",
+  "dedup_cluster_id": "kg-cluster-manual_lead_sourblessyou-23e93a68",
+  "dedup_signals": {
+   "canonical_url": "https://polle.com/place/3KbreB/%EC%82%AC%EC%9A%B0%EC%96%B4",
+   "url_sig": "5817f19d8245",
+   "syndication_sig": "89755b320101",
+   "event_sig": "23e93a6814ac"
+  }
+ },
+ {
+  "record_id": "clip:1792797585:manual_lead_kisaki",
+  "brand": "kitchengenome",
+  "collection_path": "manual_clip",
+  "url": "https://interis.co.kr/project/301",
+  "title": "키사키(KISAKI, @kisaki.seoul) 서촌 자하문로11길 6 스시·이자카야, 2025-06 오픈 — 셰프 계보 미확인",
+  "source_host": "interis.co.kr",
+  "source_tier": "search_lead",
+  "published_at": "2026-10-24",
+  "collected_at": "2026-10-24",
+  "target_id": "manual_lead_kisaki",
+  "kind": "lineage_clue",
+  "extracted_facts": {
+   "chef": null,
+   "chef_entity_id": "chef:unknown@manual_lead_kisaki",
+   "restaurant": "키사키 (Kisaki)",
+   "origin_kitchen": null,
+   "tenure_period": null,
+   "role": null,
+   "price_clue": null,
+   "price_is_official": false
+  },
+  "evidence_locator": {
+   "url": "https://interis.co.kr/project/301",
+   "paragraph_idx": 0,
+   "char_start": 0,
+   "char_end": 97,
+   "quote": "KISAKI 키사키 JUN. 2025 일식 다이닝 레스토랑, 서울시 종로구 자하문로11길 6, Client 이상호. 월-토 18:00-02:00. 셰프 이력 공개 출처 없음."
+  },
+  "privacy_audit": {
+   "pii_redacted": false,
+   "prompt_injection_detected": false,
+   "redaction_types": []
+  },
+  "verification_status": "candidate",
+  "dedup_cluster_id": "kg-cluster-manual_lead_kisaki-ff11a9c5",
+  "dedup_signals": {
+   "canonical_url": "https://interis.co.kr/project/301",
+   "url_sig": "fa098d1681fd",
+   "syndication_sig": "8a58759d3935",
+   "event_sig": "ff11a9c5c424"
+  }
+ }
+]
