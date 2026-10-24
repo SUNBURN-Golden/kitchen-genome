@@ -1467,7 +1467,8 @@
    "press": [
     "https://www.newsis.com/view/NISX20260202_0003498684",
     "https://www.mk.co.kr/news/culture/11981084",
-    "https://www.bluer.co.kr/magazine/675"
+    "https://www.bluer.co.kr/magazine/675",
+    "https://www.hankookilbo.com/news/article/A2026102316200004434"
    ],
    "city": "서울",
    "checked": "2026-10-20",
@@ -1491,7 +1492,24 @@
    "chef_en": "Son Jong-won",
    "chef_en_src": "https://guide.michelin.com/kr/en/seoul-capital-area/kr-seoul/restaurant/l-amant-secret",
    "chef_en_official": true,
-   "chef_en_type": "official"
+   "chef_en_type": "official",
+   "chef_career": [
+    {
+     "type": "employment",
+     "date": "2018",
+     "text": "레스케이프 호텔 개관 때 라망 시크레 총괄 셰프로 합류(신세계그룹)",
+     "text_en": "Joined L'Escape Hotel at its 2018 opening as executive chef of L'Amant Secret (Shinsegae Group)",
+     "src": "https://www.hankookilbo.com/news/article/A2026102316200004434"
+    },
+    {
+     "type": "employment",
+     "date": "2026-10-23",
+     "text": "신세계그룹 정기 임원인사에서 조선호텔앤리조트 전문임원으로 발탁. 현재 이타닉 가든(조선팰리스 한식당)·라망 시크레(레스케이프 호텔 양식당) 총괄",
+     "text_en": "Named a specialist executive (전문임원) of Josun Hotels & Resorts in Shinsegae Group's 2026-10-23 executive reshuffle; oversees Eatanic Garden (Josun Palace, Korean) and L'Amant Secret (L'Escape Hotel, Western)",
+     "src": "https://www.hankookilbo.com/news/article/A2026102316200004434"
+    }
+   ],
+   "chef_mentorship": []
   },
   {
    "id": "eatanic",
@@ -1511,7 +1529,8 @@
    ],
    "press": [
     "https://www.mk.co.kr/news/culture/11981084",
-    "https://www.bluer.co.kr/magazine/675"
+    "https://www.bluer.co.kr/magazine/675",
+    "https://www.hankookilbo.com/news/article/A2026102316200004434"
    ],
    "city": "서울",
    "checked": "2026-10-20",
@@ -1535,7 +1554,24 @@
    "chef_en": "Son Jong-won",
    "chef_en_src": "https://guide.michelin.com/kr/en/seoul-capital-area/kr-seoul/restaurant/l-amant-secret",
    "chef_en_official": true,
-   "chef_en_type": "official"
+   "chef_en_type": "official",
+   "chef_career": [
+    {
+     "type": "employment",
+     "date": "2018",
+     "text": "레스케이프 호텔 개관 때 라망 시크레 총괄 셰프로 합류(신세계그룹)",
+     "text_en": "Joined L'Escape Hotel at its 2018 opening as executive chef of L'Amant Secret (Shinsegae Group)",
+     "src": "https://www.hankookilbo.com/news/article/A2026102316200004434"
+    },
+    {
+     "type": "employment",
+     "date": "2026-10-23",
+     "text": "신세계그룹 정기 임원인사에서 조선호텔앤리조트 전문임원으로 발탁. 현재 이타닉 가든(조선팰리스 한식당)·라망 시크레(레스케이프 호텔 양식당) 총괄",
+     "text_en": "Named a specialist executive (전문임원) of Josun Hotels & Resorts in Shinsegae Group's 2026-10-23 executive reshuffle; oversees Eatanic Garden (Josun Palace, Korean) and L'Amant Secret (L'Escape Hotel, Western)",
+     "src": "https://www.hankookilbo.com/news/article/A2026102316200004434"
+    }
+   ],
+   "chef_mentorship": []
   },
   {
    "id": "yeast",
