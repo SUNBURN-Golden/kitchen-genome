@@ -115,25 +115,6 @@
   "first_seen": "2026-10-21"
  },
  {
-  "id": "jungsik_r",
-  "name": "정식당",
-  "kind": "site_down",
-  "new_name": null,
-  "field": null,
-  "value": null,
-  "reliable_hosts": [
-   "jungsik.com"
-  ],
-  "sources": [
-   "https://www.jungsik.com/hello/"
-  ],
-  "dates": [
-   "2026-10-25"
-  ],
-  "note": null,
-  "first_seen": "2026-10-25"
- },
- {
   "id": "lamant",
   "name": "라망 시크레",
   "kind": "chef_move",
@@ -187,7 +168,7 @@
    "https://odrenyc.com/homepage"
   ],
   "dates": [
-   "2026-10-25"
+   "2026-10-26"
   ],
   "note": null,
   "first_seen": "2026-10-24"
