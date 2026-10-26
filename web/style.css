@@ -69,7 +69,7 @@ svg text{font-family:var(--font)}
 .tn b{display:block;font-size:17px;font-weight:700}
 .tn .m{display:block;font-size:var(--f-s);color:var(--ink-2)}
 .tchef,.tn b,.tn .m{word-break:keep-all;overflow-wrap:anywhere}
-@media (max-width:767px){.tk{flex-wrap:nowrap;overflow-x:auto}}
+
 @media (min-width:768px){.tree{display:flex;gap:var(--s3);align-items:flex-start}.torg{flex:0 0 240px;margin:0}.tnodes{flex:1}.tnode{display:flex;gap:var(--s3);border-top:1px solid var(--line)}.tnode:first-child{border-top:0;padding-top:0}.tnode:first-child::before{top:.8em}.tchef{flex:0 0 200px;padding-top:var(--s1)}.titems{flex:1;margin-top:0}}
 .rows{list-style:none;padding:0;margin:var(--s2) 0;border-top:1px solid var(--line)}
 .rows li{display:grid;grid-template-columns:32px 1fr auto;gap:var(--s2);align-items:baseline;padding:var(--s2) 0;border-bottom:1px solid var(--line)}
@@ -132,4 +132,32 @@ nav a.auth{font-weight:600;color:var(--accent)}
 @media (max-width:379px){
  nav{display:grid;grid-template-columns:repeat(3,minmax(var(--tap),1fr));overflow-x:visible}
  nav a{min-width:0}
+}
+
+/* Home intro and number-first totals. Korean copy is retained pending review. */
+.hero{padding-top:120px}
+.intro{display:grid;grid-template-columns:minmax(0,1fr) 440px;gap:28px 64px;align-items:end;margin-bottom:40px}
+.hero h1{font:400 42px/1.18 var(--head);margin:0 0 20px;letter-spacing:-.01em}
+.hero .lead{margin:0;color:var(--ink-2);font-size:18px}
+.pick{display:grid;gap:10px}
+.pick-title{margin:0;font:600 15px/1.6 var(--body)}
+.pick-row{display:flex;gap:8px}
+.pick select{flex:1;min-width:0;width:auto;min-height:48px;margin:0;padding:0 14px;border:1.5px solid var(--ctrl);border-radius:var(--r2);background:var(--surface);font:600 16px var(--body)}
+.pick .btn{min-height:48px;padding:0 22px;white-space:nowrap;transition:transform 120ms ease-out}
+.pick .btn:active{transform:translateY(1px)}
+.hero .legend{margin:24px 0 0;gap:20px}
+.totals{display:flex;flex-wrap:wrap;gap:12px 36px;margin:136px 0 0;padding:28px 0 168px;border-top:1px solid var(--line)}
+.totals div{display:flex;flex-direction:column}
+.totals dt{order:2;font-size:14px;color:var(--ink-2)}
+.totals dd{order:1;margin:0;font:400 40px/1.05 var(--head);font-variant-numeric:tabular-nums}
+.totals .date dd{font-size:22px;line-height:1.9}
+@media (max-width:1100px){.intro{grid-template-columns:minmax(0,1fr) 380px;gap:24px 40px}}
+@media (max-width:960px){
+ .hero{padding-top:24px}
+ .intro{grid-template-columns:1fr;align-items:start;gap:20px;margin-bottom:28px}
+ .pick{max-width:460px}
+ .hero h1{font-size:36px;margin-bottom:12px}
+ .hero .lead{font-size:16px}
+ .totals{gap:16px 28px;margin-top:72px;padding-bottom:96px}
+ .totals dd{font-size:32px}
 }

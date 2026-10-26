@@ -2,7 +2,7 @@
 import mimetypes
 from pathlib import Path
 from urllib.parse import unquote, urlparse
-from playwright.sync_api import sync_playwright
+from playwright.sync_api import sync_playwright, expect
 
 WEB = Path(__file__).resolve().parents[1] / 'web'
 
@@ -37,7 +37,17 @@ with sync_playwright() as p:
         assert page.locator('nav a').evaluate_all('els => els.every(el => {const r=el.getBoundingClientRect(); return r.width >= 44 && r.height >= 44})')
         assert page.locator('nav a').evaluate_all('els => els.every(el => {const r=document.createRange();r.selectNodeContents(el);return r.getBoundingClientRect().width <= el.getBoundingClientRect().width})')
     page.set_viewport_size({'width': 1440, 'height': 900})
-    assert page.locator('.tn').count() == 8
+    assert page.locator('#k option').count() == 13
+    assert page.locator('.hero button').count() == 9  # Eight restaurant dialogs and one submit.
+    page.locator('#k').select_option('mingles')
+    page.locator('#pick button').click()
+    page.wait_for_url('**/#/k/mingles')
+    expect(page.locator('.tn')).to_have_count(7)
+    page.locator('#k').select_option('jungsik')
+    page.locator('#pick button').click()
+    page.wait_for_url('**/#/k/jungsik')
+    expect(page.locator('.tn')).to_have_count(8)
+    assert page.locator('.totals dd').all_text_contents() == ['13곳', '35곳', '26', '9', '17곳', '2026-10-20']
     first = page.locator('.tn').first
     first.click()
     assert page.locator('#panel').evaluate('(el) => el.open')
