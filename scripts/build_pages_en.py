@@ -68,7 +68,7 @@ def rpage(r):
 <h1>{e(r['name_en'])}{nm_note}{' <span class="tag">Closed</span>' if r.get('closed_at') else ''}</h1>
 <p class="lead">{e(rdesc(r))}</p>
 <dl>{''.join(f'<dt>{a}</dt><dd>{b}</dd>' for a,b in rows)}</dl>
-{('<h2>Chef employment history</h2><ul>'+''.join(f'<li>{e(c["date"])} · {e(c["text_en"])} ({link(c["src"],"source" if True else "")})</li>' for c in r.get('chef_career',[]))+'</ul>') if r.get('chef_career') else ''}{('<h2>Mentorship</h2><ul>'+''.join(f'<li>{e(c.get("text_en",""))} ({link(c["src"],"source")})</li>' for c in r.get('chef_mentorship',[]))+'</ul>') if r.get('chef_mentorship') else ''}<h2>Sources</h2><ul>{''.join(f'<li>{link(u,lab)}</li>' for lab,u in srcs(r)) or '<li>Collecting public sources</li>'}</ul>
+{('<h2>Chef employment history</h2><ul>'+''.join(f'<li class="career"><span>{e(c["date"])}</span> <span>{e(c["text_en"])} ({link(c["src"],"source" if True else "")})</span></li>' for c in r.get('chef_career',[]))+'</ul>') if r.get('chef_career') else ''}{('<h2>Mentorship</h2><ul>'+''.join(f'<li>{e(c.get("text_en",""))} ({link(c["src"],"source")})</li>' for c in r.get('chef_mentorship',[]))+'</ul>') if r.get('chef_mentorship') else ''}<h2>Sources</h2><ul>{''.join(f'<li>{link(u,lab)}</li>' for lab,u in srcs(r)) or '<li>Collecting public sources</li>'}</ul>
 <p class="cta"><a class="btn p" href="/#/r/{e(r['id'])}">Open in the interactive map (Korean)</a>{f' <a class="btn g" href="/en/k/{k["id"]}/">All {e(kn(k))} alumni</a>' if k else ''}</p></article>{sibs}'''
     rest={'@type':'Restaurant','@id':BASE+'/en'+kp+'#restaurant','name':r['name_en'],'alternateName':r['name'],'url':BASE+'/en'+kp,'inLanguage':'en'}
     if cuisine(r): rest['servesCuisine']=cuisine(r)
@@ -103,7 +103,7 @@ def dirpage():
 def home():
     sr=[r for r in R if r.get('city')=='서울']
     desc=f"Who trained where, and who opened what in Seoul: {len(R)} restaurants by alumni of {len(K)} acclaimed kitchens such as Mingles, Jungsik and Mosu, each with sources."
-    ks=''.join(f'<li><a href="/en/k/{k["id"]}/">{e(kn(k))}</a> · {sum(r.get("kitchen")==k["id"] for r in R)} alumni restaurants</li>' for k in d['kitchens'])
+    ks=''.join(f'<li><a href="/en/k/{k["id"]}/">{e(kn(k))}</a> <span class="nb"><b>{sum(r.get("kitchen")==k["id"] for r in R)}</b></span></li>' for k in d['kitchens'])
     body=f'''<section class="card"><h1>Kitchen Genome: Seoul’s chef family tree</h1>
 <p class="lead">Great restaurants train great cooks, and many of them go on to open places of their own. Kitchen Genome follows those paths: which chefs worked at Seoul’s most acclaimed kitchens, and where they cook now.</p>
 <p>If you loved a tasting menu at a MICHELIN-starred restaurant, the chef who ran its kitchen line may now serve a smaller, more affordable menu across town. We track {len(R)} restaurants ({len(sr)} in Seoul) tied to {len(K)} origin kitchens. Every link cites a public source, such as the MICHELIN Guide, press interviews or the restaurant’s own channels, and shows when we last checked it. Where a restaurant has not yet confirmed a detail, we say so.</p>

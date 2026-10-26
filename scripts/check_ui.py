@@ -152,10 +152,21 @@ with sync_playwright() as p:
     page.goto('http://kg.test/#/dir')
     page.locator('#fk').select_option('jungsik')
     assert page.locator('#list .rows > li').count() == 8
-    for path in ['/k/jungsik/', '/r/atomix/', '/en/', '/en/r/atomix/', '/login/', '/en/login/']:
+    for path in ['/#/dir','/#/rising','/#/r/atomix','/#/submit','/k/jungsik/', '/r/atomix/', '/directory/', '/en/', '/en/directory/', '/en/r/atomix/', '/login/', '/en/login/']:
         page.goto('http://kg.test' + path)
+        marker={'/#/dir':'#fk','/#/rising':'.draft','/#/r/atomix':'.lead.parts','/#/submit':'textarea'}.get(path)
+        if marker: page.locator(marker).wait_for()
         page.evaluate('document.fonts.ready')
         assert page.locator('h1').count() == 1
+        for scheme in ['light','dark']:
+            page.emulate_media(color_scheme=scheme)
+            for width in [1440,768,390,320]:
+                page.set_viewport_size({'width':width,'height':900})
+                assert page.evaluate('document.documentElement.scrollWidth <= innerWidth'), (path,scheme,width,'overflow')
+                small = page.locator('a,button,input,select,textarea').evaluate_all("""els => els.filter(el => {
+                  const r=el.getBoundingClientRect();return r.width && r.height && (r.width<44 || r.height<44)
+                }).map(el=>el.outerHTML)""")
+                assert not small, (path,scheme,width,small)
     page.emulate_media(color_scheme='dark', reduced_motion='reduce')
     assert page.evaluate('getComputedStyle(document.body).backgroundColor') == 'rgb(27, 25, 21)'
     assert not errors, errors
