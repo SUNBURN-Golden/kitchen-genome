@@ -10,7 +10,7 @@
  --accent:#4A5A1C;--on-accent:#F3EEE3;--accent-soft:var(--surface);--dash:#7A6F5C;--ctrl:#5A5245;
  --s1:8px;--s2:16px;--s3:24px;--s4:32px;--s6:48px;--s8:64px;
  --r1:2px;--r2:8px;--r3:999px;--r:var(--r2);--tap:44px;--maxw:1240px;
- --head:"KG Head","Apple SD Gothic Neo",sans-serif;--body:"KG Body","Apple SD Gothic Neo",sans-serif;
+ --head:"KG Head","Apple SD Gothic Neo","Malgun Gothic","Noto Sans KR",sans-serif;--body:"KG Body","Apple SD Gothic Neo","Malgun Gothic","Noto Sans KR",sans-serif;
  --font:var(--body);--f-s:14px;--f-m:16px;--f-l:20px;--f-xl:32px;--dur:240ms}
 @media (prefers-color-scheme:dark){:root{
  --bg:#1B1915;--surface:#26231D;--ink:#EDE6D8;--ink-2:#ADA493;--line:#3F3A31;
