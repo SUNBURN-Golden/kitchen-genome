@@ -22,8 +22,10 @@ a{color:var(--accent);position:relative}
 /* Inline hit areas do not enlarge running-text line boxes. */
 a::after{content:"";position:absolute;left:50%;top:50%;width:max(100%,var(--tap));height:max(100%,var(--tap));transform:translate(-50%,-50%)}
 .logo,.btn,.lb,.list-link,.verdict h2 a{min-width:var(--tap);min-height:var(--tap)}
-.list-link{display:inline-flex;align-items:center}
-nav a::after,.logo::after,.btn::after,.lb::after,.list-link::after,.verdict h2 a::after{content:none}
+.list-link,.sources a{display:inline-flex;align-items:center}
+.sources a{min-width:var(--tap);min-height:var(--tap)}
+.sources li+li{margin-top:4px}
+.sources a::after,nav a::after,.logo::after,.btn::after,.lb::after,.list-link::after,.verdict h2 a::after{content:none}
 .wrap{max-width:var(--maxw);margin:0 auto;padding:0 40px}
 .top{position:sticky;top:0;z-index:2;background:var(--bg);border-bottom:1px solid var(--line)}
 .bar{display:flex;align-items:center;gap:24px;min-height:72px}

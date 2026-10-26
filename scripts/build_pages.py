@@ -59,7 +59,7 @@ def rpage(r):
 <p class="lead">{e(rdesc(r))}</p>
 <dl>{''.join(f'<dt>{a}</dt><dd>{b}</dd>' for a,b in rows)}</dl>
 {f'<p class="note muted">{e(r["note"])}</p>' if r.get('note') else ''}
-{('<h2>셰프 근무 이력</h2><ul>'+''.join(f'<li class="career"><span>{e(c["date"])}</span> <span>{e(c["text"])} ({link(c["src"],"source" if True else "")})</span></li>' for c in r.get('chef_career',[]))+'</ul>') if r.get('chef_career') else ''}{('<h2>사제 관계</h2><ul>'+''.join(f'<li>{e(c.get("text",""))} ({link(c["src"],"source")})</li>' for c in r.get('chef_mentorship',[]))+'</ul>') if r.get('chef_mentorship') else ''}<h2>출처</h2><ul>{''.join(f'<li>{link(u,lab)}</li>' for lab,u in srcs(r)) or '<li>공개 출처 수집 중</li>'}</ul>
+{('<h2>셰프 근무 이력</h2><ul>'+''.join(f'<li class="career"><span>{e(c["date"])}</span> <span>{e(c["text"])} ({link(c["src"],"source" if True else "")})</span></li>' for c in r.get('chef_career',[]))+'</ul>') if r.get('chef_career') else ''}{('<h2>사제 관계</h2><ul>'+''.join(f'<li>{e(c.get("text",""))} ({link(c["src"],"source")})</li>' for c in r.get('chef_mentorship',[]))+'</ul>') if r.get('chef_mentorship') else ''}<h2>출처</h2><ul class="sources">{''.join(f'<li>{link(u,lab)}</li>' for lab,u in srcs(r)) or '<li>공개 출처 수집 중</li>'}</ul>
 <p class="cta"><a class="btn p" href="/#/r/{e(r['id'])}">인터랙티브 계보에서 보기</a>{f' <a class="btn g" href="/k/{k["id"]}/">{e(k["name"])} 출신 전체</a>' if k else ''}</p></article>
 {sibs}'''
     rest={'@type':'Restaurant','@id':BASE+path+'#restaurant','name':r['name'],'url':BASE+path}

@@ -171,7 +171,7 @@ with sync_playwright() as p:
                   return hit.content==='none' || !(parseFloat(hit.width)>=44 && parseFloat(hit.height)>=44);
                 }).map(el=>el.outerHTML)""")
                 assert not small, (path,scheme,width,small)
-                inline = page.locator('.career a,.foot a,.why a,li a[target]')
+                inline = page.locator('.career a,.foot a,.why a,li a[target]:not(.sources a)')
                 assert inline.evaluate_all("""els => els.every(el => {
                   const s=getComputedStyle(el),r=document.createRange();r.selectNodeContents(el);
                   return s.display==='inline' && [...r.getClientRects()].every(r=>r.height<44);
@@ -190,6 +190,41 @@ with sync_playwright() as p:
     # Career sources must retain the normal line height even inside parentheses.
     page.goto('http://kg.test/en/r/lamant/')
     assert page.locator('.career a').count() > 0
+
+    # Source lists have separate layout targets; sample their upper/lower edges
+    # with real mouse clicks so an adjacent link cannot intercept the click.
+    for path,tag in [('/r/lamant/','sources-ko'),('/en/r/lamant/','sources-en')]:
+        page.goto('http://kg.test'+path)
+        links=page.locator('.sources a')
+        assert links.count() >= 2
+        page.evaluate("""() => {
+          window.sourceClicks=[];
+          document.addEventListener('click', event => {
+            const a=event.target.closest('.sources a');
+            if(a) {event.preventDefault();window.sourceClicks.push(a.href)}
+          });
+        }""")
+        for scheme in ['light','dark']:
+            page.emulate_media(color_scheme=scheme)
+            for width in [1440,390,320]:
+                page.set_viewport_size({'width':width,'height':900 if width==1440 else 844})
+                page.evaluate('document.fonts.ready')
+                assert links.evaluate_all("""els => els.every((el,i) => {
+                  const r=el.getBoundingClientRect(), prev=els[i-1]?.getBoundingClientRect();
+                  return r.height>=44 && r.width>=44 && (!prev || prev.bottom<=r.top)
+                    && getComputedStyle(el,'::after').content==='none';
+                })"""), (path,scheme,width,'source target overlap')
+                for link in links.all():
+                    link.scroll_into_view_if_needed()
+                    box=link.bounding_box()
+                    for y in [box['y']+2,box['y']+box['height']-2]:
+                        before=page.evaluate('window.sourceClicks.length')
+                        page.mouse.click(box['x']+box['width']/2,y)
+                        assert page.evaluate('window.sourceClicks.length')==before+1, (path,scheme,width,'missed source click')
+                        assert page.evaluate('window.sourceClicks.at(-1)')==link.get_attribute('href'), (path,scheme,width,'wrong source clicked')
+                if '--screenshots' in sys.argv and width in [1440,390]:
+                    page.evaluate('scrollTo(0,0)')
+                    page.screenshot(path=str(shots / f'{tag}-{width}-{scheme}.png'),full_page=True)
 
     page.emulate_media(color_scheme='dark', reduced_motion='reduce')
     assert page.evaluate('getComputedStyle(document.body).backgroundColor') == 'rgb(27, 25, 21)'
