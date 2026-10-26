@@ -26,7 +26,7 @@ def page(kopath,title,desc,body,ld):
 <meta name="theme-color" content="#DFD5C3" media="(prefers-color-scheme: light)"><meta name="theme-color" content="#1B1915" media="(prefers-color-scheme: dark)">
 <link rel="alternate" type="application/rss+xml" title="Kitchen Genome" href="/en/rss.xml"><link rel="stylesheet" href="/style.css">
 <script type="application/ld+json">{json.dumps(ld,ensure_ascii=False).replace("</","<\\/")}</script></head><body>
-<header class="top"><div class="wrap bar"><a class="logo" href="/en/" aria-label="Kitchen Genome home">{LOGO}<span class="wm">Kitchen Genome<small>SEOUL CHEF LINEAGE</small></span></a>
+<header class="top"><div class="wrap bar"><a class="logo" href="/en/" aria-label="Kitchen Genome home">{LOGO}<span class="wm">Kitchen Genome</span></a>
 <nav id="nav" aria-label="Main"><a href="/en/">Home</a><a href="/en/directory/">Directory</a><a href="/#/">Lineage map</a><a href="{kopath}" hreflang="ko" lang="ko">한국어</a></nav></div></header>
 <main class="wrap">{body}</main>
 <footer class="wrap foot">Kitchen Genome · Every link between a kitchen and a chef cites a public source and a check date. Spotted an error? <a href="/#/submit">Tell us</a> (form in Korean).</footer><script src="/auth.js"></script></body></html>

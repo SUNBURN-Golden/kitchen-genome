@@ -31,6 +31,12 @@ with sync_playwright() as p:
     page.evaluate('document.fonts.ready')
     assert page.evaluate('document.fonts.check(\'400 32px "KG Head"\', "정식당")')
     assert page.evaluate('document.fonts.check(\'600 16px "KG Body"\', "출처 확인")')
+    assert page.locator('.wm small').count() == 0
+    for width in [1440, 1024, 768, 390, 379, 340, 320]:
+        page.set_viewport_size({'width': width, 'height': 900})
+        assert page.locator('nav a').evaluate_all('els => els.every(el => {const r=el.getBoundingClientRect(); return r.width >= 44 && r.height >= 44})')
+        assert page.locator('nav a').evaluate_all('els => els.every(el => {const r=document.createRange();r.selectNodeContents(el);return r.getBoundingClientRect().width <= el.getBoundingClientRect().width})')
+    page.set_viewport_size({'width': 1440, 'height': 900})
     assert page.locator('.tn').count() == 8
     first = page.locator('.tn').first
     first.click()

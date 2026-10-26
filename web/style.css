@@ -19,15 +19,14 @@
 *{box-sizing:border-box}
 body{margin:0;background:var(--bg);color:var(--ink);font:var(--f-m)/1.6 var(--font);word-break:keep-all;overflow-wrap:break-word}
 a{color:var(--accent)}
-.wrap{max-width:var(--maxw);margin:0 auto;padding:0 var(--s2)}
-.top{position:sticky;top:0;background:var(--bg);border-bottom:1px solid var(--line);z-index:2}
-.bar{display:flex;align-items:center;gap:var(--s2);flex-wrap:wrap;padding-top:var(--s1);padding-bottom:var(--s1)}
-.logo{font-weight:700;color:var(--ink);text-decoration:none;min-height:var(--tap);display:flex;align-items:center;gap:var(--s1)}
-.logo small{font-weight:400;color:var(--ink-2);font-size:var(--f-s)}
-nav{display:flex;gap:0;overflow-x:auto;margin-left:auto}
-nav a{min-height:var(--tap);display:flex;align-items:center;padding:0 var(--s2);color:var(--ink-2);text-decoration:none;white-space:nowrap;border-radius:var(--r)}
-nav a.on{color:var(--ink);font-weight:600;background:var(--accent-soft)}
-@media (max-width:720px){nav{margin-left:0;width:calc(100% + 32px);margin:0 -16px;padding:0 var(--s1)}}
+.wrap{max-width:var(--maxw);margin:0 auto;padding:0 40px}
+.top{position:sticky;top:0;z-index:2;background:var(--bg);border-bottom:1px solid var(--line)}
+.bar{display:flex;align-items:center;gap:24px;min-height:72px}
+.logo{display:flex;align-items:center;gap:10px;min-height:var(--tap);color:var(--ink);text-decoration:none;font:400 24px/1 var(--head);letter-spacing:-.01em}
+nav{display:flex;margin-left:auto}
+nav a{display:flex;align-items:center;justify-content:center;min-height:var(--tap);min-width:var(--tap);padding:0 14px;color:var(--ink-2);text-decoration:none;font-weight:600;font-size:15px;white-space:nowrap}
+nav a.on,nav a[aria-current]{color:var(--ink);text-decoration:underline;text-decoration-thickness:2px;text-underline-offset:8px}
+nav a:hover{color:var(--ink)}
 h1{font-family:var(--head);font-weight:400;font-size:var(--f-xl);line-height:1.25;margin:var(--s6) 0 var(--s2);letter-spacing:-.01em}
 h2{font-family:var(--head);font-weight:400;font-size:var(--f-l);margin:var(--s6) 0 var(--s1)}
 .lead{color:var(--ink-2);max-width:40em;margin:0 0 var(--s3)}
@@ -90,15 +89,15 @@ input,select,textarea{width:100%;min-height:var(--tap);padding:var(--s1) var(--s
 dl{display:grid;grid-template-columns:auto 1fr;gap:var(--s1) var(--s3);margin:0}dt{color:var(--ink-2)}dd{margin:0}
 .why a{position:relative}.why a::after{content:"";position:absolute;left:-8px;right:-8px;top:50%;height:var(--tap);transform:translateY(-50%)}
 .draft{border:1px solid var(--line);border-radius:var(--r);padding:var(--s1) var(--s2);margin:0 0 var(--s2);font-size:var(--f-s);color:var(--ink-2)}
-@media (max-width:720px){nav{overflow-x:visible}nav a{flex:1;justify-content:center;padding:0 var(--s1);font-size:var(--f-s)}}
+
 .why a{white-space:nowrap}
-@media (max-width:720px){nav{width:100%;margin:0;padding:0}nav a{flex:1 1 0;min-width:0}}
+
 .draft{margin-top:var(--s3)}
 .logo{gap:var(--s1)}.mark{fill:none;stroke:var(--accent);stroke-width:2;stroke-linecap:round}.mark .r{stroke-width:1.5}
-.wm{display:flex;flex-direction:column;line-height:1.1;font-weight:700;letter-spacing:-.01em}
-.wm small{font:500 10px/1.2 var(--body);letter-spacing:.12em;color:var(--ink-2)}
-.mono{font-family:var(--body);font-size:12px;letter-spacing:.06em;color:var(--ink-2)}
-svg .mono{font-family:var(--body)}
+
+
+
+
 .verdict{margin-top:var(--s4)}.vd{font-size:var(--f-m);color:var(--accent);font-weight:700;margin-left:var(--s1);font-variant-numeric:tabular-nums}
 .lb{display:inline-flex;align-items:center;margin-top:var(--s2);text-decoration:none}.ph{border:1px dashed var(--dash);background:transparent}
 .verdict h2 a{display:inline-flex;min-height:var(--tap);align-items:center}
@@ -122,3 +121,15 @@ button.tn:focus-visible,.chip:focus-visible,.btn:focus-visible{outline:2px solid
 nav a.auth{font-weight:600;color:var(--accent)}
 
 :focus-visible{outline:3px solid var(--ink);outline-offset:2px}
+
+.wm{font:400 24px/1.1 var(--head);letter-spacing:-.01em}
+@media (max-width:960px){
+ .wrap{padding-left:16px;padding-right:16px}
+ .bar{flex-wrap:wrap;gap:0;min-height:0;padding-top:8px}
+ nav{width:100%;margin:0;overflow-x:auto}
+ nav a{flex:1 1 auto;padding:0 6px;font-size:14px}
+}
+@media (max-width:379px){
+ nav{display:grid;grid-template-columns:repeat(3,minmax(var(--tap),1fr));overflow-x:visible}
+ nav a{min-width:0}
+}

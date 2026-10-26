@@ -21,7 +21,7 @@ def page(path,title,desc,body,ld):
 <meta name="theme-color" content="#DFD5C3" media="(prefers-color-scheme: light)"><meta name="theme-color" content="#1B1915" media="(prefers-color-scheme: dark)">
 <link rel="alternate" type="application/rss+xml" title="키친 게놈" href="/rss.xml"><link rel="stylesheet" href="/style.css">
 <script type="application/ld+json">{json.dumps(ld,ensure_ascii=False).replace("</","<\\/")}</script></head><body>
-<header class="top"><div class="wrap bar"><a class="logo" href="/" aria-label="키친 게놈 홈">{LOGO}<span class="wm">키친 게놈<small>KITCHEN GENOME</small></span></a>
+<header class="top"><div class="wrap bar"><a class="logo" href="/" aria-label="키친 게놈 홈">{LOGO}<span class="wm">키친 게놈</span></a>
 <nav id="nav" aria-label="주요 메뉴"><a href="/">계보</a><a href="/directory/">디렉토리</a><a href="/#/rising">다음에 뜰 집</a><a href="/#/submit">제보</a><a href="/en{path}" hreflang="en" lang="en">EN</a></nav></div></header>
 <main class="wrap">{body}</main>
 <footer class="wrap foot">키친 게놈 · 계보마다 출처와 확인일을 붙였어요. 틀린 곳이 있으면 <a href="/#/submit">제보</a>해 주세요.</footer><script src="/auth.js"></script></body></html>
