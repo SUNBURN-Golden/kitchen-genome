@@ -88,7 +88,9 @@ filter, and checks wrapping, overflow, targets and dark mode with reduced motion
 Use `--screenshots` to save desktop/mobile light/dark images in ignored `shots/`.
 The existing crawler tests can rewrite `crawler/vault.json` and
 `crawler/inbox_summary.json`; inspect those changes and discard test-only
-metadata before committing.
+metadata before committing. If both files were clean before the test run, use
+`git restore -- crawler/vault.json crawler/inbox_summary.json` to discard those
+known test outputs after inspection.
 
 Font slices total about 474 KB. They include KS X 1001 syllables plus supported
 Korean characters from the current page corpus. To regenerate offline, install
