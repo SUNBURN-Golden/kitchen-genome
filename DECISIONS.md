@@ -21,3 +21,13 @@ Production subsets retain KS X 1001's 2,350 syllables plus supported Korean
 characters in the current page corpus. Latin and Korean slices are separate;
 Hanja and unsupported display syllables use the system fallback. Regenerate
 with `scripts/subset_fonts.py` from the upstream TTF sources when needed.
+
+## 2026-10-26: ticket genealogy (approved)
+
+The home tree is a single paper ticket with a torn bottom edge. At 961px and
+wider, each chef gets an equal grid track; smaller screens use a vertical
+trunk. Verified connections are solid olive, unverified connections dashed.
+Restaurant rows have no card chrome and still open the source dialog.
+Superseded: the dark origin box beside bordered restaurant cards and the
+old horizontal list layout. Existing Korean text remains pending a copy pass;
+this includes count units and restaurant cuisine metadata.
