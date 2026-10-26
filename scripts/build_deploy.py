@@ -6,7 +6,7 @@ repo=os.path.join(here,'..')
 for _s in ('build_pages.py','build_pages_en.py','build_feeds.py'):
     subprocess.run([sys.executable, os.path.join(here,_s)], check=True)
 root=os.path.join(repo,'web')
-mt={'html':'text/html','css':'text/css','js':'application/javascript','svg':'image/svg+xml','png':'image/png','txt':'text/plain','xml':'application/xml'}
+mt={'html':'text/html','css':'text/css','js':'application/javascript','svg':'image/svg+xml','png':'image/png','txt':'text/plain','xml':'application/xml','woff2':'font/woff2'}
 files=[];manifest={}
 for d,_,fs in os.walk(root):
     for f in sorted(fs):

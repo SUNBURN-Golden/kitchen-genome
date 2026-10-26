@@ -18,7 +18,7 @@ def page(path,title,desc,body,ld):
     return f'''<!doctype html><html lang="ko"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><meta name="color-scheme" content="light dark">
 <title>{e(title)}</title><meta name="description" content="{e(desc)}"><link rel="canonical" href="{url}"><link rel="alternate" hreflang="ko" href="{url}"><link rel="alternate" hreflang="en" href="{en}"><link rel="alternate" hreflang="x-default" href="{url}">
 <meta property="og:title" content="{e(title)}"><meta property="og:description" content="{e(desc)}"><meta property="og:url" content="{url}"><meta property="og:type" content="website"><meta property="og:site_name" content="키친 게놈"><meta property="og:locale" content="ko_KR">
-<meta name="theme-color" content="#FAF8F3" media="(prefers-color-scheme: light)"><meta name="theme-color" content="#161513" media="(prefers-color-scheme: dark)">
+<meta name="theme-color" content="#DFD5C3" media="(prefers-color-scheme: light)"><meta name="theme-color" content="#1B1915" media="(prefers-color-scheme: dark)">
 <link rel="alternate" type="application/rss+xml" title="키친 게놈" href="/rss.xml"><link rel="stylesheet" href="/style.css">
 <script type="application/ld+json">{json.dumps(ld,ensure_ascii=False).replace("</","<\\/")}</script></head><body>
 <header class="top"><div class="wrap bar"><a class="logo" href="/" aria-label="키친 게놈 홈">{LOGO}<span class="wm">키친 게놈<small>KITCHEN GENOME</small></span></a>

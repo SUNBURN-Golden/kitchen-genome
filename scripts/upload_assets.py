@@ -3,7 +3,7 @@ import os,re,sys,json,base64,urllib.request
 from blake3 import blake3
 jwt=re.search(r'eyJ[A-Za-z0-9._-]+',open(sys.argv[1]).read()).group(0)
 root=os.path.join(os.path.dirname(os.path.abspath(__file__)),'..','web')
-mt={'html':'text/html','css':'text/css','js':'application/javascript','svg':'image/svg+xml','png':'image/png','txt':'text/plain','xml':'application/xml'}
+mt={'html':'text/html','css':'text/css','js':'application/javascript','svg':'image/svg+xml','png':'image/png','txt':'text/plain','xml':'application/xml','woff2':'font/woff2'}
 files=[]
 for dd,_,fs in os.walk(root):
   for f in sorted(fs):
