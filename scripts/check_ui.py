@@ -37,6 +37,16 @@ with sync_playwright() as p:
         assert page.locator('nav a').evaluate_all('els => els.every(el => {const r=el.getBoundingClientRect(); return r.width >= 44 && r.height >= 44})')
         assert page.locator('nav a').evaluate_all('els => els.every(el => {const r=document.createRange();r.selectNodeContents(el);return r.getBoundingClientRect().width <= el.getBoundingClientRect().width})')
     page.set_viewport_size({'width': 1440, 'height': 900})
+    assert page.locator('#k option').count() == 13
+    assert page.locator('.hero button').count() == 9  # Eight restaurant dialogs and one submit.
+    page.locator('#k').select_option('mingles')
+    page.locator('#pick button').click()
+    page.wait_for_url('**/#/k/mingles')
+    assert page.locator('.tn').count() == 7
+    page.locator('#k').select_option('jungsik')
+    page.locator('#pick button').click()
+    page.wait_for_url('**/#/k/jungsik')
+    assert page.locator('.totals dd').all_text_contents() == ['13곳', '35곳', '26', '9', '17곳', '2026-10-20']
     assert page.locator('.tn').count() == 8
     first = page.locator('.tn').first
     first.click()

@@ -51,7 +51,8 @@ function panel(id,btn){const a=restaurants.find(x=>x.id===id);const v=vd(a);cons
  <p class="why">출신 주방: <a href="#/k/${a.kitchen}">${esc(K[a.kitchen].name)}</a>${prole(a.role)} · ${link(a.lineage_src,'계보 출처')}</p>
  ${SHOW_VERDICTS?'<div class="note muted ph">[빈 자리] 준태님 한 줄 평 (작성 전)</div>':''}<p><a class="btn g" href="#/r/${a.id}">식당 페이지로</a></p>`;
  dl.setAttribute('aria-labelledby','ptitle');dl.showModal();dl.querySelector('.pclose button').focus();dl.addEventListener('close',()=>{btn&&btn.focus()},{once:true})}
-function bindTree(){document.querySelectorAll('.tn').forEach(n=>{n.onclick=()=>panel(n.dataset.id,n)});
+function bindTree(){const pick=$('#pick');if(pick)pick.onsubmit=e=>{e.preventDefault();location.hash='#/k/'+$('#k').value};
+ document.querySelectorAll('.tn').forEach(n=>{n.onclick=()=>panel(n.dataset.id,n)});
  document.querySelectorAll('[data-vf]').forEach(b=>b.onclick=()=>{VF=b.dataset.vf;route.keep=1;route();route.keep=0;const f=document.querySelector(`[data-vf="${VF}"]`);f&&f.focus()})}
 function verdict(){if(!SHOW_VERDICTS)return news();const L=alumni.filter(a=>a.city==='서울'&&ver(a)&&a.official_source_url).map(r=>({r,g:gap(r)})).filter(x=>x.g.g!=null).sort((a,b)=>Math.abs(b.g.g)-Math.abs(a.g.g));if(!L.length)return news();const {r,g}=L[0];const v=VT[vk(g.g)];
  return `<section class="card verdict" aria-label="이번 주 판정"><p class="mono" style="margin:0">이번 주 판정 · 초안</p>
@@ -60,12 +61,11 @@ function verdict(){if(!SHOW_VERDICTS)return news();const L=alumni.filter(a=>a.ci
  <a class="chip lb" href="#/k/${r.kitchen}">${esc(K[r.kitchen].name)} 출신 · ${esc(cut(r.role,14))} → 계보 보기</a>
  <div class="note muted ph">[빈 자리] 준태님 한 줄 평 (작성 전)</div>
  <a class="muted" href="#/gap" style="display:inline-flex;min-height:var(--tap);align-items:center">과대평가 vs 저평가 전체 보기</a></section>${news()}`}
-function home(sel){const counts=kitchens.map(k=>[k,alumni.filter(a=>a.kitchen===k.id).length]).sort((a,b)=>b[1]-a[1]);sel=sel||counts[0][0].id;
- return `${verdict()}<h1>그 셰프, 어느 주방에서 왔을까요?</h1><p class="lead">서울 최고 주방을 거친 셰프들이 어디서 자기 가게를 열었는지 출처와 함께 정리했어요.</p>
- <div class="cta"><a class="btn p" href="#lineage">계보 보기</a></div>
- <section id="lineage"><h2>계보도 <span class="mono">LINEAGE MAP</span></h2>${legend}${vfilter()}
- <div class="chips tk" role="tablist">${counts.map(([k,n])=>`<button class="chip ${k.id===sel?'on':''}" role="tab" aria-selected="${k.id===sel}" onclick="location.hash='#/k/${k.id}'">${esc(k.name)} ${n}</button>`).join('')}</div>${tree(sel)}</section>
- <p class="muted">원조 주방 ${kitchens.length}곳 · 계보 식당 ${alumni.length}곳(출처 확인 ${alumni.filter(ver).length}, 미검증 ${alumni.filter(a=>!ver(a)).length}) · 비교용 레스토랑 ${restaurants.length-alumni.length}곳 · 확인일 2026-10-20</p>
+function home(sel){const counts=kitchens.map(k=>[k,alumni.filter(a=>a.kitchen===k.id).length]).sort((a,b)=>b[1]-a[1]);sel=K[sel]?sel:counts[0][0].id;
+ return `${verdict()}<section class="hero" aria-labelledby="h1"><div class="intro"><div><h1 id="h1">그 셰프, 어느 주방에서 왔을까요?</h1><p class="lead">서울 최고 주방을 거친 셰프들이 어디서 자기 가게를 열었는지 출처와 함께 정리했어요.</p></div>
+ <div><form class="pick" id="pick"><h2 class="pick-title"><label for="k">계보도</label></h2><div class="pick-row"><select id="k" name="k">${counts.map(([k,n])=>`<option value="${k.id}"${k.id===sel?' selected':''}>${esc(k.name)} ${n}</option>`).join('')}</select><button class="btn p" type="submit">계보 보기</button></div></form>${legend}${vfilter()}</div></div>
+ <section id="lineage">${tree(sel)}</section></section>
+ <dl class="totals"><div><dt>원조 주방</dt><dd>${kitchens.length}곳</dd></div><div><dt>계보 식당</dt><dd>${alumni.length}곳</dd></div><div><dt>출처 확인</dt><dd>${alumni.filter(ver).length}</dd></div><div><dt>미검증</dt><dd>${alumni.filter(a=>!ver(a)).length}</dd></div><div><dt>비교용 레스토랑</dt><dd>${restaurants.length-alumni.length}곳</dd></div><div class="date"><dt>확인일</dt><dd>2026-10-20</dd></div></dl>
  ${sponsor()}`}
 function dir(){const ks=[...new Set(alumni.map(a=>a.kitchen))];return `<h1>디렉토리</h1><div class="filters"><select id="fk" aria-label="원조 주방"><option value="">원조 주방 전체</option>${ks.map(k=>`<option value="${k}">${K[k].name}</option>`).join('')}</select>
  <select id="fc" aria-label="도시"><option value="">도시 전체</option><option>서울</option><option>뉴욕</option></select><select id="ft" aria-label="유형"><option value="">유형 전체</option><option value="alumni">계보 식당</option><option value="established">비교용 레스토랑</option></select><select id="fv" aria-label="검증"><option value="">검증 전체</option><option value="verified">출처 확인</option><option value="unverified">미검증</option></select></div><div id="list"></div>`}
