@@ -2,7 +2,7 @@
 import mimetypes
 from pathlib import Path
 from urllib.parse import unquote, urlparse
-from playwright.sync_api import sync_playwright
+from playwright.sync_api import sync_playwright, expect
 
 WEB = Path(__file__).resolve().parents[1] / 'web'
 
@@ -42,12 +42,12 @@ with sync_playwright() as p:
     page.locator('#k').select_option('mingles')
     page.locator('#pick button').click()
     page.wait_for_url('**/#/k/mingles')
-    assert page.locator('.tn').count() == 7
+    expect(page.locator('.tn')).to_have_count(7)
     page.locator('#k').select_option('jungsik')
     page.locator('#pick button').click()
     page.wait_for_url('**/#/k/jungsik')
+    expect(page.locator('.tn')).to_have_count(8)
     assert page.locator('.totals dd').all_text_contents() == ['13곳', '35곳', '26', '9', '17곳', '2026-10-20']
-    assert page.locator('.tn').count() == 8
     first = page.locator('.tn').first
     first.click()
     assert page.locator('#panel').evaluate('(el) => el.open')
