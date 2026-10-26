@@ -5,6 +5,7 @@
 A Seoul chef-lineage tracker: maps alumni of top kitchens to the restaurants they opened, with public-data verdicts (undervalued / overrated / balanced) and a "next to rise" list.
 
 ## 구조 / Layout
+- Typography: self-hosted Black Han Sans 400 (headings/numbers) and Gothic A1 400/600 (body), SIL OFL 1.1 licences in `web/fonts/`; the colour, type and radius tokens are in the opening `:root` block of `web/style.css` (see [design decisions](DECISIONS.md)).
 - `web/` — 정적 사이트 (index.html, app.js, style.css, data.js) + 빌드 생성물 `r/<id>/`, `k/<id>/`, `directory/`, 영어판 `en/…`, sitemap.xml, rss.xml, en/rss.xml (`scripts/build_pages.py`, `build_pages_en.py`, `build_feeds.py`; 영문명은 `data/enrich_en.py`, `name_en_official`=false면 로마자 표기; `build_deploy.py`가 자동 실행) / static site root + generated SEO pages
 - `data/` — 시드 데이터와 빌드 스크립트, `outreach/` 식당 확인 절차 / seed data, build scripts, restaurant verification outreach
 - `deploy.sh` — 수동 배포 / manual deploy
@@ -66,3 +67,38 @@ bash scripts/daily_pipeline.sh /tmp/kg
 The asset-only deploy (`upload_assets.py` + `deploy_kitchengenome.js`) does **not** ship Functions; an asset-only deployment simply has no `/api/me`, so login shows "준비 중" (safe). To ship Functions:
 - With a Pages:Edit token: `CLOUDFLARE_API_TOKEN=... npx wrangler pages deploy web --project-name kitchengenome --branch main` from the repo root (wrangler picks up `functions/` and `wrangler.toml`). Use `--branch preview` first to test.
 - Via the connector (no token): `npx wrangler pages functions build --outfile dist/_worker.bundle --output-routes-path dist/_routes.json` on the box, upload assets as usual, then add multipart fields `_worker.bundle` (file, the bundle) and `_routes.json` (file) to the deployments POST in `deploy_kitchengenome.js`. Test on a non-main branch first.
+
+## Local validation
+
+Build generated pages and feeds without invoking deployment tooling:
+
+```sh
+python3 scripts/build_pages.py
+python3 scripts/build_pages_en.py
+python3 scripts/build_feeds.py
+python3 -m pytest -q
+python3 scripts/check_ui.py
+node --check web/app.js
+git diff --check
+```
+
+The browser check requires Python Playwright and Chromium. It intercepts every
+request locally, exercises the kitchen select, dialog focus and directory
+filter, and checks wrapping, overflow, targets and dark mode with reduced motion enabled.
+It checks root-to-chef connector continuity for seven/eight groups and clicks
+the upper/lower edges of Korean/English source-list links to catch overlapping targets.
+Use `--screenshots` to save 1440px/390px light/dark images of the home tree,
+Mingles and Korean/English source lists in ignored `shots/`. Add
+`--screenshot-dir PATH` to save that evidence elsewhere.
+The existing crawler tests can rewrite `crawler/vault.json` and
+`crawler/inbox_summary.json`; inspect those changes and discard test-only
+metadata before committing. If both files were clean before the test run, use
+`git restore -- crawler/vault.json crawler/inbox_summary.json` to discard those
+known test outputs after inspection.
+
+Font slices total about 474 KB. They include KS X 1001 syllables plus supported
+Korean characters from the current page corpus. To regenerate offline, install
+fontTools with Brotli, put the three upstream Google Fonts TTF files named in
+`scripts/subset_fonts.py` in a source directory, then run
+`python3 scripts/subset_fonts.py SOURCE_DIRECTORY`. Commit the WOFF2 outputs;
+normal page builds do not need the TTF sources or a network connection.
