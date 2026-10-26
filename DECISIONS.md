@@ -34,3 +34,27 @@ Restaurant rows have no card chrome and still open the source dialog.
 Superseded: the dark origin box beside bordered restaurant cards and the
 old horizontal list layout. Existing Korean text remains pending a copy pass;
 this includes count units and restaurant cuisine metadata.
+
+
+## 2026-10-26: metadata and link targets
+
+Standalone links (navigation, buttons, restaurant rows and kitchen/restaurant list links) use
+44px layout targets. Links within running text, including career sources,
+paragraphs, source metadata and footers, use a 44px pseudo-element hit area
+without increasing the text line height. This supersedes PR5's global
+inline-flex / 44px anchor layout rule.
+
+Decorative footer dots are removed consistently from the Korean and English
+page builders, retaining the brand words. Remaining separators are intentional:
+- `scripts/build_pages.py`: restaurant lead, sibling/alumni/directory metadata,
+  kitchen MICHELIN source, and document titles/descriptions.
+- `scripts/build_pages_en.py`: sibling/alumni/directory metadata, restaurant
+  breadcrumb, and kitchen MICHELIN source.
+- `web/app.js` `gapPage()`: hidden verdict placeholder and score metadata;
+  `SHOW_VERDICTS` remains false. Dots within prose such as the submission
+  disclosure are punctuation, not list decoration.
+
+These remaining strings belong to static metadata or hidden verdict content;
+leave them for a coordinated copy/markup pass. No Korean wording or data is
+removed. The English home count badge includes hidden “alumni restaurants”
+text for screen readers.
