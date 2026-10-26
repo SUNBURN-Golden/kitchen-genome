@@ -85,7 +85,11 @@ git diff --check
 The browser check requires Python Playwright and Chromium. It intercepts every
 request locally, exercises the kitchen select, dialog focus and directory
 filter, and checks wrapping, overflow, targets and dark mode with reduced motion enabled.
-Use `--screenshots` to save desktop/mobile light/dark images in ignored `shots/`.
+It checks root-to-chef connector continuity for seven/eight groups and clicks
+the upper/lower edges of Korean/English source-list links to catch overlapping targets.
+Use `--screenshots` to save 1440px/390px light/dark images of the home tree,
+Mingles and Korean/English source lists in ignored `shots/`. Add
+`--screenshot-dir PATH` to save that evidence elsewhere.
 The existing crawler tests can rewrite `crawler/vault.json` and
 `crawler/inbox_summary.json`; inspect those changes and discard test-only
 metadata before committing. If both files were clean before the test run, use

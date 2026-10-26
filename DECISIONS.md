@@ -28,7 +28,9 @@ The home tree is a single paper ticket with a torn bottom edge. At 961px and
 wider, chefs wrap after six equal grid tracks, preserving the approved
 six-column minimum width at 961px; smaller screens use a vertical trunk.
 Additional rows have their own horizontal connector, with no connector
-extending beyond the sixth track. The kitchen heading stays plain text.
+extending beyond the sixth track. A continuous root trunk runs in the left
+gutter and joins every row, including partial rows, without crossing chef text.
+This supersedes the first-row-only root stem. The kitchen heading stays plain text.
 Verified connections are solid olive, unverified connections dashed.
 Restaurant rows have no card chrome and still open the source dialog.
 Superseded: the dark origin box beside bordered restaurant cards and the
@@ -38,11 +40,14 @@ this includes count units and restaurant cuisine metadata.
 
 ## 2026-10-26: metadata and link targets
 
-Standalone links (navigation, buttons, restaurant rows and kitchen/restaurant list links) use
-44px layout targets. Links within running text, including career sources,
+Standalone links (navigation, buttons, restaurant rows, source lists and kitchen/restaurant list links) use
+44px layout targets. Source-list rows have an additional 4px gap and no
+pseudo-element overlay, so adjacent sources cannot intercept each other's clicks.
+Links within running text, including career sources,
 paragraphs, source metadata and footers, use a 44px pseudo-element hit area
 without increasing the text line height. This supersedes PR5's global
-inline-flex / 44px anchor layout rule.
+inline-flex / 44px anchor layout rule and its later treatment of standalone
+source lists as prose links with overlapping expanded hit areas.
 
 Decorative footer dots are removed consistently from the Korean and English
 page builders, retaining the brand words. Remaining separators are intentional:
