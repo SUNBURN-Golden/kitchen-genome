@@ -54,11 +54,15 @@ svg text{font-family:var(--font)}
 .nb{display:inline-flex;align-items:baseline;min-height:36px;padding:4px 14px;border:1.5px solid var(--ctrl);border-radius:var(--r3);font-size:14px;font-weight:600}
 .nb b{margin-left:6px;font:400 22px/1 var(--head);font-variant-numeric:tabular-nums}
 .tempty{margin:32px 0 0}
-.tnodes{--x:14px;--g:24px;position:relative;display:grid;grid-template-columns:repeat(min(var(--columns),6),minmax(0,1fr));gap:32px var(--g);margin:0;padding:32px 0 0;list-style:none}
-.tnodes::before{content:"";position:absolute;left:var(--x);top:0;height:32px;border-left:2px solid var(--accent)}
+.tnodes{--x:14px;--g:24px;position:relative}
+.trow{position:relative;display:grid;grid-template-columns:repeat(min(var(--columns),6),minmax(0,1fr));column-gap:var(--g);margin:0;padding:32px 0 0;list-style:none}
+/* Continue the root through the left gutter, clear of chef labels. */
+.trow::before{content:"";position:absolute;left:-12px;top:0;bottom:0;border-left:2px solid var(--accent)}
+.trow:last-child::before{height:32px;bottom:auto}
+.trow::after{content:"";position:absolute;left:-12px;top:32px;width:calc(12px + var(--x));border-top:2px solid var(--accent)}
 .tnode{position:relative;padding-top:20px;min-width:0}
 .tnode::before{content:"";position:absolute;top:0;left:var(--x);right:calc(-1 * (var(--g) + var(--x)));border-top:2px solid var(--accent)}
-.tnode:last-child::before,.tnode:nth-child(6n)::before{right:auto;width:0}
+.tnode:last-child::before{right:auto;width:0}
 .tnode::after{content:"";position:absolute;top:0;left:var(--x);height:20px;border-left:2px solid var(--accent)}
 .tnode:not(.v)::after{border-left:2px dashed var(--dash)}
 .cn{font:400 34px/1.1 var(--head);margin:0}
@@ -84,9 +88,11 @@ svg text{font-family:var(--font)}
  .ticket{padding:20px 16px 28px;margin:0 -4px}
  .thead h2{font-size:44px}
  .tnodes{display:block;padding:20px 0 0;margin-left:var(--x)}
- .tnodes::before{left:0;top:0;bottom:22px;height:auto}
+ .trow{display:block;padding:0}
+ .trow::before,.trow::after{display:none}
+ .tnodes::before{content:"";position:absolute;left:0;top:0;bottom:22px;border-left:2px solid var(--accent)}
  .tnode{padding:14px 0 6px 26px}
- .tnode::before,.tnode:last-child::before,.tnode:nth-child(6n)::before{top:30px;left:0;right:auto;width:18px}
+ .tnode::before,.tnode:last-child::before{top:30px;left:0;right:auto;width:18px}
  .tnode::after{display:none}
  .tnode:not(.v)::before{border-top-style:dashed;border-top-color:var(--dash)}
  .cn{font-size:26px}

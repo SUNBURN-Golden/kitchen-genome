@@ -54,6 +54,27 @@ with sync_playwright() as p:
     geometry = """() => {
       const bad=[];
       if(document.documentElement.scrollWidth > innerWidth) bad.push('page overflow');
+      if(innerWidth>=961) {
+        // Every row must join the same root, including the final partial row.
+        let previous=null;
+        for(const row of document.querySelectorAll('.trow')) {
+          const r=row.getBoundingClientRect(), trunk=getComputedStyle(row,'::before');
+          const bar=getComputedStyle(row,'::after'), nodes=[...row.children];
+          const x=r.left+parseFloat(trunk.left), top=r.top+parseFloat(trunk.top);
+          const bottom=top+parseFloat(trunk.height), y=r.top+parseFloat(bar.top);
+          if(trunk.content==='none' || trunk.borderLeftStyle!=='solid' || parseFloat(trunk.borderLeftWidth)<2 || top>y || bottom<y) bad.push('missing root trunk');
+          if(previous && (Math.abs(previous.x-x)>.5 || Math.abs(previous.bottom-top)>.5)) bad.push('disconnected rows');
+          if(Math.abs(r.left+parseFloat(bar.left)-x)>.5 || bar.borderTopStyle!=='solid' || parseFloat(bar.borderTopWidth)<2) bad.push('missing row bar');
+          let end=x+parseFloat(bar.width);
+          for(const node of nodes) {
+            const n=node.getBoundingClientRect(), stem=getComputedStyle(node,'::after'), line=getComputedStyle(node,'::before');
+            const sx=n.left+parseFloat(stem.left), sy=n.top+parseFloat(stem.top);
+            if(Math.abs(end-sx)>.5 || Math.abs(sy-y)>.5 || line.borderTopStyle!=='solid' || parseFloat(line.borderTopWidth)<2) bad.push('disconnected chef stem');
+            end=n.left+parseFloat(line.left)+parseFloat(line.width);
+          }
+          previous={x,bottom};
+        }
+      }
       for(const col of document.querySelectorAll('.tnode')) {
         const cr=col.getBoundingClientRect(), rects=[];
         if(innerWidth>=961 && cr.width<120) bad.push('narrow chef column');
@@ -95,25 +116,33 @@ with sync_playwright() as p:
         page.goto('http://kg.test/#/k/mingles')
         page.reload()  # Reset the browser-only extra group between colour schemes.
         expect(page.locator('.tnode')).to_have_count(7)
-        page.locator('.tnodes').evaluate('el => {el.append(el.firstElementChild.cloneNode(true));el.style.setProperty("--columns",8)}')
-        for width in [1440,1280,1100,1024,961,960,390,320]:
-            page.set_viewport_size({'width':width,'height':900})
-            page.evaluate('document.fonts.ready')
-            assert page.evaluate(geometry) == [], ('eight groups',scheme,width,page.evaluate(geometry))
-            if width>=961:
-                assert page.locator('.tnodes').evaluate('el => getComputedStyle(el).gridTemplateColumns.split(" ").length') == 6
-                assert page.locator('.tnode').evaluate_all('els => els[6].getBoundingClientRect().top > els[0].getBoundingClientRect().top')
+        for count in [7,8]:
+            if count==8:
+                page.locator('.trow').last.evaluate('el => el.append(document.querySelector(".tnode").cloneNode(true))')
+            for width in [1440,1280,1100,1024,961,960,390,320]:
+                page.set_viewport_size({'width':width,'height':900})
+                page.evaluate('document.fonts.ready')
+                assert page.evaluate(geometry) == [], (count,'groups',scheme,width,page.evaluate(geometry))
+                if width>=961:
+                    assert page.locator('.trow').first.evaluate('el => getComputedStyle(el).gridTemplateColumns.split(" ").length') == 6
+                    assert page.locator('.tnode').evaluate_all('els => els[6].getBoundingClientRect().top > els[0].getBoundingClientRect().top')
     page.goto('http://kg.test/#/k/jungsik')
     expect(page.locator('.tn')).to_have_count(8)
     page.set_viewport_size({'width': 1440, 'height': 900})
     if '--screenshots' in sys.argv:
-        shots = WEB.parent / 'shots'
-        shots.mkdir(exist_ok=True)
-        for scheme in ['light','dark']:
-            page.emulate_media(color_scheme=scheme)
-            for width in [1440,390]:
-                page.set_viewport_size({'width':width,'height':900 if width==1440 else 844})
-                page.screenshot(path=str(shots / f'home-{width}-{scheme}.png'),full_page=True)
+        shots = Path(sys.argv[sys.argv.index('--screenshot-dir')+1]) if '--screenshot-dir' in sys.argv else WEB.parent / 'shots'
+        shots.mkdir(parents=True,exist_ok=True)
+        for kid,tag in [('jungsik','home'),('mingles','mingles')]:
+            page.goto('http://kg.test/#/k/'+kid)
+            page.wait_for_function('(kid) => document.querySelector("#k")?.value === kid', arg=kid)
+            for scheme in ['light','dark']:
+                page.emulate_media(color_scheme=scheme)
+                for width in [1440,390]:
+                    page.set_viewport_size({'width':width,'height':900 if width==1440 else 844})
+                    page.evaluate('document.fonts.ready')
+                    page.screenshot(path=str(shots / f'{tag}-{width}-{scheme}.png'),full_page=True)
+        page.goto('http://kg.test/#/k/jungsik')
+        expect(page.locator('.tn')).to_have_count(8)
         page.set_viewport_size({'width':1440,'height':900})
     first = page.locator('.tn').first
     first.click()
