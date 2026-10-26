@@ -56,6 +56,7 @@ with sync_playwright() as p:
       if(document.documentElement.scrollWidth > innerWidth) bad.push('page overflow');
       for(const col of document.querySelectorAll('.tnode')) {
         const cr=col.getBoundingClientRect(), rects=[];
+        if(innerWidth>=961 && cr.width<120) bad.push('narrow chef column');
         const walker=document.createTreeWalker(col,NodeFilter.SHOW_TEXT);
         while(walker.nextNode()) {
           const node=walker.currentNode;if(!node.textContent.trim()) continue;
@@ -72,21 +73,38 @@ with sync_playwright() as p:
           if(Math.min(a.right,b.right)-Math.max(a.left,b.left)>.5 && Math.min(a.bottom,b.bottom)-Math.max(a.top,b.top)>.5) bad.push('text overlap');
         }
       }
-      for(const el of document.querySelectorAll('.hero button,.hero select,nav a,.thead a')) {
+      for(const el of document.querySelectorAll('.hero button,.hero select,nav a')) {
         const r=el.getBoundingClientRect();if(r.width<44 || r.height<44) bad.push('small target');
       }
       return bad;
     }"""
+    assert page.locator('#kname a').count() == 0
     kitchen_ids = page.locator('#k option').evaluate_all('els => els.map(el => el.value)')
     for scheme in ['light', 'dark']:
         page.emulate_media(color_scheme=scheme)
         for kid in kitchen_ids:
             page.goto('http://kg.test/#/k/' + kid)
-            for width in ([1440,1280,1100,1024,961,960,900,860,768,390,320] if kid=='jungsik' else [961,390]):
+            page.wait_for_function('(kid) => document.querySelector("#k")?.value === kid', arg=kid)
+            for width in ([1440,1280,1100,1024,961,960,900,860,768,390,320] if kid in ['jungsik','mingles'] else [961,390]):
                 page.set_viewport_size({'width': width, 'height': 900})
                 page.evaluate('document.fonts.ready')
                 assert page.evaluate(geometry) == [], (kid, scheme, width, page.evaluate(geometry))
+    # Exercise eight chef groups without modifying the source dataset.
+    for scheme in ['light', 'dark']:
+        page.emulate_media(color_scheme=scheme)
+        page.goto('http://kg.test/#/k/mingles')
+        page.reload()  # Reset the browser-only extra group between colour schemes.
+        expect(page.locator('.tnode')).to_have_count(7)
+        page.locator('.tnodes').evaluate('el => {el.append(el.firstElementChild.cloneNode(true));el.style.setProperty("--columns",8)}')
+        for width in [1440,1280,1100,1024,961,960,390,320]:
+            page.set_viewport_size({'width':width,'height':900})
+            page.evaluate('document.fonts.ready')
+            assert page.evaluate(geometry) == [], ('eight groups',scheme,width,page.evaluate(geometry))
+            if width>=961:
+                assert page.locator('.tnodes').evaluate('el => getComputedStyle(el).gridTemplateColumns.split(" ").length') == 6
+                assert page.locator('.tnode').evaluate_all('els => els[6].getBoundingClientRect().top > els[0].getBoundingClientRect().top')
     page.goto('http://kg.test/#/k/jungsik')
+    expect(page.locator('.tn')).to_have_count(8)
     page.set_viewport_size({'width': 1440, 'height': 900})
     if '--screenshots' in sys.argv:
         shots = WEB.parent / 'shots'
