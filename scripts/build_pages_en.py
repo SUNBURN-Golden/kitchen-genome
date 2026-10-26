@@ -29,7 +29,7 @@ def page(kopath,title,desc,body,ld):
 <header class="top"><div class="wrap bar"><a class="logo" href="/en/" aria-label="Kitchen Genome home">{LOGO}<span class="wm">Kitchen Genome</span></a>
 <nav id="nav" aria-label="Main"><a href="/en/">Home</a><a href="/en/directory/">Directory</a><a href="/#/">Lineage map</a><a href="{kopath}" hreflang="ko" lang="ko">한국어</a></nav></div></header>
 <main class="wrap">{body}</main>
-<footer class="wrap foot">Kitchen Genome · Every link between a kitchen and a chef cites a public source and a check date. Spotted an error? <a href="/#/submit">Tell us</a> (form in Korean).</footer><script src="/auth.js"></script></body></html>
+<footer class="wrap foot">Kitchen Genome Every link between a kitchen and a chef cites a public source and a check date. Spotted an error? <a href="/#/submit">Tell us</a> (form in Korean).</footer><script src="/auth.js"></script></body></html>
 '''
 def link(u,t): return f'<a href="{e(u)}" rel="nofollow noopener" target="_blank">{e(t)}</a>'
 def srcs(r):
@@ -63,7 +63,7 @@ def rpage(r):
     if michelin(r.get('michelin')): rows.append(('MICHELIN',e(michelin(r['michelin']))))
     rows+=[('Korean name',f'<span lang="ko">{e(r["name"])}</span>'),('Verification',e(vstat(r))),('Data checked',e(r.get('checked') or d['generated']))]
     sib=[x for x in R if k and x.get('kitchen')==k['id'] and x['id']!=r['id']]
-    sibs=('<section class="card"><h2>Other '+e(kn(k))+' alumni</h2><ul>'+''.join(f'<li><a href="/en/r/{x["id"]}/">{e(x["name_en"])}</a>'+(f' · Chef {e(x["chef_en"])}' if x.get('chef_en') else '')+'</li>' for x in sib)+'</ul></section>') if sib else ''
+    sibs=('<section class="card"><h2>Other '+e(kn(k))+' alumni</h2><ul>'+''.join(f'<li><a class="list-link" href="/en/r/{x["id"]}/">{e(x["name_en"])}</a>'+(f' · Chef {e(x["chef_en"])}' if x.get('chef_en') else '')+'</li>' for x in sib)+'</ul></section>') if sib else ''
     body=f'''<article class="card"><p class="muted">{('<a href="/en/k/'+k['id']+'/">'+e(kn(k))+' lineage</a> · ') if k else ''}Restaurant</p>
 <h1>{e(r['name_en'])}{nm_note}{' <span class="tag">Closed</span>' if r.get('closed_at') else ''}</h1>
 <p class="lead">{e(rdesc(r))}</p>
@@ -87,7 +87,7 @@ def kpage(k):
     title=f"{kn(k)} Alumni Restaurants in Seoul — {len(al)} Places by {kn(k)}-Trained Chefs | Kitchen Genome"
     mi=michelin(k.get('michelin'))
     desc=f"Where did chefs from {kn(k)} go? {len(al)} restaurants opened or led by {kn(k)} alumni, with sources."+(f" {kn(k)}: {mi}." if mi else '')
-    lis=''.join(f'<li><a href="/en/r/{r["id"]}/">{e(r["name_en"])}</a>{" <span class=tag>Closed</span>" if r.get("closed_at") else ""}'+(f' · Chef {e(r["chef_en"])}' if r.get('chef_en') else '')+(f' · {e(role(r))}' if role(r) else '')+(f' · {e(area(r))}' if area(r) else '')+'</li>' for r in al)
+    lis=''.join(f'<li><a class="list-link" href="/en/r/{r["id"]}/">{e(r["name_en"])}</a>{" <span class=tag>Closed</span>" if r.get("closed_at") else ""}'+(f' · Chef {e(r["chef_en"])}' if r.get('chef_en') else '')+(f' · {e(role(r))}' if role(r) else '')+(f' · {e(area(r))}' if area(r) else '')+'</li>' for r in al)
     body=f'''<article class="card"><p class="muted">Origin kitchen</p><h1>{e(kn(k))} <small class="muted" lang="ko">{e(k['name'])}</small></h1>
 <p class="lead">{e(desc)}</p><dl><dt>MICHELIN</dt><dd>{e(mi or 'Not confirmed')}{(' · '+link(k['michelin_src'].replace('/kr/ko/','/kr/en/'),'source')) if k.get('michelin_src') else ''}</dd><dt>Data checked</dt><dd>{e(k.get('checked') or d['generated'])}</dd></dl>
 <h2>Restaurants by {e(kn(k))} alumni</h2><ul>{lis or '<li>No records yet</li>'}</ul>
@@ -97,13 +97,13 @@ def kpage(k):
     return '/en'+kp,page(kp,title,desc,body,ld)
 def dirpage():
     kp='/directory/'; desc=f"All {len(R)} restaurants opened or led by alumni of {len(K)} top Seoul kitchens, grouped by where the chef trained."
-    sec=''.join(f'<section class="card"><h2><a href="/en/k/{k["id"]}/">{e(kn(k))}</a> <small class="muted">{sum(r.get("kitchen")==k["id"] for r in R)}</small></h2><ul>'+''.join(f'<li><a href="/en/r/{r["id"]}/">{e(r["name_en"])}</a>'+(f' · Chef {e(r["chef_en"])}' if r.get('chef_en') else '')+'</li>' for r in R if r.get('kitchen')==k['id'])+'</ul></section>' for k in d['kitchens'])
+    sec=''.join(f'<section class="card"><h2><a href="/en/k/{k["id"]}/">{e(kn(k))}</a> <small class="muted">{sum(r.get("kitchen")==k["id"] for r in R)}</small></h2><ul>'+''.join(f'<li><a class="list-link" href="/en/r/{r["id"]}/">{e(r["name_en"])}</a>'+(f' · Chef {e(r["chef_en"])}' if r.get('chef_en') else '')+'</li>' for r in R if r.get('kitchen')==k['id'])+'</ul></section>' for k in d['kitchens'])
     body=f'<h1>Directory</h1><p class="lead">{e(desc)}</p>{sec}'
     return '/en'+kp,page(kp,'Seoul Chef Lineage Directory — Restaurants by Alumni of Top Kitchens | Kitchen Genome',desc,body,{'@context':'https://schema.org','@type':'CollectionPage','name':'Kitchen Genome directory','url':BASE+'/en'+kp,'inLanguage':'en'})
 def home():
     sr=[r for r in R if r.get('city')=='서울']
     desc=f"Who trained where, and who opened what in Seoul: {len(R)} restaurants by alumni of {len(K)} acclaimed kitchens such as Mingles, Jungsik and Mosu, each with sources."
-    ks=''.join(f'<li><a href="/en/k/{k["id"]}/">{e(kn(k))}</a> <span class="nb"><b>{sum(r.get("kitchen")==k["id"] for r in R)}</b></span></li>' for k in d['kitchens'])
+    ks=''.join(f'<li><a class="list-link" href="/en/k/{k["id"]}/">{e(kn(k))}</a> <span class="nb"><b>{sum(r.get("kitchen")==k["id"] for r in R)}</b><span class="sr-only"> alumni restaurants</span></span></li>' for k in d['kitchens'])
     body=f'''<section class="card"><h1>Kitchen Genome: Seoul’s chef family tree</h1>
 <p class="lead">Great restaurants train great cooks, and many of them go on to open places of their own. Kitchen Genome follows those paths: which chefs worked at Seoul’s most acclaimed kitchens, and where they cook now.</p>
 <p>If you loved a tasting menu at a MICHELIN-starred restaurant, the chef who ran its kitchen line may now serve a smaller, more affordable menu across town. We track {len(R)} restaurants ({len(sr)} in Seoul) tied to {len(K)} origin kitchens. Every link cites a public source, such as the MICHELIN Guide, press interviews or the restaurant’s own channels, and shows when we last checked it. Where a restaurant has not yet confirmed a detail, we say so.</p>

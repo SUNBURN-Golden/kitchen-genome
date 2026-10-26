@@ -152,21 +152,45 @@ with sync_playwright() as p:
     page.goto('http://kg.test/#/dir')
     page.locator('#fk').select_option('jungsik')
     assert page.locator('#list .rows > li').count() == 8
-    for path in ['/#/dir','/#/rising','/#/r/atomix','/#/submit','/k/jungsik/', '/r/atomix/', '/directory/', '/en/', '/en/directory/', '/en/r/atomix/', '/login/', '/en/login/']:
+    for path in ['/#/dir','/#/rising','/#/r/atomix','/#/submit','/k/jungsik/', '/r/atomix/', '/directory/', '/en/', '/en/directory/', '/en/r/atomix/', '/r/lamant/', '/en/r/lamant/', '/login/', '/en/login/']:
         page.goto('http://kg.test' + path)
         marker={'/#/dir':'#fk','/#/rising':'.draft','/#/r/atomix':'.lead.parts','/#/submit':'textarea'}.get(path)
         if marker: page.locator(marker).wait_for()
         page.evaluate('document.fonts.ready')
-        assert page.locator('h1').count() == 1
+        assert page.locator('h1').count() == 1, path
         for scheme in ['light','dark']:
             page.emulate_media(color_scheme=scheme)
             for width in [1440,768,390,320]:
                 page.set_viewport_size({'width':width,'height':900})
                 assert page.evaluate('document.documentElement.scrollWidth <= innerWidth'), (path,scheme,width,'overflow')
                 small = page.locator('a,button,input,select,textarea').evaluate_all("""els => els.filter(el => {
-                  const r=el.getBoundingClientRect();return r.width && r.height && (r.width<44 || r.height<44)
+                  const r=el.getBoundingClientRect();
+                  if(!r.width || !r.height || (r.width>=44 && r.height>=44)) return false;
+                  if(el.tagName!=='A') return true;
+                  const hit=getComputedStyle(el,'::after');
+                  return hit.content==='none' || !(parseFloat(hit.width)>=44 && parseFloat(hit.height)>=44);
                 }).map(el=>el.outerHTML)""")
                 assert not small, (path,scheme,width,small)
+                inline = page.locator('.career a,.foot a,.why a,li a[target]')
+                assert inline.evaluate_all("""els => els.every(el => {
+                  const s=getComputedStyle(el),r=document.createRange();r.selectNodeContents(el);
+                  return s.display==='inline' && [...r.getClientRects()].every(r=>r.height<44);
+                })"""), (path,scheme,width,'inline text rhythm')
+                # Check above a short footer link, outside its text box but inside its hit area.
+                if page.locator('.foot a').count():
+                    footer = page.locator('.foot a').first
+                    footer.scroll_into_view_if_needed()
+                    point = footer.evaluate("""el => {
+                      const r=el.getBoundingClientRect(), x=r.left+r.width/2,y=r.top-2;
+                      return {x,y,hit:document.elementFromPoint(x,y)?.closest('a')===el};
+                    }""")
+                    assert point['hit'], (path,scheme,width,'inline hit area',point)
+    page.goto('http://kg.test/en/')
+    assert page.locator('.nb .sr-only').all_text_contents() == [' alumni restaurants'] * 13
+    # Career sources must retain the normal line height even inside parentheses.
+    page.goto('http://kg.test/en/r/lamant/')
+    assert page.locator('.career a').count() > 0
+
     page.emulate_media(color_scheme='dark', reduced_motion='reduce')
     assert page.evaluate('getComputedStyle(document.body).backgroundColor') == 'rgb(27, 25, 21)'
     assert not errors, errors

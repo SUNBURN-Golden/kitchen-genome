@@ -49,7 +49,7 @@ const vbadge=a=>{if(!SHOW_VERDICTS)return '';const v=vd(a);return `<span class="
 function vfilter(){if(!SHOW_VERDICTS)return '';return `<div class="chips" role="group" aria-label="판정 필터">${[['','전체'],['under','저평가만 보기'],['over','과대평가만 보기'],['even','균형만 보기']].map(([k,t])=>`<button type="button" class="chip ${VF===k?'on':''}" aria-pressed="${VF===k}" data-vf="${k}">${t}</button>`).join('')}</div>`}
 function panel(id,btn){const a=restaurants.find(x=>x.id===id);const v=vd(a);const dl=$('#panel');
  dl.innerHTML=`<form method="dialog" class="pclose"><button class="btn g" aria-label="닫기">닫기</button></form><h2 id="ptitle" style="margin:var(--s1) 0">${esc(a.name)} ${vbadge(a)}</h2><p class="muted">근거 패널</p>
- <p class="muted why parts">${parts([!SHOW_VERDICTS?'':v.k==='wait'?'판정 대기 비교할 신호가 아직 없거나 서울 밖이에요':'전문가 '+v.g.e+' − 화제성 '+v.g.b+' = '+(v.g.g>0?'+':'')+v.g.g,esc(a.michelin),link(a.michelin_src,'미쉐린 출처')])}</p>
+ <p class="muted why parts">${parts([...(!SHOW_VERDICTS?[]:v.k==='wait'?['판정 대기','비교할 신호가 아직 없거나 서울 밖이에요']:['전문가 '+v.g.e+' − 화제성 '+v.g.b+' = '+(v.g.g>0?'+':'')+v.g.g]),esc(a.michelin),link(a.michelin_src,'미쉐린 출처')])}</p>
  <p class="why parts"><span>출신 주방: <a href="#/k/${a.kitchen}">${esc(K[a.kitchen].name)}</a></span>${prole(a.role)} <span>${link(a.lineage_src,'계보 출처')}</span></p>
  ${SHOW_VERDICTS?'<div class="note muted ph">[빈 자리] 준태님 한 줄 평 (작성 전)</div>':''}<p><a class="btn g" href="#/r/${a.id}">식당 페이지로</a></p>`;
  dl.setAttribute('aria-labelledby','ptitle');dl.showModal();dl.querySelector('.pclose button').focus();dl.addEventListener('close',()=>{btn&&btn.focus()},{once:true})}
