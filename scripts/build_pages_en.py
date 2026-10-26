@@ -23,7 +23,7 @@ def page(kopath,title,desc,body,ld):
 <title>{e(title)}</title><meta name="description" content="{e(desc)}"><link rel="canonical" href="{en}">
 <link rel="alternate" hreflang="ko" href="{ko}"><link rel="alternate" hreflang="en" href="{en}"><link rel="alternate" hreflang="x-default" href="{ko}">
 <meta property="og:title" content="{e(title)}"><meta property="og:description" content="{e(desc)}"><meta property="og:url" content="{en}"><meta property="og:type" content="website"><meta property="og:site_name" content="Kitchen Genome"><meta property="og:locale" content="en_US"><meta property="og:locale:alternate" content="ko_KR">
-<meta name="theme-color" content="#FAF8F3" media="(prefers-color-scheme: light)"><meta name="theme-color" content="#161513" media="(prefers-color-scheme: dark)">
+<meta name="theme-color" content="#DFD5C3" media="(prefers-color-scheme: light)"><meta name="theme-color" content="#1B1915" media="(prefers-color-scheme: dark)">
 <link rel="alternate" type="application/rss+xml" title="Kitchen Genome" href="/en/rss.xml"><link rel="stylesheet" href="/style.css">
 <script type="application/ld+json">{json.dumps(ld,ensure_ascii=False).replace("</","<\\/")}</script></head><body>
 <header class="top"><div class="wrap bar"><a class="logo" href="/en/" aria-label="Kitchen Genome home">{LOGO}<span class="wm">Kitchen Genome<small>SEOUL CHEF LINEAGE</small></span></a>
