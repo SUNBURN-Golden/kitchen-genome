@@ -1,0 +1,159 @@
+"""Polite HTTP: robots.txt, per-domain delay, banned hosts, block detection, response validation.
+
+Policy (docs/data/SOURCES.md): on 429/403/503/challenge the DOMAIN pauses. We never rotate identity, proxy, or account, never solve
+captchas, never use a headless browser to get past a block. A 200 that is a login wall, a challenge page or an empty shell is a FAILURE."""
+import json
+import os
+import re
+import time
+import urllib.error
+import urllib.parse
+import urllib.request
+import urllib.robotparser
+
+from kg_daemon.db import ROOT
+
+CFG = json.load(open(os.path.join(ROOT, 'crawler', 'config.json'), encoding='utf-8'))
+UA = CFG['user_agent']
+BANNED = tuple(CFG['banned_hosts'])
+TRAP = tuple(CFG['trapped_url_patterns'])
+
+LOGIN_HINTS = ('로그인', '회원가입', 'sign in', 'log in', 'login', '비밀번호', 'password', '아이디')
+CHALLENGE_HINTS = ('just a moment', 'captcha', 'checking your browser', 'access denied', 'attention required', 'unusual traffic', '접근이 제한', '비정상적인 접근', 'security check')
+
+
+def host_of(url: str) -> str:
+    return urllib.parse.urlparse(url or '').netloc.lower().removeprefix('www.').removeprefix('m.')
+
+
+SEARCH_HOSTS = {'bing.com'}          # lead-generating search endpoints: their own pages are never 'sources' (Bot adds the host of the configured endpoint)
+
+
+def is_search_host(host: str) -> bool:
+    return bool(host) and any(host == h or host.endswith('.' + h) for h in SEARCH_HOSTS)
+
+
+def is_banned(url: str) -> bool:
+    h = host_of(url)
+    return any(h == b or h.endswith('.' + b) or b in h for b in BANNED)
+
+
+class Response:
+    def __init__(self, url, status, headers, body, final_url=None, error=None):
+        self.url, self.status, self.headers, self.body = url, status, {k.lower(): v for k, v in (headers or {}).items()}, body or b''
+        self.final_url = final_url or url
+        self.error = error
+
+    @property
+    def ctype(self) -> str:
+        return (self.headers.get('content-type') or '').split(';')[0].strip().lower()
+
+    def text(self) -> str:
+        m = re.search(r'charset=([\w-]+)', self.headers.get('content-type') or '', re.I) or re.search(rb'<meta[^>]+charset=["\']?([\w-]+)', self.body[:4096], re.I)
+        encs = ([m.group(1).decode() if isinstance(m.group(1), bytes) else m.group(1)] if m else []) + ['utf-8', 'cp949']
+        for e in encs:
+            try:
+                return self.body.decode(e)
+            except (UnicodeDecodeError, LookupError):
+                continue
+        return self.body.decode('utf-8', 'replace')
+
+
+def default_transport(url, headers, timeout):
+    req = urllib.request.Request(url, headers=headers)
+    try:
+        with urllib.request.urlopen(req, timeout=timeout) as r:
+            return Response(url, r.status, dict(r.headers), r.read(8_000_000), final_url=r.geturl())
+    except urllib.error.HTTPError as e:
+        return Response(url, e.code, dict(e.headers or {}), e.read(200_000) if e.fp else b'', final_url=url)
+    except Exception as e:  # noqa: BLE001
+        return Response(url, 0, {}, b'', error=type(e).__name__)
+
+
+class PoliteNet:
+    """All network access of the bot goes through here (so tests can inject a transport and a fake clock)."""
+
+    def __init__(self, transport=default_transport, sleep=time.sleep, clock=time.time, min_delay=None, timeout=20, respect_robots=True):
+        self.transport, self.sleep, self.clock, self.timeout = transport, sleep, clock, timeout
+        self.min_delay = CFG['min_delay_sec'] if min_delay is None else min_delay
+        self.respect_robots = respect_robots
+        self._robots: dict = {}
+        self._last: dict = {}
+        self.paused_hosts: dict = {}     # host -> reason (blocked this process; persisted by the caller in domain_profile)
+        self.request_count = 0
+
+    # ── robots ──
+    def robots(self, url):
+        p = urllib.parse.urlparse(url)
+        base = f'{p.scheme}://{p.netloc}'
+        if base not in self._robots:
+            self._wait(p.netloc)
+            r = self.transport(base + '/robots.txt', {'User-Agent': UA}, self.timeout)
+            self.request_count += 1
+            rp = urllib.robotparser.RobotFileParser()
+            if r.status == 200 and r.ctype in ('text/plain', ''):
+                rp.parse(r.text().splitlines())
+                self._robots[base] = rp
+            elif r.status in (401, 403):
+                rp.disallow_all = True      # robots itself forbidden = treat as disallow
+                self._robots[base] = rp
+            else:
+                rp.allow_all = True          # missing robots.txt (404/5xx/network) => RFC 9309: allowed
+                self._robots[base] = rp
+        return self._robots[base]
+
+    def robots_info(self, url) -> dict:
+        rp = self.robots(url)
+        return {'allowed': rp.can_fetch(UA, url), 'crawl_delay': rp.crawl_delay(UA) or rp.crawl_delay('*')}
+
+    def site_maps(self, url) -> list:
+        return list(self.robots(url).site_maps() or [])
+
+    def _wait(self, netloc):
+        last = self._last.get(netloc)
+        if last is not None:
+            wait = self.min_delay - (self.clock() - last)
+            if wait > 0:
+                self.sleep(wait)
+        self._last[netloc] = self.clock()
+
+    def get(self, url, extra_headers=None) -> Response:
+        h = host_of(url)
+        if is_banned(url):
+            return Response(url, 0, {}, b'', error='banned')
+        if h in self.paused_hosts:
+            return Response(url, 0, {}, b'', error='domain_paused')
+        delay = self.min_delay
+        if self.respect_robots:
+            info = self.robots_info(url)
+            if not info['allowed']:
+                return Response(url, 0, {}, b'', error='robots')
+            delay = max(delay, info['crawl_delay'] or 0)       # robots Crawl-delay wins when longer
+        netloc = urllib.parse.urlparse(url).netloc
+        last = self._last.get(netloc)
+        if last is not None and delay - (self.clock() - last) > 0:
+            self.sleep(delay - (self.clock() - last))
+        self._last[netloc] = self.clock()
+        headers = {'User-Agent': UA, 'Accept-Language': 'ko,en;q=0.8', 'Accept': '*/*', **(extra_headers or {})}
+        r = self.transport(url, headers, self.timeout)
+        self.request_count += 1
+        if r.status in (429, 403, 503) or (r.status == 200 and looks_like_challenge(r)):
+            self.paused_hosts[h] = f'blocked:{r.status}'
+        return r
+
+
+def looks_like_challenge(r: Response) -> bool:
+    if not r.ctype.startswith('text/html'):
+        return False
+    t = r.text()[:6000].lower()
+    return any(h in t for h in CHALLENGE_HINTS) and len(re.sub(r'<[^>]+>', '', t)) < 1500
+
+
+def looks_like_login(final_url: str, html: str, text_chars: int) -> bool:
+    u = (final_url or '').lower()
+    if re.search(r'/(login|signin|sign-in|member/login|auth)\b', urllib.parse.urlparse(u).path) and text_chars < 1500:
+        return True
+    low = html.lower()
+    has_pw = bool(re.search(r'<input[^>]+type=["\']?password', low))
+    hits = sum(1 for h in LOGIN_HINTS if h in low[:20000])
+    return has_pw and hits >= 2 and text_chars < 1200
