@@ -66,3 +66,11 @@ bash scripts/daily_pipeline.sh /tmp/kg
 The asset-only deploy (`upload_assets.py` + `deploy_kitchengenome.js`) does **not** ship Functions; an asset-only deployment simply has no `/api/me`, so login shows "준비 중" (safe). To ship Functions:
 - With a Pages:Edit token: `CLOUDFLARE_API_TOKEN=... npx wrangler pages deploy web --project-name kitchengenome --branch main` from the repo root (wrangler picks up `functions/` and `wrangler.toml`). Use `--branch preview` first to test.
 - Via the connector (no token): `npx wrangler pages functions build --outfile dist/_worker.bundle --output-routes-path dist/_routes.json` on the box, upload assets as usual, then add multipart fields `_worker.bundle` (file, the bundle) and `_routes.json` (file) to the deployments POST in `deploy_kitchengenome.js`. Test on a non-main branch first.
+
+## 데이터 기반 (Phase 1) / Data foundation
+서비스 5종을 위한 질문 → 온톨로지 → 수집·검증 → 상태 추적 기반. 프런트엔드·`data/seed.json`·사이트 배포와는 별개입니다. / Question → ontology → collection/verification → state-tracking foundation; independent of the frontend, `data/seed.json` and site deploys.
+- 문서 / docs: [`docs/data/QUESTIONS.md`](docs/data/QUESTIONS.md) · [`ONTOLOGY.md`](docs/data/ONTOLOGY.md) · [`SOURCES.md`](docs/data/SOURCES.md) · [`DAEMON.md`](docs/data/DAEMON.md)
+- 스키마 / schema: `schema/migrations/*.sql` (SQLite·D1 호환), 출처 레지스트리 `sources/registry.yaml`, 데몬 `daemon/kg_daemon/` (`pip install -r daemon/requirements.txt`)
+- 서비스 DB와 raw store는 git에 올리지 않습니다(`data_store/`). / The service DB and raw store are git-ignored.
+- 인스타그램은 필수 후보 발견 출처지만, 체크포인트가 뜨면 **정지**하고 우회(위장·계정 교체·프록시)는 구현하지 않습니다. 현재 정지 중. / Instagram pauses on checkpoint; no evasion is implemented. Currently paused.
+- 테스트 / tests: `python3 -m pytest tests` (일부 기존 테스트가 `crawler/vault.json`을 다시 쓰므로 실행 후 `git status` 확인 / some existing tests rewrite `crawler/vault.json`; check `git status` afterwards).

@@ -10,3 +10,9 @@ shots/
 dist/
 crawler/out/
 crawler/vault.db
+# Service DB + raw store (Phase 1 data foundation): never committed. Only schema/, fixtures and docs are.
+data_store/
+raw_store/
+*.sqlite
+*.sqlite3
+kg_service.db

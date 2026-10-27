@@ -1,0 +1,2 @@
+# kg_daemon runtime deps (stdlib otherwise). The existing crawler/ stack has its own deps.
+pyyaml>=6.0

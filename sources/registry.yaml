@@ -1,0 +1,182 @@
+# Kitchen Genome source registry (machine-readable). Human-readable twin: docs/data/SOURCES.md
+# Every source states: what we may collect, permission, cadence, retention, and what is explicitly UNSUPPORTED.
+# Validated by daemon/kg_daemon/registry.py and tests/test_source_registry.py.
+version: "2026-10-27.1"
+
+defaults:
+  min_delay_sec: 5            # per-domain; robots.txt Crawl-delay wins if longer (crawler/config.json)
+  per_domain_concurrency: 1
+  quote_max_chars: 200
+  on_block: pause_source      # 429/403/503/challenge -> stop this source; NEVER rotate identity/proxy/account
+  block_evasion: forbidden    # impersonation, account switching, proxies, captcha solving: not implemented, not planned
+
+sources:
+  seed_legacy:
+    name: "Legacy data/seed.json (pre-ontology, migrated)"
+    kind: seed
+    tier: human
+    role: migration_only
+    collect_permission: allowed
+    collectible_fields: [chef, restaurant, origin_kitchen, role_text, opened_text, closed_at, prev_names, chef_career, lineage_src]
+    refresh_cadence: "one-time migration; never re-read automatically"
+    retention_days: null
+    unsupported_scope: ["No per-fact locator/quote exists in seed.json: migrated facts stay source_claim/unverified until re-verified"]
+    adapter: seed_migration
+
+  official_sites:
+    name: "Restaurant / group official sites"
+    kind: official_site
+    tier: official
+    role: primary_verification
+    collect_permission: allowed_with_limits
+    collectible_fields: [opening_date, closure_notice, relocation_notice, rename_notice, chef_bio_statements, menu_titles, event_titles]
+    refresh_cadence: "status pages daily (recheck priority); bios weekly"
+    retention_days: 90
+    fulltext_allowed: false
+    unsupported_scope:
+      - "login-walled or member-only pages"
+      - "JS-rendered pages outside crawler/config.json allowed_browser_hosts"
+      - "reservation-platform scraping (CatchTable, etc.)"
+      - "personal phone/email/home address (privacy_filter drops them)"
+    pause_on: [http_429, http_403, http_503, robots_disallow]
+    adapter: http_fetch   # STUB in Phase 1
+
+  press_rss:
+    name: "Press RSS (foodnews.news, bakerynews.co.kr, ...)"
+    kind: rss
+    tier: press
+    role: discovery
+    collect_permission: allowed_with_limits
+    collectible_fields: [title, url, published_at, short_quote]
+    refresh_cadence: daily
+    retention_days: 90
+    unsupported_scope: ["full article text (only <=200-char quotes + structured facts)", "paywalled content"]
+    pause_on: [http_429, http_403, http_503]
+    adapter: http_fetch   # exists in crawler/crawl.py; daemon wrapper is a STUB
+
+  press_articles:
+    name: "Press / trade articles and interviews (link-followed, depth<=2)"
+    kind: press
+    tier: press
+    role: fact_source
+    collect_permission: allowed_with_limits
+    collectible_fields: [chef, restaurant, origin_kitchen, tenure_period, role_text, opening, relocation, closure, rename, mentorship_assertion]
+    refresh_cadence: "on discovery; changed articles re-fetched weekly for 30 days"
+    retention_days: 90
+    unsupported_scope: ["robots.txt-blocked hosts (naver.com, dcinside.com, yna.co.kr)", "guide.michelin.com (see michelin_manual)"]
+    pause_on: [http_429, http_403, http_503, robots_disallow]
+    adapter: crawler_vault   # reads crawler/vault.json produced by crawler/worker.py
+
+  specialist_blogs:
+    name: "Blogs / community write-ups (tistory, brunch, polle, ...)"
+    kind: community
+    tier: specialist_blog
+    role: discovery
+    collect_permission: allowed_with_limits
+    collectible_fields: [title, url, published_at, short_quote]
+    refresh_cadence: weekly
+    retention_days: 30
+    unsupported_scope: ["blog.naver.com (robots.txt blocks AI)", "counting as an independent source for 'verified'"]
+    pause_on: [http_429, http_403, http_503]
+    adapter: crawler_vault
+
+  search_leads:
+    name: "Search-engine news leads (Bing News RSS per restaurant)"
+    kind: rss
+    tier: search_lead
+    role: discovery
+    collect_permission: allowed_with_limits
+    collectible_fields: [title, url, published_at]
+    refresh_cadence: daily
+    retention_days: 30
+    unsupported_scope: ["treated as lead only; never evidence by itself"]
+    pause_on: [http_429, http_403]
+    adapter: http_fetch   # exists in crawler/crawl.py
+
+  instagram_public:
+    name: "Instagram — public posts for move / opening / closing announcements"
+    kind: social
+    tier: social_lead
+    role: required_candidate_discovery
+    collect_permission: allowed_with_limits
+    access_mode: "logged-in session of the dedicated 아가마중 account (준태님 decision 2026-10-21); instaloader; crawler/instagram.py"
+    collectible_fields: [profile_bio_excerpt_40, post_url, post_date, caption_excerpt_40_around_keyword]
+    refresh_cadence: "once per day, 06:45-08:00 KST only; <=25 handles/day; >=8s between requests; <=6 recent posts per handle"
+    retention_days: 30
+    quote_max_chars: 40
+    handle_source: "restaurants' public instagram handles in data/seed.json (instagram field)"
+    pause_flag: crawler/out/ig_blocked.flag
+    pause_on: [checkpoint, challenge, two_factor, email_code, suspicious_login, login_failed, http_429, login_required]
+    on_pause: "stop immediately, write pause flag with reason, no retry, no same-day re-login; resumes only after a human clears the flag"
+    block_evasion: forbidden
+    trust_ceiling: unverified   # IG alone never exceeds 'unverified'; never counts toward 'verified'
+    unsupported_scope:
+      - "images, video, stories, reels content, comments, likes, follower lists, DMs"
+      - "private accounts"
+      - "full captions (only <=40-char excerpt around the keyword)"
+      - "any access while paused (checkpoint) — coverage is zero until a human clears the flag"
+      - "bypassing blocks via impersonation, account switching/rotation, or proxies — NOT implemented and NOT planned"
+      - "personal accounts of individuals (only restaurant/brand handles)"
+    known_state: "PAUSED since 2026-10-24T07:12+09:00 (LoginException: checkpoint). Flag left in place; documented limit."
+    adapter: instagram_py   # existing crawler/instagram.py; daemon only READS its output + the pause flag
+
+  michelin_manual:
+    name: "MICHELIN Guide (guide.michelin.com)"
+    kind: guide
+    tier: official
+    role: manual_verification
+    collect_permission: manual_only
+    collectible_fields: [star_rating, listing_status]
+    refresh_cadence: "human spot-check; recorded via crawler/manual_findings.json"
+    retention_days: null
+    unsupported_scope: ["any automated fetch (robots.txt legal notice prohibits automated browsing)"]
+    adapter: manual_findings
+
+  manual_clip:
+    name: "Chrome extension 'clip this page' (extension/ -> crawler/inbox.json)"
+    kind: manual_clip
+    tier: human
+    role: manual_supplement
+    collect_permission: allowed
+    collectible_fields: [url, title, selected_region_text_after_privacy_filter]
+    refresh_cadence: "on user action"
+    retention_days: 90
+    unsupported_scope: ["pages the user is not already viewing", "login cookies / form inputs (privacy_filter)"]
+    adapter: crawler_inbox
+
+  outreach_replies:
+    name: "Restaurant replies to our verification outreach (data/outreach/)"
+    kind: outreach
+    tier: official
+    role: primary_verification
+    collect_permission: allowed
+    collectible_fields: [confirmed_chef, confirmed_role_period, confirmed_status_change]
+    refresh_cadence: "checked when replies arrive"
+    retention_days: null
+    unsupported_scope: ["personal phone numbers / private emails of staff (not stored)"]
+    adapter: manual_findings
+
+  community_threads:
+    name: "Reddit and similar community threads"
+    kind: community
+    tier: search_lead
+    role: discovery
+    collect_permission: manual_only
+    collectible_fields: [url]
+    refresh_cadence: "human spot-check"
+    retention_days: 30
+    unsupported_scope: ["automated collection until a terms/robots review is recorded here", "evidence for any fact"]
+    adapter: none
+
+  prohibited_hosts:
+    name: "Hosts whose robots.txt / terms block AI collection"
+    kind: community
+    tier: search_lead
+    role: excluded
+    collect_permission: prohibited
+    hosts: [naver.com, naver.me, blog.naver.com, dcinside.com, yna.co.kr]
+    collectible_fields: []
+    refresh_cadence: never
+    retention_days: null
+    unsupported_scope: ["everything — never fetched; matches crawler/config.json banned_hosts"]
+    adapter: none

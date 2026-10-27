@@ -1,0 +1,27 @@
+{
+  "generated": "2026-10-27",
+  "sources": {},
+  "kitchens": [
+    {"id": "ka", "name": "키친A", "en": "Kitchen A"},
+    {"id": "kb", "name": "키친B", "en": "Kitchen B"}
+  ],
+  "restaurants": [
+    {"id": "ka_r", "name": "키친A", "chef": "테스트셰프A", "kitchen": null, "role": null, "opened": null, "type": "established", "lineage_status": "n/a", "checked": "2026-10-20"},
+    {"id": "r1", "name": "가상식당1", "chef": "테스트셰프B", "kitchen": "ka", "role": "수셰프", "opened": "2024-05", "area": "가상동", "type": "alumni", "lineage_status": "verified", "lineage_src": "https://press.example.com/a1", "checked": "2026-10-20", "city": "서울"},
+    {"id": "r2", "name": "가상식당2", "chef": "테스트셰프C", "kitchen": "ka", "role": "헤드 셰프 (4년) (가나다 셰프 사사)", "opened": "2009 (서울) / 2011 (해외)", "type": "alumni", "lineage_status": "verified", "lineage_src": "https://press.example.com/a2", "checked": "2026-10-20", "period": "4년"},
+    {"id": "r3", "name": "가상식당3", "chef": "테스트셰프B", "kitchen": "ka", "role": "출신(직책 미기재)", "opened": "미확인", "type": "alumni", "lineage_status": "unverified", "lineage_src": "https://blog.example.com/b1", "checked": "2026-10-20", "closed_at": "2026-07-19", "closed_src": "https://official.example.com/closed"},
+    {"id": "r4", "name": "가상식당4", "chef": "가상일·가상이", "kitchen": "kb", "role": "파티시에", "opened": "2022 (리브랜딩)", "type": "alumni", "lineage_status": "verified", "lineage_src": "https://press.example.com/a4", "checked": "2026-10-20", "prev_names": ["옛이름4"], "rename_src": ["https://press.example.com/a4"]},
+    {"id": "r5", "name": "가상식당5", "chef": "가상 출신 셰프 (이름 미기재)", "kitchen": "kb", "role": "출신", "opened": "미확인", "type": "alumni", "lineage_status": "unverified", "checked": "2026-10-20"},
+    {"id": "r6", "name": "가상호텔A", "chef": "테스트셰프D", "kitchen": null, "role": null, "opened": null, "type": "established", "lineage_status": "n/a", "checked": "2026-10-20",
+     "chef_career": [
+       {"type": "employment", "date": "2018", "text": "가상호텔A 개관 때 총괄 셰프로 합류", "src": "https://press.example.com/h1"},
+       {"type": "employment", "date": "2026-10-23", "text": "전문임원으로 발탁. 현재 가상호텔A·가상식당1 총괄", "src": "https://press.example.com/h1"}
+     ]},
+    {"id": "r7", "name": "가상호텔B", "chef": "테스트셰프D", "kitchen": null, "role": null, "opened": null, "type": "established", "lineage_status": "n/a", "checked": "2026-10-20",
+     "chef_career": [
+       {"type": "employment", "date": "2018", "text": "가상호텔A 개관 때 총괄 셰프로 합류", "src": "https://press.example.com/h1"},
+       {"type": "employment", "date": "2026-10-23", "text": "전문임원으로 발탁. 현재 가상호텔A·가상식당1 총괄", "src": "https://press.example.com/h1"}
+     ]},
+    {"id": "r8", "name": "가상식당8", "chef": "테스트셰프E (+부가 메모)", "kitchen": "kb", "role": "수셰프", "opened": "2020-08-17", "type": "alumni", "lineage_status": "conflict", "lineage_src": "https://press.example.com/a8", "checked": "2026-10-20"}
+  ]
+}
