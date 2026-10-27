@@ -1,0 +1,440 @@
+{
+ "_note": "SYNTHETIC gold sample: fake names (달빛정원 청우헌 가온재 모래시계 / 한도윤 서하람) hand-labelled by the author; checks rule behaviour incl. negation, guest events, co-working, hearsay. NOT a measure of accuracy on real Korean press.",
+ "targets": [
+  {
+   "kind": "restaurant",
+   "name_ko": "달빛정원"
+  },
+  {
+   "kind": "restaurant",
+   "name_ko": "청우헌"
+  },
+  {
+   "kind": "restaurant",
+   "name_ko": "가온재"
+  },
+  {
+   "kind": "restaurant",
+   "name_ko": "모래시계"
+  },
+  {
+   "kind": "chef",
+   "name_ko": "한도윤",
+   "restaurants": [
+    "달빛정원"
+   ]
+  },
+  {
+   "kind": "chef",
+   "name_ko": "서하람",
+   "restaurants": [
+    "모래시계"
+   ]
+  }
+ ],
+ "sentences": [
+  {
+   "text": "한도윤 셰프는 청우헌에서 수셰프로 일한 뒤 달빛정원을 열었다.",
+   "tier": "press",
+   "published_at": "2026-06-01",
+   "expect": [
+    {
+     "label": "career",
+     "epistemic": "claim",
+     "chef": "한도윤",
+     "restaurant": "달빛정원",
+     "org": "청우헌"
+    },
+    {
+     "label": "opening",
+     "epistemic": "claim",
+     "chef": "한도윤",
+     "restaurant": "달빛정원"
+    }
+   ]
+  },
+  {
+   "text": "달빛정원은 2025년 3월 서울 성수동에 문을 열었다.",
+   "tier": "press",
+   "published_at": "2026-06-01",
+   "expect": [
+    {
+     "label": "opening",
+     "epistemic": "claim",
+     "restaurant": "달빛정원"
+    }
+   ]
+  },
+  {
+   "text": "서하람 셰프는 가온재 출신으로 알려져 있다.",
+   "tier": "press",
+   "published_at": "2026-06-01",
+   "expect": [
+    {
+     "label": "career",
+     "epistemic": "unverified",
+     "chef": "서하람",
+     "org": "가온재"
+    }
+   ]
+  },
+  {
+   "text": "가온재 출신 서하람 셰프가 모래시계의 헤드셰프로 합류했다.",
+   "tier": "press",
+   "published_at": "2026-06-01",
+   "expect": [
+    {
+     "label": "career",
+     "epistemic": "claim",
+     "chef": "서하람",
+     "restaurant": "모래시계",
+     "org": "가온재"
+    },
+    {
+     "label": "employment_claim",
+     "epistemic": "claim",
+     "chef": "서하람",
+     "restaurant": "모래시계"
+    }
+   ]
+  },
+  {
+   "text": "모래시계가 2026년 5월 영업을 종료했다.",
+   "tier": "press",
+   "published_at": "2026-06-01",
+   "expect": [
+    {
+     "label": "closure",
+     "epistemic": "claim",
+     "restaurant": "모래시계"
+    }
+   ]
+  },
+  {
+   "text": "청우헌은 2026년 2월 한남동으로 이전했다.",
+   "tier": "press",
+   "published_at": "2026-06-01",
+   "expect": [
+    {
+     "label": "relocation",
+     "epistemic": "claim",
+     "restaurant": "청우헌"
+    }
+   ]
+  },
+  {
+   "text": "한도윤 셰프의 달빛정원이 오는 12월 오픈할 예정이다.",
+   "tier": "press",
+   "published_at": "2026-06-01",
+   "expect": [
+    {
+     "label": "opening",
+     "epistemic": "claim",
+     "chef": "한도윤",
+     "restaurant": "달빛정원"
+    }
+   ]
+  },
+  {
+   "text": "달빛정원이 폐업한다는 소문이 돌고 있지만 확인되지 않았다.",
+   "tier": "press",
+   "published_at": "2026-06-01",
+   "expect": [
+    {
+     "label": "closure",
+     "epistemic": "unverified",
+     "restaurant": "달빛정원"
+    }
+   ]
+  },
+  {
+   "text": "서하람 셰프는 청우헌에서 2019년부터 2022년까지 근무했다.",
+   "tier": "press",
+   "published_at": "2026-06-01",
+   "expect": [
+    {
+     "label": "career",
+     "epistemic": "claim",
+     "chef": "서하람",
+     "org": "청우헌"
+    }
+   ]
+  },
+  {
+   "text": "한도윤 셰프에게 사사한 서하람 셰프는 모래시계를 이끌고 있다.",
+   "tier": "press",
+   "published_at": "2026-06-01",
+   "expect": [
+    {
+     "label": "mentorship_claim",
+     "epistemic": "claim",
+     "chef": "서하람",
+     "org": "한도윤"
+    },
+    {
+     "label": "employment_claim",
+     "epistemic": "claim",
+     "chef": "서하람",
+     "restaurant": "모래시계"
+    }
+   ]
+  },
+  {
+   "text": "청우헌 게스트 셰프로 서하람 셰프가 하루 참여했다.",
+   "tier": "event_notice",
+   "published_at": "2026-06-01",
+   "expect": [
+    {
+     "label": "collab",
+     "epistemic": "claim",
+     "chef": "서하람",
+     "restaurant": "청우헌"
+    }
+   ]
+  },
+  {
+   "text": "한도윤 셰프와 서하람 셰프가 함께 일했다.",
+   "tier": "press",
+   "published_at": "2026-06-01",
+   "expect": [
+    {
+     "label": "collab",
+     "epistemic": "claim",
+     "chef": "한도윤"
+    }
+   ]
+  },
+  {
+   "text": "달빛정원은 올해 봄 메뉴로 쑥 타르트를 선보인다.",
+   "tier": "press",
+   "published_at": "2026-06-01",
+   "expect": [
+    {
+     "label": "menu",
+     "epistemic": "claim",
+     "restaurant": "달빛정원"
+    }
+   ]
+  },
+  {
+   "text": "모래시계 서하람 셰프는 청우헌에서 3년간 근무했다.",
+   "tier": "press",
+   "published_at": "2026-06-01",
+   "expect": [
+    {
+     "label": "career",
+     "epistemic": "claim",
+     "chef": "서하람",
+     "restaurant": "모래시계",
+     "org": "청우헌"
+    }
+   ]
+  },
+  {
+   "text": "달빛정원은 \"새벽시장\"으로 이름을 바꿨다.",
+   "tier": "press",
+   "published_at": "2026-06-01",
+   "expect": [
+    {
+     "label": "rename",
+     "epistemic": "claim",
+     "restaurant": "달빛정원"
+    }
+   ]
+  },
+  {
+   "text": "한도윤 셰프는 달빛정원을 떠나지 않았다.",
+   "tier": "press",
+   "published_at": "2026-06-01",
+   "expect": []
+  },
+  {
+   "text": "오늘 날씨가 맑고 한강 공원에 사람이 많았다.",
+   "tier": "press",
+   "published_at": "2026-06-01",
+   "expect": []
+  },
+  {
+   "text": "서하람 셰프는 인터뷰에서 요리의 본질에 대해 이야기했다.",
+   "tier": "press",
+   "published_at": "2026-06-01",
+   "expect": []
+  },
+  {
+   "text": "한도윤 셰프(달빛정원)는 가온재에서 수셰프를 지냈다.",
+   "tier": "press",
+   "published_at": "2026-06-01",
+   "expect": [
+    {
+     "label": "career",
+     "epistemic": "claim",
+     "chef": "한도윤",
+     "restaurant": "달빛정원",
+     "org": "가온재"
+    }
+   ]
+  },
+  {
+   "text": "가온재가 2024년 폐업했다.",
+   "tier": "press",
+   "published_at": "2026-06-01",
+   "expect": [
+    {
+     "label": "closure",
+     "epistemic": "claim",
+     "restaurant": "가온재"
+    }
+   ]
+  },
+  {
+   "text": "모래시계 오픈 소식, 서하람 셰프가 총괄한다.",
+   "tier": "search_lead",
+   "published_at": "2026-06-01",
+   "expect": [
+    {
+     "label": "opening",
+     "epistemic": "unverified",
+     "chef": "서하람",
+     "restaurant": "모래시계"
+    },
+    {
+     "label": "employment_claim",
+     "epistemic": "unverified",
+     "chef": "서하람",
+     "restaurant": "모래시계"
+    }
+   ]
+  },
+  {
+   "text": "한도윤 셰프가 달빛정원 총괄 셰프로 있다.",
+   "tier": "press",
+   "published_at": "2026-06-01",
+   "expect": [
+    {
+     "label": "employment_claim",
+     "epistemic": "claim",
+     "chef": "한도윤",
+     "restaurant": "달빛정원"
+    }
+   ]
+  },
+  {
+   "text": "서하람 셰프는 가온재의 헤드셰프였으며 현재는 모래시계에 있다.",
+   "tier": "press",
+   "published_at": "2026-06-01",
+   "expect": [
+    {
+     "label": "career",
+     "epistemic": "claim",
+     "chef": "서하람",
+     "org": "가온재"
+    },
+    {
+     "label": "employment_claim",
+     "epistemic": "claim",
+     "chef": "서하람",
+     "restaurant": "모래시계"
+    }
+   ]
+  },
+  {
+   "text": "청우헌과 가온재가 협업 디너를 열었다.",
+   "tier": "event_notice",
+   "published_at": "2026-06-01",
+   "expect": [
+    {
+     "label": "collab",
+     "epistemic": "claim",
+     "restaurant": "청우헌"
+    }
+   ]
+  },
+  {
+   "text": "달빛정원이 2025년 6월 임시 휴업에 들어갔다.",
+   "tier": "press",
+   "published_at": "2026-06-01",
+   "expect": [
+    {
+     "label": "closure",
+     "epistemic": "claim",
+     "restaurant": "달빛정원"
+    }
+   ]
+  },
+  {
+   "text": "모래시계는 2023년 개업했다.",
+   "tier": "press",
+   "published_at": "2026-06-01",
+   "expect": [
+    {
+     "label": "opening",
+     "epistemic": "claim",
+     "restaurant": "모래시계"
+    }
+   ]
+  },
+  {
+   "text": "한도윤 셰프는 청우헌에서 요리를 배웠다고 밝혔다.",
+   "tier": "press",
+   "published_at": "2026-06-01",
+   "expect": [
+    {
+     "label": "career",
+     "epistemic": "claim",
+     "chef": "한도윤",
+     "org": "청우헌"
+    }
+   ]
+  },
+  {
+   "text": "서하람 셰프가 달빛정원으로 옮겼다는 이야기가 있다.",
+   "tier": "press",
+   "published_at": "2026-06-01",
+   "expect": [
+    {
+     "label": "employment_claim",
+     "epistemic": "unverified",
+     "chef": "서하람",
+     "restaurant": "달빛정원"
+    }
+   ]
+  }
+ ],
+ "resolve": [
+  {
+   "name": "서하람",
+   "kind": "chef",
+   "context": [],
+   "expect": "서하람"
+  },
+  {
+   "name": "한도윤",
+   "kind": "chef",
+   "context": [
+    "달빛정원"
+   ],
+   "expect": "한도윤"
+  },
+  {
+   "name": "달빛정원",
+   "kind": "restaurant",
+   "expect": "달빛정원"
+  },
+  {
+   "name": "달빛 정원",
+   "kind": "restaurant",
+   "expect": "달빛정원"
+  },
+  {
+   "name": "새벽시장",
+   "kind": "restaurant",
+   "expect": "unknown"
+  },
+  {
+   "name": "김하준",
+   "kind": "chef",
+   "context": [],
+   "expect": "unknown"
+  }
+ ]
+}
