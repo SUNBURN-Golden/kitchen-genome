@@ -20,6 +20,7 @@ STAGES = ('source_discovery', 'incremental_fetch', 'change_detection', 'extracti
 
 DEFAULT_CONFIG = {
     'lock_name': 'kg-daemon',
+    'daemon_name': 'kg-daemon',
     'lock_ttl_sec': 1800,
     'max_attempts': 3,
     'backoff_base_sec': 2.0,
@@ -114,14 +115,14 @@ class Daemon:
 
     # ── run lifecycle ──
     def _resumable(self):
-        return self.conn.execute("""SELECT r.* FROM daemon_run r WHERE r.status IN ('failed','paused_cost_cap','paused_source','running')
-            AND NOT EXISTS (SELECT 1 FROM daemon_run n WHERE n.resumed_from=r.run_id) ORDER BY r.started_at DESC, r.rowid DESC LIMIT 1""").fetchone()
+        return self.conn.execute("""SELECT r.* FROM daemon_run r WHERE r.daemon=? AND r.status IN ('failed','paused_cost_cap','paused_source','running')
+            AND NOT EXISTS (SELECT 1 FROM daemon_run n WHERE n.resumed_from=r.run_id) ORDER BY r.started_at DESC, r.rowid DESC LIMIT 1""", (self.config['daemon_name'],)).fetchone()
 
     def _start_run(self, trigger: str, resume: bool) -> str:
         prev = self._resumable() if resume else None
         run_id = new_id('run')
         self.conn.execute('INSERT INTO daemon_run(run_id,daemon,status,trigger,cost_cap_units,resumed_from,started_at) VALUES (?,?,?,?,?,?,?)',
-                          (run_id, 'kg-daemon', 'running', trigger, self.config['cost_cap_units'], prev['run_id'] if prev else None, self.clock()))
+                          (run_id, self.config['daemon_name'], 'running', trigger, self.config['cost_cap_units'], prev['run_id'] if prev else None, self.clock()))
         for i, st in enumerate(self.stages):
             carried = None
             if prev:
