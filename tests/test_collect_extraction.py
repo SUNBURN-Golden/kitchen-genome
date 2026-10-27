@@ -90,3 +90,41 @@ def test_synthetic_gold_meets_thresholds_and_reports_false_merges():
     res = gold.run_file(os.path.join(ROOT, 'tests', 'fixtures', 'gold_synthetic.json'))
     assert res['precision'] >= 0.95 and res['recall'] >= 0.85 and res['epistemic_accuracy'] >= 0.95
     assert res['entity_resolution']['false_merge_rate'] == 0.0 and res['entity_resolution']['cases'] >= 5
+
+
+# ── regressions from the first real-press run (verbatim sentences; entities are real public figures/venues) ──
+REAL_TARGETS = {'targets': [{'kind': 'restaurant', 'name_ko': n} for n in ('모수', '밍글스', '이타닉 가든', '라망 시크레')]
+                + [{'kind': 'chef', 'name_ko': n, 'restaurants': r} for n, r in (('안성재', ['모수']), ('강민구', ['밍글스']), ('손종원', ['이타닉 가든']), ('이연복', []))], 'sentences': [], 'resolve': []}
+
+
+@pytest.fixture()
+def real_gaz():
+    return Gazetteer(gold.build_gold_db(REAL_TARGETS))
+
+
+def _labels(gaz, text, tier='press'):
+    return {(r['label'], r['chef_text'], r['restaurant_text'] or r['org_text'], r['epistemic']) for r in extract_text(text, gaz=gaz, host='x.test', tier=tier)}
+
+
+def test_real_negated_closure_is_relocation(real_gaz):
+    got = _labels(real_gaz, '[현장] 국내 유일 미쉐린 3스타 \'모수\'…"폐업 아닌 이전, 한식 대표할 것"', 'search_lead')
+    assert ('relocation', None, '모수', 'unverified') in got and not any(g[0] == 'closure' for g in got)
+
+
+def test_real_tv_closure_risk_and_ethnicity_are_not_facts(real_gaz):
+    assert not _labels(real_gaz, '이연복도 초조…‘스트릿 레스토랑’ 폐업 위기 최하위 팀은?', 'search_lead')
+    assert not any(g[0] == 'career' for g in _labels(real_gaz, '"안성재 화교 출신, 중식 대가에 후한 점수" …\'흑백요리사\' 제작진 "악성루머에 강력한 법적 조치"', 'search_lead'))
+
+
+def test_real_new_quoted_venue_and_appointment(real_gaz):
+    got = _labels(real_gaz, '이곳에 자리한 최고급 호텔 파크하얏트 파리-방돔에 지난달 17일 한식당 ‘세옥(SEOK)’이 문을 열었다.')
+    assert ('opening', None, '세옥', 'claim') in got
+    got = _labels(real_gaz, '프렌치 럭셔리 호텔 소피텔 앰배서더 서울은 신임 총괄 셰프로 ‘기욤 콤파라(Guillaume Comparat)’를 선임했다고 밝혔다.')
+    assert ('employment_claim', '기욤 콤파라', '소피텔 앰배서더 서울', 'claim') in got
+
+
+def test_real_leads_and_collab(real_gaz):
+    got = _labels(real_gaz, '조선호텔앤리조트의 손종원 셰프가 이끄는 한식당 \'이타닉 가든\'과 양식당 \'라망 시크레\'가 미쉐린 1스타를 또 다시 획득했다.')
+    assert ('employment_claim', '손종원', '이타닉 가든', 'claim') in got
+    got = _labels(real_gaz, '서울에서 미쉐린 3스타를 받은 밍글스의 셰프 강민구가 파리에서 처음 선보이는 레스토랑 ‘SEOK’이 파크 하얏트 파리-방돔에 문을 열었다.')
+    assert ('employment_claim', '강민구', '밍글스', 'claim') in got and ('opening', '강민구', 'SEOK', 'claim') in got

@@ -13,7 +13,7 @@ from .targets import Gazetteer, norm, upsert_target
 
 
 def _key(label, chef, rest, org):
-    return (label, norm(chef or ''), norm(rest or org or ''))
+    return (label, norm(chef or ''), norm((org or rest or '') if label == 'career' else (rest or org or '')))
 
 
 def build_gold_db(gold: dict):
