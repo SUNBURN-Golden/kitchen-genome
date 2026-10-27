@@ -1,0 +1,358 @@
+"""The collection cycle as a staged, checkpointed, resumable Daemon run (lock 'kg-collect'):
+   plan -> fetch -> extract -> evaluate -> gaps -> apply -> quality
+raw (fetch_record + data_store/raw, outside git) -> extraction labels -> claims/service data (apply). Each layer is a separate stage, so a
+broken extractor never corrupts raw, and re-extraction with a new extractor_version re-labels the same raw."""
+import datetime as dt
+import json
+import os
+import re
+import urllib.parse
+
+from kg_daemon import runner
+from kg_daemon.db import DEFAULT_DB, ROOT, connect, migrate, new_id, utcnow
+
+from . import EXTRACTOR_VERSION, apply as apply_mod, discover, evaluate, gaps, scheduler
+from .fetch import Doc, Fetcher, parse_feed
+from .htmlx import parse_html
+from . import net as net_mod
+from .net import PoliteNet, host_of
+from .pipeline import check_extractor_health, fetch_regression_alert, official_hosts, process_doc
+from .rawstore import RawStore
+from .resolve import promote_candidates
+from .targets import Gazetteer, load_seed_targets
+
+STAGES = ('plan', 'fetch', 'extract', 'evaluate', 'gaps', 'apply', 'quality')
+UNIT_COSTS = {'http': 1.0, 'ocr_page': 2.0, 'browser': 4.0}
+
+
+class Bot:
+    """Collaborators. Everything the network touches is injectable (tests use a fixture server / fake clock)."""
+
+    def __init__(self, conn, data_dir=None, net=None, browser=None, seeds=None, model_hook=None, today=None, ocr=True, units=60, registry_path=None, seeds_path=None):
+        self.conn = conn
+        self.data_dir = data_dir or os.path.join(ROOT, 'data_store')
+        self.raw = RawStore(os.path.join(self.data_dir, 'raw'))
+        self.net = net or PoliteNet()
+        self.browser = browser
+        self.seeds = seeds or discover.load_seeds(seeds_path or discover.SEEDS_PATH)
+        self.model_hook = model_hook
+        self.today = today or dt.date.today()
+        self.ocr = ocr
+        self.units = units
+        self.registry_path = registry_path or evaluate.DISCOVERED_REGISTRY
+        self.initial = discover.initial_hosts()
+        net_mod.SEARCH_HOSTS.add(host_of(self.seeds['keyword_search']['endpoint'].format(q='x')))
+        self.job_hint_dirs = {d['url']: d for d in self.seeds.get('directories', [])}
+
+    def gaz(self) -> Gazetteer:
+        return Gazetteer(self.conn)
+
+
+def init_db(conn, seed: dict | None = None, service_seed: bool = True) -> dict:
+    """migrate + (optional) Phase-1 seed migration + target list from the seed + required-field gaps."""
+    applied = migrate(conn)
+    seed = seed or json.load(open(os.path.join(ROOT, 'data', 'seed.json'), encoding='utf-8'))
+    out = {'migrations': applied}
+    if service_seed and conn.execute('SELECT COUNT(*) FROM chef').fetchone()[0] == 0:
+        from kg_daemon.seed_migration import migrate_seed
+        migrate_seed(conn, seed)
+    out['targets'] = load_seed_targets(conn, seed)
+    out['gaps_opened'] = gaps.open_gaps(conn)
+    return out
+
+
+def _tier_of(conn):
+    cache: dict = {}
+    off = official_hosts(conn)
+
+    def f(host):
+        if host not in cache:
+            if host in off:
+                cache[host] = 'official'
+            else:
+                r = conn.execute('SELECT tier_guess, state FROM domain_profile WHERE host=?', (host,)).fetchone()
+                if discover.is_search_host(host) or (r and r['state'] in ('deprioritized', 'blocked')):
+                    cache[host] = 'search_lead'                      # a lead generator, or a source the evaluator already distrusts
+                else:                                                  # an article page on a host we are still trialling is still a 'claim' (lowest tier; never verified by itself)
+                    cache[host] = r['tier_guess'] if r and r['tier_guess'] in ('official', 'press', 'specialist_blog', 'event_notice') else 'press'
+        return cache[host]
+    return f
+
+
+# ───────────────────────── stage: plan ─────────────────────────
+def stage_plan(ctx):
+    bot: Bot = ctx.env['bot']
+    conn, seeds = bot.conn, bot.seeds
+    caps = {**seeds['caps']}
+    now_dt = dt.datetime.now(dt.timezone.utc)
+    new = {'directory_feed': 0, 'keyword': 0, 'entity_status': 0, 'official_roots': 0, 'gap': 0}
+    for j in discover.directory_and_feed_jobs(seeds):
+        meta = j.pop('meta', None) or {}
+        if meta.get('policy') == 'manual_only':
+            discover.enqueue(conn, **j, caps=caps, state='skipped', error='manual_only: robots/ToS forbid automated access (inaccessible, tracked for a human)')
+        else:
+            new['directory_feed'] += discover.enqueue(conn, **j, caps=caps)
+    for j in discover.keyword_jobs(conn, seeds, today=bot.today):
+        new['keyword'] += discover.enqueue(conn, **j, caps=caps)
+    for j in discover.entity_status_jobs(conn, seeds):
+        new['entity_status'] += discover.enqueue(conn, **j, caps=caps)
+    for j in discover.seed_official_site_jobs(conn):
+        new['official_roots'] += discover.enqueue(conn, **j, caps=caps)
+    gaps.classify_gaps(conn)
+    for j in gaps.gap_jobs(conn, limit=60):
+        g = {k: v for k, v in j.items() if k not in ('field', 'absent', 'attempts')}
+        g['relevance'] = 0.7
+        g['url'] = discover.search_url(seeds, g['query'])
+        new['gap'] += discover.enqueue(conn, **g, caps=caps)
+    conn.commit()
+    requeued = scheduler.requeue_due(conn, now_dt)
+    pl = scheduler.plan(conn, bot.units, now_dt)
+    chosen = [jid for p in ('discovery', 'backfill', 'refresh') for jid in pl['chosen'][p]]
+    pri = {r['job_id']: r['priority'] for r in conn.execute('SELECT job_id, priority FROM crawl_job')}
+    chosen.sort(key=lambda j: -pri.get(j, 0))
+    return runner.StageResult({'new_jobs': new, 'requeued': requeued, 'budgets': pl['budgets'], 'queued_by_pool': pl['queued_by_pool'],
+                               'chosen_counts': {p: len(v) for p, v in pl['chosen'].items()}, 'order': chosen,
+                               'pool_of': {j: next(p for p in pl['chosen'] if j in pl['chosen'][p]) for j in chosen}})
+
+
+# ───────────────────────── stage: fetch ─────────────────────────
+class PoolSkip(Exception):
+    pass
+
+
+def _finish_job(conn, jid, state, err=None):
+    conn.execute('UPDATE crawl_job SET state=?, last_error=?, finished_at=? WHERE job_id=?', (state, err, utcnow(), jid))
+
+
+def _host_feed_jobs(conn, bot, d, job, caps) -> int:
+    """A NEW domain: look for its own feed (<link rel=alternate>) and robots 'Sitemap:' lines -> more articles from the same host = a real trial sample."""
+    from .htmlx import feed_links
+    urls = []
+    try:
+        urls += feed_links(bot.raw.read(conn.execute('SELECT raw_ref FROM fetch_record WHERE fetch_id=?', (d.fetch_id,)).fetchone()['raw_ref']).decode('utf-8', 'ignore'), d.url)
+        urls += bot.net.site_maps(d.url)[:2]
+    except Exception:  # noqa: BLE001
+        pass
+    n = 0
+    for u in urls[:3]:
+        if host_of(u) == d.host and discover.enqueue(conn, path='sitemap' if 'sitemap' in u.lower() else 'feed', pool='discovery', url=u, depth=job['depth'], parent=job['job_id'], relevance=0.7, caps=caps):
+            n += 1
+    return n
+
+
+def stage_fetch(ctx):
+    bot: Bot = ctx.env['bot']
+    conn = bot.conn
+    plan = ctx.prev['plan']
+    done = set(ctx.cursor.get('done', []))
+    state = {'pool': None, 'job': None}
+
+    def charge(kind, units=1.0):
+        ctx.cost.charge(kind, units)                        # may raise CostCapExceeded -> daemon pauses this run (resumable)
+        conn.execute('INSERT INTO budget_ledger(cycle_id,pool,kind,units,job_id,at) VALUES (?,?,?,?,?,?)', (ctx.run_id, state['pool'], kind, UNIT_COSTS.get(kind, 1.0) * units, state['job'], utcnow()))
+        conn.commit()
+
+    fetcher = Fetcher(conn, bot.net, bot.raw, charge=charge, browser=bot.browser, ocr=bot.ocr)
+    gaz = bot.gaz()
+    caps = bot.seeds['caps']
+    stats = {'jobs_run': 0, 'ok_docs': 0, 'failed_docs': 0, 'blocked': 0, 'children_queued': 0, 'chain': {'subpages': 0, 'sns_leads': 0, 'booking_leads': 0, 'attachments': 0}, 'deferred_trial': 0}
+    for jid in plan['order']:
+        if jid in done:
+            continue
+        job = conn.execute('SELECT * FROM crawl_job WHERE job_id=?', (jid,)).fetchone()
+        if job is None or job['state'] != 'queued':
+            continue
+        state['pool'], state['job'] = plan['pool_of'][jid], jid
+        host = host_of(job['url'] or '')
+        prof = conn.execute('SELECT * FROM domain_profile WHERE host=?', (host,)).fetchone() if host else None
+        if prof and prof['state'] == 'blocked':
+            _finish_job(conn, jid, 'blocked', 'domain blocked by evaluator')
+            continue
+        if prof and not prof['in_initial_registry'] and prof['state'] == 'trial' and conn.execute('SELECT COUNT(*) FROM fetch_record WHERE host=?', (host,)).fetchone()[0] >= evaluate.TRIAL_SAMPLE * 2:
+            stats['deferred_trial'] += 1
+            continue
+        if host and not discover.is_search_host(host):
+            evaluate.ensure_profile(conn, host, in_registry=host in bot.initial)
+        if job['path'] == 'attachment' and not job['url']:
+            _finish_job(conn, jid, 'dropped', 'no url')
+            continue
+        allow_browser = True if bot.job_hint_dirs.get(job['url'], {}).get('browser') else None
+        max_pages = caps['pagination_max_pages'] if job['path'] in ('directory',) else 1
+        docs = fetcher.fetch(job['url'], job_id=jid, allow_browser=allow_browser, max_pages=max_pages)
+        stats['jobs_run'] += 1
+        oks = [d for d in docs if d.ok]
+        if oks:
+            stats['ok_docs'] += len(oks)
+            if host and not discover.is_search_host(host):
+                conn.execute('UPDATE domain_profile SET fail_streak=0 WHERE host=?', (host,))
+            jd = dict(job)
+            for d in oks:
+                if d.items:
+                    r = discover.expand_items(conn, d, jd, gaz, caps, today=bot.today)
+                    stats['children_queued'] += r['queued']
+                if d.method in ('html', 'jsonld', 'browser') and d.host not in bot.initial and not discover.is_search_host(d.host):
+                    stats['host_feeds'] = stats.get('host_feeds', 0) + _host_feed_jobs(conn, bot, d, jd, caps)
+                if job['path'] == 'directory' and d.links:
+                    stats['children_queued'] += discover.directory_link_jobs(conn, d, jd, bot.seeds, caps)
+                if d.links or d.images:
+                    off = official_hosts(conn)
+                    if job['path'] == 'official_chain' or d.host in off:
+                        r = discover.official_chain_jobs(conn, d, jd, bot.seeds, caps)
+                        for k, v in r.items():
+                            stats['chain'][k] += v
+            _finish_job(conn, jid, 'done')
+        else:
+            stats['failed_docs'] += 1
+            last = docs[-1]
+            reg = fetch_regression_alert(conn, last)
+            if reg:
+                stats.setdefault('alerts', []).append(reg)
+            fatal = last.outcome in ('fail_blocked', 'fail_robots', 'fail_banned', 'fail_login_page')
+            if job['path'] in ('keyword_search', 'reverse_gap', 'entity_followup') and last.error == 'feed_without_items':
+                _finish_job(conn, jid, 'done', 'no_results')       # zero search hits is an ANSWER (counts toward absent_in_source), not a failure
+            else:
+                if host and not discover.is_search_host(host):
+                    conn.execute('UPDATE domain_profile SET fail_streak=fail_streak+1 WHERE host=?', (host,))
+                if fatal:
+                    stats['blocked'] += 1
+                    _finish_job(conn, jid, 'blocked', f'{last.outcome}: {last.error}')
+                else:
+                    att = job['attempts'] + 1
+                    conn.execute('UPDATE crawl_job SET attempts=?, last_error=?, state=? WHERE job_id=?', (att, f'{last.outcome}: {last.error}', 'failed' if att >= 3 else 'queued', jid))
+        if job['gap_id']:
+            gaps.bump_attempts(conn, job['gap_id'])
+        conn.commit()
+        done.add(jid)
+        ctx.save_cursor({'done': sorted(done)})
+    stats['requests'] = bot.net.request_count
+    return runner.StageResult(stats)
+
+
+# ───────────────────────── stage: extract ─────────────────────────
+def load_doc(conn, raw: RawStore, f) -> Doc:
+    text = raw.read_text(f['text_ref']) if f['text_ref'] else ''
+    items, links, images = [], [], []
+    if f['method'] in ('feed', 'sitemap') and f['raw_ref']:
+        items = parse_feed(raw.read(f['raw_ref']), f['url'])
+    elif f['method'] in ('html', 'jsonld', 'browser') and f['raw_ref'] and f['raw_ref'].endswith('.html'):
+        p = parse_html(raw.read(f['raw_ref']).decode('utf-8', 'ignore'), f['url'])
+        links, images = p['links'], p['images']
+    return Doc(f['fetch_id'], f['url'], f['canonical_url'], f['host'], f['method'], f['outcome'], text=text, published_at=f['published_at'], links=links, items=items, images=images,
+               content_hash=f['content_hash'], error=f['error'], page_no=f['page_no'] or 1)
+
+
+def stage_extract(ctx):
+    bot: Bot = ctx.env['bot']
+    conn = bot.conn
+    gaz = bot.gaz()
+    tier_of = _tier_of(conn)
+    rows = conn.execute("""SELECT * FROM fetch_record WHERE outcome='ok' AND (extracted_at IS NULL OR extractor_version<>?) ORDER BY fetched_at, rowid""", (EXTRACTOR_VERSION,)).fetchall()
+    stats = {'docs': 0, 'new_extractions': 0, 'labels': {}, 'alerts': []}
+    for f in rows:
+        doc = load_doc(conn, bot.raw, f)
+        job = conn.execute('SELECT target_id, url FROM crawl_job WHERE job_id=?', (f['job_id'],)).fetchone() if f['job_id'] else None
+        jctx = None
+        if job and job['target_id']:
+            t = conn.execute('SELECT * FROM target WHERE target_id=?', (job['target_id'],)).fetchone()
+            jctx = {t['kind']: {'name_ko': t['name_ko'], 'target_id': t['target_id']}} if t and t['kind'] in ('chef', 'restaurant') else None
+        r = process_doc(conn, doc, gaz, tier=tier_of(doc.host), ctx=jctx, via=f['url'], model_hook=bot.model_hook)
+        n_all = conn.execute('SELECT COUNT(*) FROM extraction WHERE fetch_id=?', (f['fetch_id'],)).fetchone()[0]
+        for a in check_extractor_health(conn, doc, n_all, bot.raw):
+            stats['alerts'].append(a)
+        conn.execute('UPDATE fetch_record SET extracted_at=?, extractor_version=? WHERE fetch_id=?', (utcnow(), EXTRACTOR_VERSION, f['fetch_id']))
+        conn.commit()
+        stats['docs'] += 1
+        stats['new_extractions'] += r['new']
+        for k, v in r['labels'].items():
+            stats['labels'][k] = stats['labels'].get(k, 0) + v
+    return runner.StageResult(stats)
+
+
+# ───────────────────────── stage: evaluate ─────────────────────────
+def stage_evaluate(ctx):
+    bot: Bot = ctx.env['bot']
+    conn = bot.conn
+    gaz, off = bot.gaz(), official_hosts(conn)
+    res = []
+    for r in conn.execute("SELECT DISTINCT host FROM fetch_record").fetchall():
+        h = r['host']
+        if discover.is_search_host(h):
+            continue
+        res.append(evaluate.score_host(conn, h, bot.net, bot.raw, gaz, off, in_initial=h in bot.initial))
+    # deprioritised / blocked hosts: drop their queued discovery work; blocked also stops everything
+    for h in conn.execute("SELECT host, state FROM domain_profile WHERE state IN ('blocked')").fetchall():
+        conn.execute("UPDATE crawl_job SET state='blocked', last_error='domain blocked', finished_at=? WHERE state='queued' AND url LIKE ?", (utcnow(), f"%{h['host']}%"))
+    promoted = evaluate.grow_registry(conn, bot.registry_path)
+    conn.commit()
+    new = [x for x in res if x.get('state') in ('promoted', 'deprioritized', 'blocked') and x.get('host') not in bot.initial]
+    return runner.StageResult({'evaluated': len(res), 'decisions': {x['host']: [x['state'], x.get('score')] for x in new}, 'registry_discovered': promoted})
+
+
+# ───────────────────────── stage: gaps ─────────────────────────
+def stage_gaps(ctx):
+    bot: Bot = ctx.env['bot']
+    conn = bot.conn
+    promoted = promote_candidates(conn)
+    res = gaps.resolve_gaps(conn)
+    cls = gaps.classify_gaps(conn)
+    # entity-driven follow-ups from extractions that have no follow-up yet
+    ext = conn.execute("""SELECT e.*, COALESCE(j.depth,0) depth FROM extraction e JOIN fetch_record f ON f.fetch_id=e.fetch_id LEFT JOIN crawl_job j ON j.job_id=f.job_id
+                          WHERE e.epistemic IN ('claim','fact') AND e.ambiguity IS NULL AND e.label IN ('career','employment_claim')""").fetchall()
+    made = 0
+    seen = set()
+    for e in ext:
+        for j in discover.followup_jobs(conn, bot.seeds, [e], parent_depth=e['depth']):
+            j.pop('source_extraction', None)
+            if j['query'] in seen:
+                continue
+            seen.add(j['query'])
+            made += discover.enqueue(conn, **j, caps=bot.seeds['caps'])
+    conn.commit()
+    return runner.StageResult({'candidates_promoted': promoted, 'gap_resolution': res, 'gap_classes': cls, 'followup_jobs': made})
+
+
+# ───────────────────────── stage: apply / quality ─────────────────────────
+def stage_apply(ctx):
+    bot: Bot = ctx.env['bot']
+    conn = bot.conn
+    t = _tier_of(conn)
+    return runner.StageResult({'affiliation': apply_mod.apply_affiliation(conn, tier_of=t), 'status': apply_mod.apply_status(conn, tier_of=t)})
+
+
+def stage_quality(ctx):
+    from .scoreboard import scoreboard
+    bot: Bot = ctx.env['bot']
+    conn = bot.conn
+    bad = conn.execute("SELECT COUNT(*) FROM claim WHERE created_by LIKE 'collect:%' AND status IN ('verified','ai_inference')").fetchone()[0]
+    if bad:
+        raise runner.NonRetryable(f'{bad} bot-created claims carry verified/ai_inference status: bot may only write source_claim/unverified')
+    open_alerts = conn.execute("SELECT COUNT(*) FROM extractor_alert WHERE state='open'").fetchone()[0]
+    return runner.StageResult({'open_extractor_alerts': open_alerts, 'scoreboard': scoreboard(conn, bot)})
+
+
+def _logged(fn):
+    def w(ctx):
+        try:
+            return fn(ctx)
+        except (runner.CostCapExceeded, runner.NonRetryable):
+            raise
+        except Exception:
+            import sys
+            import traceback
+            traceback.print_exc(file=sys.stderr)       # the Daemon records the short error; the traceback goes to the log
+            raise
+    w.__name__ = fn.__name__
+    return w
+
+
+_H = {'plan': stage_plan, 'fetch': stage_fetch, 'extract': stage_extract, 'evaluate': stage_evaluate, 'gaps': stage_gaps, 'apply': stage_apply, 'quality': stage_quality}
+HANDLERS = {k: _logged(v) for k, v in _H.items()}
+
+
+def run_cycle(bot: Bot, resume: bool = True, cost_cap: float | None = None, trigger: str = 'manual') -> dict:
+    cfg = {'lock_name': 'kg-collect', 'daemon_name': 'kg-collect', 'cost_cap_units': cost_cap or bot.units * 1.3, 'unit_costs': UNIT_COSTS, 'max_attempts': 2, 'backoff_base_sec': 0.0, 'backoff_max_sec': 0.0}
+    d = runner.Daemon(bot.conn, HANDLERS, cfg, env={'bot': bot}, stages=STAGES, sleep=lambda s: None)
+    rep = d.run(trigger=trigger, resume=resume)
+    if rep.get('run_id'):
+        rep['outputs'] = {r['stage']: json.loads(r['output_json']) for r in bot.conn.execute('SELECT stage, output_json FROM stage_checkpoint WHERE run_id=? AND output_json IS NOT NULL', (rep['run_id'],))}
+    return rep

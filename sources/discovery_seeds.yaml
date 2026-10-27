@@ -1,0 +1,46 @@
+# Discovery configuration for the active collection bot (kg_collect). Human-edited; the bot never rewrites this file.
+version: "2026-10-27.1"
+
+keyword_search:
+  endpoint: "https://www.bing.com/news/search?format=rss&setlang=ko&q={q}"   # same lead source as crawler/crawl.py (RSS, not scraping HTML)
+  keywords: [오픈, 이전, 폐업, 출신, 수셰프, 헤드셰프]
+  years_back: 1                    # current year and N previous
+  keyword_weight: {폐업: 1.0, 이전: 0.95, 오픈: 0.9, 수셰프: 0.8, 헤드셰프: 0.8, 출신: 0.7}
+
+directories:
+  - id: wikipedia_ko_bw_chef
+    url: "https://ko.wikipedia.org/wiki/%ED%9D%91%EB%B0%B1%EC%9A%94%EB%A6%AC%EC%82%AC:_%EC%9A%94%EB%A6%AC_%EA%B3%84%EA%B8%89_%EC%A0%84%EC%9F%81"
+    kind: reference
+    note: "chef/restaurant roster of a public TV competition; reference tier (not independent for 'verified')"
+  - id: wikipedia_ko_michelin
+    url: "https://ko.wikipedia.org/wiki/%EB%AF%B8%EC%89%90%EB%A6%B0_%EA%B0%80%EC%9D%B4%EB%93%9C"
+    kind: reference
+  - id: lotte_hotels_dining
+    url: "https://www.lottehotel.com/seoul-hotel/ko/dining.html"
+    kind: official_directory
+    browser: true                  # JS shell (renders 'Loading...'); rendered by a headless browser ONLY because the page is dynamic and robots allows it
+  - id: michelin_kr_selection
+    url: "https://guide.michelin.com/kr/ko/selection/south-korea/restaurants"
+    kind: official_directory
+    policy: manual_only            # robots.txt / legal notice forbids automated browsing: recorded as inaccessible, never fetched
+
+feeds:
+  - {url: "https://www.hotelrestaurant.co.kr/rss/allArticle.xml", kind: rss}
+
+sitemaps:
+  - {url: "https://www.hotelrestaurant.co.kr/sitemap.xml", lookback_days: 45}
+  - {url: "https://www.foodnews.news/sitemap.xml", lookback_days: 45}
+  - {url: "https://bakerynews.co.kr/sitemap.xml", lookback_days: 45}
+
+caps:
+  max_depth: 2
+  relevance_floor: 0.30
+  max_official_subpages: 6
+  max_followups_per_extraction: 3
+  max_queued_per_pool: {discovery: 400, backfill: 400, refresh: 200}
+  pagination_max_pages: 3
+
+official_chain:
+  subpage_hints: [about, story, chef, menu, news, press, notice, history, 소개, 메뉴, 셰프, 스토리, 공지]
+  sns_hosts: [instagram.com, facebook.com, youtube.com, blog.naver.com, naver.me, tiktok.com, x.com, twitter.com]
+  booking_hosts: [catchtable.co.kr, catchtable.net, tabling.co.kr, resy.com, opentable.com, toasttab.com, tock.com]
