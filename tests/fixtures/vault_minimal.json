@@ -1,0 +1,21 @@
+{
+  "summary": {},
+  "records": [
+    {"record_id": "t:1", "url": "https://press.example.com/n1", "title": "가상식당2 폐업", "source_host": "press.example.com", "source_tier": "press",
+     "published_at": "2026-10-01", "collected_at": "2026-10-26", "target_id": "r2", "kind": "closure",
+     "extracted_facts": {"closure": "2026-09-30"}, "evidence_locator": {"paragraph_idx": 1, "char_start": 10, "char_end": 40, "quote": "9월 30일자로 영업을 종료한다"}},
+    {"record_id": "t:2", "url": "https://official.example.com/notice", "title": "공지", "source_host": "official.example.com", "source_tier": "official",
+     "published_at": "2026-10-02", "collected_at": "2026-10-26", "target_id": "r2", "kind": "closure",
+     "extracted_facts": {"closure": "2026-09-30"}, "evidence_locator": {"quote": "영업 종료 안내"}},
+    {"record_id": "t:3", "url": "https://press.example.com/n3", "title": "이동", "source_host": "press.example.com", "source_tier": "press",
+     "published_at": "2026-10-03", "collected_at": "2026-10-26", "target_id": "r1", "kind": "chef_move",
+     "extracted_facts": {"move": {"chef_name": "테스트셰프C", "origin_kitchen": "ka", "to_target_id": "r1", "effective_date": "2026-10-10", "role_text": "총괄"}},
+     "evidence_locator": {"quote": "테스트셰프C가 가상식당1 총괄로 합류한다"}},
+    {"record_id": "t:4", "url": "https://blog.example.com/x", "title": "추정", "source_host": "blog.example.com", "source_tier": "specialist_blog",
+     "published_at": "2026-10-04", "collected_at": "2026-10-26", "target_id": "r1", "kind": "lineage",
+     "extracted_facts": {"chef": "테스트셰프B", "origin_kitchen": "kb", "role": "헤드 셰프"}, "evidence_locator": {"quote": "블로그 요약"}},
+    {"record_id": "t:5", "url": "https://press.example.com/n5", "title": "모르는 셰프", "source_host": "press.example.com", "source_tier": "press",
+     "published_at": "2026-10-05", "collected_at": "2026-10-26", "target_id": "r1", "kind": "lineage",
+     "extracted_facts": {"chef": "없는셰프", "origin_kitchen": "ka", "role": "수셰프"}, "evidence_locator": {"quote": "없는셰프는 키친A 출신"}}
+  ]
+}
