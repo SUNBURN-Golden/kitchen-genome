@@ -67,7 +67,7 @@ def plan(conn, total_units: float, now: dt.datetime | None = None, max_attempts:
     now = now or dt.datetime.now(dt.timezone.utc)
     iso = now.strftime('%Y-%m-%dT%H:%M:%SZ')
     budgets = {p: total_units * max(SHARES[p], DISCOVERY_RESERVED if p == 'discovery' else 0) for p in SHARES}
-    scale = total_units / sum(budgets.values())
+    scale = total_units / sum(budgets.values()) if total_units > 0 else 0.0
     budgets = {p: b * scale for p, b in budgets.items()}
     queued = conn.execute("SELECT * FROM crawl_job WHERE state='queued' AND (not_before IS NULL OR not_before<=?) AND attempts<?", (iso, max_attempts)).fetchall()
     ranked: dict = {p: [] for p in SHARES}

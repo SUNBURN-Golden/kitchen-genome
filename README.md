@@ -69,7 +69,7 @@ The asset-only deploy (`upload_assets.py` + `deploy_kitchengenome.js`) does **no
 
 ## 데이터 기반 (Phase 1) / Data foundation
 서비스 5종을 위한 질문 → 온톨로지 → 수집·검증 → 상태 추적 기반. 프런트엔드·`data/seed.json`·사이트 배포와는 별개입니다. / Question → ontology → collection/verification → state-tracking foundation; independent of the frontend, `data/seed.json` and site deploys.
-- 문서 / docs: [`docs/data/QUESTIONS.md`](docs/data/QUESTIONS.md) · [`ONTOLOGY.md`](docs/data/ONTOLOGY.md) · [`SOURCES.md`](docs/data/SOURCES.md) · [`DAEMON.md`](docs/data/DAEMON.md)
+- 문서 / docs: [`docs/data/QUESTIONS.md`](docs/data/QUESTIONS.md) · [`ONTOLOGY.md`](docs/data/ONTOLOGY.md) · [`SOURCES.md`](docs/data/SOURCES.md) · [`DAEMON.md`](docs/data/DAEMON.md) · [`COLLECTION_BOT.md`](docs/data/COLLECTION_BOT.md)
 - 스키마 / schema: `schema/migrations/*.sql` (SQLite·D1 호환), 출처 레지스트리 `sources/registry.yaml`, 데몬 `daemon/kg_daemon/` (`pip install -r daemon/requirements.txt`)
 - 서비스 DB와 raw store는 git에 올리지 않습니다(`data_store/`). / The service DB and raw store are git-ignored.
 - 인스타그램은 필수 후보 발견 출처지만, 체크포인트가 뜨면 **정지**하고 우회(위장·계정 교체·프록시)는 구현하지 않습니다. 현재 정지 중. / Instagram pauses on checkpoint; no evasion is implemented. Currently paused.
