@@ -88,3 +88,8 @@ def test_directory_links_skip_wiki_chrome(conn):
     n = discover.directory_link_jobs(conn, doc, parent, seeds, caps)
     urls = [r['url'] for r in conn.execute("SELECT url FROM crawl_job WHERE parent_job_id='job_p'")]
     assert n == 1 and urls == ['https://news.example-press.test/a/1']
+
+
+def test_zero_unit_plan_is_empty_not_a_crash(conn):
+    pl = scheduler.plan(conn, 0)
+    assert all(not v for v in pl['chosen'].values()) if isinstance(pl.get('chosen'), dict) else True

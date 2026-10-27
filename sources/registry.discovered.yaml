@@ -1,0 +1,265 @@
+# MACHINE-WRITTEN by the source evaluator. Do not edit by hand: promoted domains only; curated sources live in registry.yaml.
+generated_by: kg_collect.evaluate.grow_registry
+sources:
+  disc_bntnews_co_kr:
+    adapter: kg_collect
+    collect_permission: allowed_with_limits
+    collectible_fields:
+    - chef
+    - restaurant
+    - origin_kitchen
+    - opening
+    - closure
+    - relocation
+    - rename
+    evaluation:
+      evaluated_at: '2026-10-27T07:18:10Z'
+      extractability: 0.5
+      novelty: 1.0
+      originality: 1.0
+      relevance: 0.75
+      score: 0.8
+    fulltext_allowed: false
+    kind: press
+    name: 'Discovered: bntnews.co.kr'
+    pause_on:
+    - http_429
+    - http_403
+    - http_503
+    - robots_disallow
+    refresh_cadence: weekly
+    retention_days: 90
+    role: fact_source
+    tier: press
+    unsupported_scope:
+    - login-walled pages
+    - full article text (short quotes + structured facts only)
+  disc_dailian_co_kr:
+    adapter: kg_collect
+    collect_permission: allowed_with_limits
+    collectible_fields:
+    - chef
+    - restaurant
+    - origin_kitchen
+    - opening
+    - closure
+    - relocation
+    - rename
+    evaluation:
+      evaluated_at: '2026-10-27T07:18:14Z'
+      extractability: 0.5
+      novelty: 0.33
+      originality: 1.0
+      relevance: 0.5
+      score: 0.592
+    fulltext_allowed: false
+    kind: press
+    name: 'Discovered: dailian.co.kr'
+    pause_on:
+    - http_429
+    - http_403
+    - http_503
+    - robots_disallow
+    refresh_cadence: weekly
+    retention_days: 90
+    role: fact_source
+    tier: press
+    unsupported_scope:
+    - login-walled pages
+    - full article text (short quotes + structured facts only)
+  disc_fnnews_com:
+    adapter: kg_collect
+    collect_permission: allowed_with_limits
+    collectible_fields:
+    - chef
+    - restaurant
+    - origin_kitchen
+    - opening
+    - closure
+    - relocation
+    - rename
+    evaluation:
+      evaluated_at: '2026-10-27T07:18:28Z'
+      extractability: 0.33
+      novelty: 0.5
+      originality: 1.0
+      relevance: 0.33
+      score: 0.533
+    fulltext_allowed: false
+    kind: press
+    name: 'Discovered: fnnews.com'
+    pause_on:
+    - http_429
+    - http_403
+    - http_503
+    - robots_disallow
+    refresh_cadence: weekly
+    retention_days: 90
+    role: fact_source
+    tier: press
+    unsupported_scope:
+    - login-walled pages
+    - full article text (short quotes + structured facts only)
+  disc_frame_less_co_kr:
+    adapter: kg_collect
+    collect_permission: allowed_with_limits
+    collectible_fields:
+    - chef
+    - restaurant
+    - origin_kitchen
+    - opening
+    - closure
+    - relocation
+    - rename
+    evaluation:
+      evaluated_at: '2026-10-27T07:18:33Z'
+      extractability: 0.5
+      novelty: 1.0
+      originality: 1.0
+      relevance: 0.5
+      score: 0.725
+    fulltext_allowed: false
+    kind: press
+    name: 'Discovered: frame-less.co.kr'
+    pause_on:
+    - http_429
+    - http_403
+    - http_503
+    - robots_disallow
+    refresh_cadence: weekly
+    retention_days: 90
+    role: fact_source
+    tier: press
+    unsupported_scope:
+    - login-walled pages
+    - full article text (short quotes + structured facts only)
+  disc_ko_wikipedia_org:
+    adapter: kg_collect
+    collect_permission: allowed_with_limits
+    collectible_fields:
+    - title
+    - url
+    - published_at
+    - short_quote
+    evaluation:
+      evaluated_at: '2026-10-27T07:18:52Z'
+      extractability: 0.5
+      novelty: 1.0
+      originality: 1.0
+      relevance: 1.0
+      score: 0.875
+    fulltext_allowed: false
+    kind: community
+    name: 'Discovered: ko.wikipedia.org'
+    pause_on:
+    - http_429
+    - http_403
+    - http_503
+    - robots_disallow
+    refresh_cadence: weekly
+    retention_days: 30
+    role: discovery
+    tier: specialist_blog
+    unsupported_scope:
+    - login-walled pages
+    - full article text (short quotes + structured facts only)
+  disc_news_jkn_co_kr:
+    adapter: kg_collect
+    collect_permission: allowed_with_limits
+    collectible_fields:
+    - chef
+    - restaurant
+    - origin_kitchen
+    - opening
+    - closure
+    - relocation
+    - rename
+    evaluation:
+      evaluated_at: '2026-10-27T07:19:09Z'
+      extractability: 0.4
+      novelty: 0.36
+      originality: 1.0
+      relevance: 0.4
+      score: 0.543
+    fulltext_allowed: false
+    kind: press
+    name: 'Discovered: news.jkn.co.kr'
+    pause_on:
+    - http_429
+    - http_403
+    - http_503
+    - robots_disallow
+    refresh_cadence: weekly
+    retention_days: 90
+    role: fact_source
+    tier: press
+    unsupported_scope:
+    - login-walled pages
+    - full article text (short quotes + structured facts only)
+  disc_sports_khan_co_kr:
+    adapter: kg_collect
+    collect_permission: allowed_with_limits
+    collectible_fields:
+    - chef
+    - restaurant
+    - origin_kitchen
+    - opening
+    - closure
+    - relocation
+    - rename
+    evaluation:
+      evaluated_at: '2026-10-27T07:19:16Z'
+      extractability: 0.12
+      novelty: 0.5
+      originality: 1.0
+      relevance: 0.5
+      score: 0.531
+    fulltext_allowed: false
+    kind: press
+    name: 'Discovered: sports.khan.co.kr'
+    pause_on:
+    - http_429
+    - http_403
+    - http_503
+    - robots_disallow
+    refresh_cadence: weekly
+    retention_days: 90
+    role: fact_source
+    tier: press
+    unsupported_scope:
+    - login-walled pages
+    - full article text (short quotes + structured facts only)
+  disc_wikitree_co_kr:
+    adapter: kg_collect
+    collect_permission: allowed_with_limits
+    collectible_fields:
+    - chef
+    - restaurant
+    - origin_kitchen
+    - opening
+    - closure
+    - relocation
+    - rename
+    evaluation:
+      evaluated_at: '2026-10-27T07:19:19Z'
+      extractability: 0.5
+      novelty: 0
+      originality: 1.0
+      relevance: 0.5
+      score: 0.525
+    fulltext_allowed: false
+    kind: press
+    name: 'Discovered: wikitree.co.kr'
+    pause_on:
+    - http_429
+    - http_403
+    - http_503
+    - robots_disallow
+    refresh_cadence: weekly
+    retention_days: 90
+    role: fact_source
+    tier: press
+    unsupported_scope:
+    - login-walled pages
+    - full article text (short quotes + structured facts only)
+version: 2026-10-27.discovered
