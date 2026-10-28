@@ -52,3 +52,28 @@ PYTHONPATH=daemon python3 -m kg_collect --db data_store/kg_service.db gold <file
 - Instagram은 커넥터: `crawler/out/ig_blocked.flag`가 있으면 일시정지, 우회·계정전환·프록시 없음. MICHELIN은 `manual_only`.
 - `gold_real.json`(58문장, git 밖)은 같은 표본으로 튜닝했으므로 after 수치는 **in-sample**(튜닝 전: P 0.639 / R 0.676).
 - 변화 지연(change latency)은 14일 이내 기사에만 의미가 있고, 실측에서는 아직 0건.
+
+## Phase 3 (2026-10-28): 공식 사이트·예약 페이지, held-out, 후보 검토, 일일 실행
+
+PR: #42 (profile_fact/official_site schema + official/booking extractors), #43 (공식 사이트 자동 발견: seed·기사 링크·도메인 probe 검증),
+#44 (후보 검토 + 약어/기관 필터 → 'CIA' 거부), #45/#46 (daily_pipeline.sh에 non-fatal 수집 1회), #47 (영문 셰프명 헤드라인 오추출 수정 + held-out 집계).
+
+**예약 플랫폼 (robots 실측)**: app.catchtable.co.kr `Disallow: /` (검색엔진만 허용), m.place/pcmap.place.naver.com `Disallow: /`, opentable `Disallow: /`,
+exploretock Cloudflare 403. → 추출기(`booking.py`)는 있지만 이 플랫폼들은 **수집하지 않는다**(우회·검색봇 사칭 없음). 해당 gap은 `inaccessible`로 분류.
+
+**실측 before → after (cycle 1–7 → 1–10, 실제 웹)**
+
+| 지표 | before (phase 2 끝) | after (cycle 10) |
+|---|---|---|
+| required-field coverage | 0.5921 | **0.6009** (initial 0.5877) |
+| gap 해결(증거 있음) | 1 / 94 | **3 / 94** (2개는 공식 사이트 JSON-LD fact) |
+| 검증된 공식 사이트 | 0 | 3 (seed 2, probe 1) |
+| profile facts (official, 정리 후) | 0 | address 3 · chef 3 · status 3 |
+| 신규 valid source (현재 promoted) | 8 | 6 (fnnews·wikitree 재평가로 강등) / new hosts seen 64→94 |
+| 후보 target | 5 (CIA 포함) | 4 검토 대기, CIA 거부 |
+| units spent | 562 | 760 |
+| change latency | 0 changes | 0 changes (일일 실행으로 누적 예정) |
+
+**정확도**: in-sample real gold P 1.0 / R 0.941 (튜닝셋). **held-out** (cycle 8–10 문서 30문장, 17 항목, 규칙 동결 후 수집, 작성자 단독 라벨):
+**P 0.667 / R 0.353 / F1 0.462**, epistemic 1.0. 과적합 확인 — 영문 헤드라인, '팝업 오픈'(collab로 오분류), '현업 셰프 + 식당' 병기 누락이 주 원인.
+held-out은 튜닝에 쓰지 않았다(다음 개선 후 새 held-out 필요). 공식 사이트 chef 추출은 7개 중 2개만 정답이어서 #47로 수정(사후 판정, 블라인드 아님).

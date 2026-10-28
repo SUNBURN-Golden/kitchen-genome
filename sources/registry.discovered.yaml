@@ -13,12 +13,12 @@ sources:
     - relocation
     - rename
     evaluation:
-      evaluated_at: '2026-10-27T07:18:10Z'
-      extractability: 0.5
+      evaluated_at: '2026-10-28T01:07:19Z'
+      extractability: 0.03
       novelty: 1.0
       originality: 1.0
-      relevance: 0.75
-      score: 0.8
+      relevance: 0.99
+      score: 0.753
     fulltext_allowed: false
     kind: press
     name: 'Discovered: bntnews.co.kr'
@@ -46,48 +46,15 @@ sources:
     - relocation
     - rename
     evaluation:
-      evaluated_at: '2026-10-27T07:18:14Z'
-      extractability: 0.5
-      novelty: 0.33
+      evaluated_at: '2026-10-28T01:07:30Z'
+      extractability: 0.67
+      novelty: 0.38
       originality: 1.0
-      relevance: 0.5
-      score: 0.592
+      relevance: 0.67
+      score: 0.692
     fulltext_allowed: false
     kind: press
     name: 'Discovered: dailian.co.kr'
-    pause_on:
-    - http_429
-    - http_403
-    - http_503
-    - robots_disallow
-    refresh_cadence: weekly
-    retention_days: 90
-    role: fact_source
-    tier: press
-    unsupported_scope:
-    - login-walled pages
-    - full article text (short quotes + structured facts only)
-  disc_fnnews_com:
-    adapter: kg_collect
-    collect_permission: allowed_with_limits
-    collectible_fields:
-    - chef
-    - restaurant
-    - origin_kitchen
-    - opening
-    - closure
-    - relocation
-    - rename
-    evaluation:
-      evaluated_at: '2026-10-27T07:18:28Z'
-      extractability: 0.33
-      novelty: 0.5
-      originality: 1.0
-      relevance: 0.33
-      score: 0.533
-    fulltext_allowed: false
-    kind: press
-    name: 'Discovered: fnnews.com'
     pause_on:
     - http_429
     - http_403
@@ -112,12 +79,12 @@ sources:
     - relocation
     - rename
     evaluation:
-      evaluated_at: '2026-10-27T07:18:33Z'
-      extractability: 0.5
+      evaluated_at: '2026-10-28T01:07:48Z'
+      extractability: 0.33
       novelty: 1.0
       originality: 1.0
-      relevance: 0.5
-      score: 0.725
+      relevance: 0.33
+      score: 0.633
     fulltext_allowed: false
     kind: press
     name: 'Discovered: frame-less.co.kr'
@@ -142,7 +109,7 @@ sources:
     - published_at
     - short_quote
     evaluation:
-      evaluated_at: '2026-10-27T07:18:52Z'
+      evaluated_at: '2026-10-28T01:08:08Z'
       extractability: 0.5
       novelty: 1.0
       originality: 1.0
@@ -175,12 +142,12 @@ sources:
     - relocation
     - rename
     evaluation:
-      evaluated_at: '2026-10-27T07:19:09Z'
-      extractability: 0.4
+      evaluated_at: '2026-10-28T01:08:26Z'
+      extractability: 0.33
       novelty: 0.36
       originality: 1.0
-      relevance: 0.4
-      score: 0.543
+      relevance: 0.33
+      score: 0.506
     fulltext_allowed: false
     kind: press
     name: 'Discovered: news.jkn.co.kr'
@@ -208,7 +175,7 @@ sources:
     - relocation
     - rename
     evaluation:
-      evaluated_at: '2026-10-27T07:19:16Z'
+      evaluated_at: '2026-10-28T01:08:35Z'
       extractability: 0.12
       novelty: 0.5
       originality: 1.0
@@ -229,37 +196,4 @@ sources:
     unsupported_scope:
     - login-walled pages
     - full article text (short quotes + structured facts only)
-  disc_wikitree_co_kr:
-    adapter: kg_collect
-    collect_permission: allowed_with_limits
-    collectible_fields:
-    - chef
-    - restaurant
-    - origin_kitchen
-    - opening
-    - closure
-    - relocation
-    - rename
-    evaluation:
-      evaluated_at: '2026-10-27T07:19:19Z'
-      extractability: 0.5
-      novelty: 0
-      originality: 1.0
-      relevance: 0.5
-      score: 0.525
-    fulltext_allowed: false
-    kind: press
-    name: 'Discovered: wikitree.co.kr'
-    pause_on:
-    - http_429
-    - http_403
-    - http_503
-    - robots_disallow
-    refresh_cadence: weekly
-    retention_days: 90
-    role: fact_source
-    tier: press
-    unsupported_scope:
-    - login-walled pages
-    - full article text (short quotes + structured facts only)
-version: 2026-10-27.discovered
+version: 2026-10-28.discovered
