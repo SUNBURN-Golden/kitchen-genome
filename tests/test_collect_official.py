@@ -98,3 +98,12 @@ def test_probe_candidates_and_article_link_candidates():
     links = [('https://www.atomixnyc.com/reserve', 'Atomix', []), ('https://www.instagram.com/atomixnyc', 'IG', []), ('https://news.example.com/a', 'x', [])]
     got = official.article_link_candidates(links, '뉴욕 아토믹스(Atomix)는…', {'name_ko': '아토믹스', 'name_en': 'Atomix'}, banned=('instagram.com',))
     assert got == ['https://atomixnyc.com/']
+
+
+def test_en_chef_names_from_headlines_are_cleaned_or_rejected():
+    from kg_collect.official import clean_en_name
+    assert clean_en_name('Eunji Lee Opens') == 'Eunji Lee'
+    assert clean_en_name('Eunji Lee Creates') == 'Eunji Lee'
+    assert clean_en_name('Matthieu Lobry') == 'Matthieu Lobry'
+    for junk in ('James Beard Awards', 'Makes Realistic Corn', 'Debuts Her Own', 'Jungsik Pastry'):
+        assert clean_en_name(junk) is None

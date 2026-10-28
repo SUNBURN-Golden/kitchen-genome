@@ -24,6 +24,25 @@ CHEF_EN_A = re.compile(r'\b(?:Executive\s+|Head\s+|Owner\s+|Founding\s+)?Chef(?:
 CHEF_EN_B = re.compile(r'\b([A-Z][a-z]+(?:[ -][A-Z][a-z]+){1,2}),?\s+(?:is\s+the\s+|our\s+)?(?:Executive|Head|Owner|Founding)\s+Chef\b')
 CHEF_KO_A = re.compile(r'(?:오너|총괄|헤드|수석|대표|주방장\s*겸)\s*셰프\s*[:：]?\s*([가-힣]{2,4})(?![가-힣])')
 CHEF_KO_B = re.compile(r'([가-힣]{2,4})\s+(?:오너|총괄|헤드|수석|대표)\s*셰프')
+# Headline-style text ('Chef Eunji Lee Opens Lysée', 'Pastry Chef Makes Realistic Corn', 'Chef James Beard Awards') made the capitalised-run
+# pattern swallow verbs and titles: trailing verbs/fillers are cut, and runs containing a non-name word or starting with one are rejected.
+EN_NOT_NAME = {'Awards', 'Award', 'Prize', 'Guide', 'Restaurant', 'Restaurants', 'Bakery', 'Kitchen', 'Menu', 'Dining', 'Best', 'Star', 'Stars', 'Michelin',
+               'Her', 'His', 'Their', 'Own', 'New', 'Our', 'The', 'Of', 'And', 'Pastry', 'Executive', 'Head', 'Sous', 'Team', 'Table'}
+EN_VERBISH = re.compile(r'^(?:[A-Z][a-z]+(?:s|ed|ing))$|^(?:Makes|Opens|Creates|Debuts|Brings|Returns|Leads|Takes|Joins|Launches|Is|Was|Will|To|At|In|On|For|With)$')
+
+
+def clean_en_name(nm: str):
+    toks = nm.strip().split()
+    if any(t in EN_NOT_NAME for t in toks):
+        return None
+    while len(toks) > 2 and EN_VERBISH.match(toks[-1]):
+        toks.pop()                                     # 'Eunji Lee Creates' -> 'Eunji Lee'
+    if len(toks) < 2 or EN_VERBISH.match(toks[-1]) and toks[-1] not in {'Lees', 'Jones', 'Andrews', 'Edwards', 'Williams', 'Roberts'} \
+            or toks[0] in {'Makes', 'Opens', 'Creates', 'Debuts', 'Brings', 'Returns', 'Leads', 'Takes', 'Joins', 'Launches', 'Is', 'Was', 'Will', 'To', 'At', 'In', 'On', 'For', 'With'}:
+        return None
+    return ' '.join(toks)
+
+
 NOT_PERSON_EN = {'The Chef', 'Our Chef', 'Tasting Menu', 'New York', 'Michelin Guide', 'Chef Table', 'Private Dining'}
 ADDR_KO = re.compile(r'(?:서울(?:특별시|시)?|부산(?:광역시)?|경기도?|울산(?:광역시)?|제주(?:특별자치도)?|인천(?:광역시)?|대구(?:광역시)?|대전(?:광역시)?|광주(?:광역시)?)\s+'
                      r'[가-힣]+(?:구|시|군)\s+(?:[가-힣]+(?:동|읍|면)\s+)?[가-힣0-9]+(?:로|길)\s*\d+(?:-\d+)?(?:\s*,?\s*(?:지하\s*)?\d+\s*층)?')
@@ -140,8 +159,8 @@ def extract_profile(text: str, jsonld: list | None, *, target: dict, host: str, 
         add('opened', m.group(2) + (f'-{mo:02d}' if mo else ''), _q(t, m.start(), m.end()), 'rule:open_en')
     for rx, tag in ((CHEF_EN_A, 'rule:chef_en'), (CHEF_EN_B, 'rule:chef_en')):
         for m in rx.finditer(t):
-            nm = m.group(1).strip()
-            if nm in NOT_PERSON_EN or names_match(nm, target):
+            nm = clean_en_name(m.group(1))
+            if not nm or nm in NOT_PERSON_EN or names_match(nm, target):
                 continue
             add('chef', nm, _q(t, m.start(), m.end()), tag)
     for rx in (CHEF_KO_A, CHEF_KO_B):
