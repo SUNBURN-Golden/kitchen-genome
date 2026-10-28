@@ -72,6 +72,19 @@ def _young(published_at, today) -> bool:
         return False
 
 
+def effective_date(x):
+    """Date stated in the evidence text (year inferred from publication only for '10월 3일'-style dates). Never the fetch date."""
+    if not x.get('date_text'):
+        return None
+    try:
+        from kg_collect.extract import DATE_RE, iso_from_dateish
+    except ImportError:  # pragma: no cover
+        return None
+    m = DATE_RE.search(x['date_text'])
+    iso, _note = iso_from_dateish(m, (x.get('published_at') or '')[:4] or None) if m else (None, None)
+    return iso
+
+
 def candidates(body, today) -> list[tuple]:
     """-> [(fact_type, payload, locator, quote)] from one collector extraction. Conservative by design."""
     x, ch, rs, org = body['collect'], body.get('chef'), body.get('restaurant'), body.get('org')
@@ -80,7 +93,7 @@ def candidates(body, today) -> list[tuple]:
     lead = x['epistemic'] in ('unverified', 'inference') or body['tier'] in ('search_lead', 'social_lead')
     base = {'lead_only': lead, 'epistemic': x['epistemic'], 'ambiguity': amb}
     rseed = rs and rs.get('seed_id')
-    eff = x.get('date_iso') if 'date_iso' in x.keys() else None
+    eff = effective_date(x)
     out = []
     if amb in ('negated_statement', 'planned_not_done', 'multiple_chefs_in_sentence', 'no_chef_in_sentence', 'mentor_or_mentee_unclear', 'subject_from_job_context'):
         return [('ambiguous', {**base, 'label': lab}, loc, quote)]

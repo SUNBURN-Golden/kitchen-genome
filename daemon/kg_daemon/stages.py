@@ -350,7 +350,7 @@ def state_history_update(ctx: StageContext) -> StageResult:
             ctx.conn.execute('INSERT OR IGNORE INTO menu_event(menu_event_id,branch_id,kind,title,starts_on,claim_id,created_at) VALUES (?,?,?,?,?,?,?)',
                              (stable_id('mev', c['candidate_id']), c['resolved_branch_id'], kind, (p.get('title') or ft)[:120], p.get('effective_date'), claim, utcnow()))
         elif ft == 'rename':       # recorded as a dated status event carrying the new name; the display name is never auto-changed
-            p = {**p, 'excerpt': f"rename -> {p['new_name']}"[:200]}
+            p = {**p, 'excerpt': f"rename -> {p.get('new_name') or '(new name not extracted)'}"[:200]}
             claim = _apply_status_event(ctx, c, p, 'rename')
         elif ft == 'employment':
             ex = ctx.conn.execute("SELECT employment_id, claim_id, valid_to_kind, state FROM employment WHERE chef_id=? AND branch_id=? AND state<>'rejected' ORDER BY valid_to_kind='open' DESC LIMIT 1", (c['resolved_chef_id'], c['resolved_branch_id'])).fetchone()
@@ -439,8 +439,61 @@ def service_output_recompute(ctx: StageContext) -> StageResult:
                             ON CONFLICT(output_key,subject_id,as_of) DO UPDATE SET payload_json=excluded.payload_json, computed_at=excluded.computed_at, run_id=excluded.run_id""",
                          (b['branch_id'], day, json.dumps(payload, ensure_ascii=False, sort_keys=True), 'source_claim', utcnow(), ctx.run_id))
         n += 1
+    n += _recompute_product_views(ctx, day)
     ctx.conn.commit()
     return StageResult({'outputs_written': n, 'as_of': day})
+
+
+def _upsert_out(ctx, key, subject, day, payload):
+    ctx.conn.execute("""INSERT INTO service_output(output_key,subject_id,as_of,payload_json,min_status,computed_at,run_id) VALUES (?,?,?,?,?,?,?)
+                        ON CONFLICT(output_key,subject_id,as_of) DO UPDATE SET payload_json=excluded.payload_json, computed_at=excluded.computed_at, run_id=excluded.run_id""",
+                     (key, subject, day, json.dumps(payload, ensure_ascii=False, sort_keys=True), 'source_claim', utcnow(), ctx.run_id))
+
+
+def _recompute_product_views(ctx, day) -> int:
+    """Service data the product reads (no frontend here): restaurant_detail, career_map, recommendation_eligibility.
+    All three derive from employments_asof/current_employment, so a verified move (old tenure closed, new opened) flows into every view
+    in the same run, and a closed tenure can never be listed as current."""
+    from .ontology import employments_asof
+    q = ctx.conn.execute
+    n = 0
+    names = {r['chef_id']: r['display_name'] for r in q('SELECT chef_id, display_name FROM chef')}
+    rest_of = {r['branch_id']: (r['restaurant_id'], r['name']) for r in q('SELECT b.branch_id, b.restaurant_id, r.name FROM branch b JOIN restaurant r ON r.restaurant_id=b.restaurant_id')}
+    current_by_branch, past_by_branch = {}, {}
+    for cid, nm in names.items():
+        cur = current_employment(ctx.conn, cid, day)
+        cur_ids = {e['employment_id'] for e in cur}
+        past = []
+        for e in q("""SELECT e.employment_id, e.branch_id, e.employer_label, e.role_text, e.valid_from, e.valid_to, e.valid_to_kind, c.status
+                      FROM employment e JOIN claim c ON c.claim_id=e.claim_id WHERE e.chef_id=? AND e.state<>'rejected' ORDER BY e.valid_from""", (cid,)):
+            if e['employment_id'] in cur_ids or RANK[e['status']] < RANK['source_claim']:
+                continue
+            past.append({'employment_id': e['employment_id'], 'branch_id': e['branch_id'], 'restaurant': rest_of.get(e['branch_id'], (None, e['employer_label']))[1],
+                         'role_text': e['role_text'], 'valid_from': e['valid_from'], 'valid_to': e['valid_to'],
+                         'end': 'known' if e['valid_to_kind'] == 'known' else 'not_stated', 'claim_status': e['status']})
+            past_by_branch.setdefault(e['branch_id'], []).append({'chef_id': cid, 'name': nm, 'valid_to': e['valid_to']})
+        current = [{**e, 'restaurant': rest_of.get(e['branch_id'], (None, e['employer_label']))[1]} for e in cur]
+        for e in cur:
+            current_by_branch.setdefault(e['branch_id'], []).append({'chef_id': cid, 'name': nm, 'role_text': e['role_text'], 'claim_status': e['claim_status'], 'end_pending': e['end_pending']})
+        mentors = [{'mentor_label': m['mentor_label'], 'claim_status': m['status']} for m in q(
+            """SELECT m.mentor_label, c.status FROM mentorship_assertion m JOIN claim c ON c.claim_id=m.claim_id WHERE m.mentee_chef_id=?""", (cid,)) if RANK[m['status']] >= RANK['source_claim']]
+        _upsert_out(ctx, 'career_map', cid, day, {'chef_id': cid, 'name': nm, 'current': current, 'past': past,
+                                                  'mentorship': mentors,       # source-asserted only; co-working / collab events are NOT mentorship
+                                                  'pending_moves': pending_moves(ctx.conn, cid)})
+        n += 1
+    for bid, (rid, rname) in rest_of.items():
+        st = branch_state_asof(ctx.conn, bid, day)
+        events = [dict(r) for r in q("""SELECT m.kind, m.title, m.starts_on, c.status FROM menu_event m JOIN claim c ON c.claim_id=m.claim_id
+                                        WHERE m.branch_id=? AND c.status IN ('verified','source_claim') ORDER BY m.created_at DESC LIMIT 10""", (bid,))]
+        cur = current_by_branch.get(bid, [])
+        _upsert_out(ctx, 'restaurant_detail', bid, day, {'branch_id': bid, 'restaurant': rname, 'state': st['state'], 'current_chefs': cur,
+                                                         'former_chefs': past_by_branch.get(bid, []), 'events': events})
+        eligible = st['state'] in ('open', 'unknown') and bool(cur)
+        _upsert_out(ctx, 'recommendation_eligibility', bid, day, {'branch_id': bid, 'eligible': eligible,
+                                                                  'reason': None if eligible else ('not_open' if st['state'] not in ('open', 'unknown') else 'no_current_chef'),
+                                                                  'chef_ids': [x['chef_id'] for x in cur]})
+        n += 2
+    return n
 
 
 # ───────────── 9. quality check ─────────────
@@ -472,6 +525,13 @@ def run_quality_checks(conn, today: str, stale_days: int = 180) -> dict:
     for r in q("""SELECT e.employment_id FROM employment e JOIN restaurant_status_event s ON s.branch_id=e.branch_id AND s.kind='close' AND s.state='active'
                   WHERE e.valid_to_kind='open' AND e.state='active' AND s.effective_date IS NOT NULL AND s.effective_date <= ?""", today):
         w.append(('open_employment_at_closed_branch', r['employment_id']))
+    for r in q("SELECT subject_id, payload_json FROM service_output WHERE output_key='career_map' AND as_of=?", today):
+        for e in json.loads(r['payload_json'])['current']:
+            row = conn.execute('SELECT state, valid_to_kind, valid_to FROM employment WHERE employment_id=?', (e['employment_id'],)).fetchone()
+            if row and (row['valid_to_kind'] == 'unknown' or (row['valid_to_kind'] == 'known' and row['valid_to'] <= today and not e.get('end_pending'))):
+                v.append(('past_shown_as_current', e['employment_id']))
+    for r in q("SELECT m.mentorship_id FROM mentorship_assertion m JOIN claim c ON c.claim_id=m.claim_id WHERE c.created_by LIKE '%collab%'"):
+        v.append(('collab_materialised_as_mentorship', r['mentorship_id']))
     for r in q("SELECT conflict_id FROM conflict WHERE state='open'"):
         w.append(('open_conflict', r['conflict_id']))
     return {'violations': v, 'warnings': w}

@@ -19,6 +19,8 @@ def main(argv=None) -> int:
     rn = sub.add_parser('run')
     rn.add_argument('--no-resume', action='store_true')
     rn.add_argument('--cost-cap', type=float)
+    rn.add_argument('--collect-db', help='live collector DB (kg_collect extraction table); default: --db itself')
+    rn.add_argument('--today')
     sub.add_parser('status')
     rq = sub.add_parser('requeue')
     rq.add_argument('failure_id')
@@ -35,7 +37,10 @@ def main(argv=None) -> int:
         from .stages import HANDLERS
         cfg = {'cost_cap_units': a.cost_cap} if a.cost_cap else {}
         raw_dir = os.path.join(os.path.dirname(os.path.abspath(a.db)), 'raw')
-        rep = Daemon(conn, HANDLERS, cfg, env={'raw_dir': raw_dir}).run(resume=not a.no_resume)
+        env = {'raw_dir': raw_dir, 'collect_db': a.collect_db or (a.db if a.db != ':memory:' else None)}
+        if a.today:
+            env['today'] = a.today
+        rep = Daemon(conn, HANDLERS, cfg, env=env).run(resume=not a.no_resume)
         print(json.dumps(rep, ensure_ascii=False))
         return 0 if rep['status'] in ('succeeded', 'locked', 'paused_cost_cap', 'paused_source') else 1
     elif a.cmd == 'status':
