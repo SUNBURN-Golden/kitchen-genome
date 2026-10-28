@@ -53,3 +53,18 @@ def test_common_word_restaurant_alias_is_not_a_venue():
     assert not any(g[2] == '온기' for g in got)
     got2 = run("김하늘 셰프는 '온기'에서 근무했다.")
     assert ('career', '김하늘', '온기') in got2
+
+
+def test_relative_and_english_dates():
+    from kg_collect.extract import relative_or_english_date
+    assert relative_or_english_date('지난해 5월 문을 열었다', '2026')[1] == '2025-05'
+    assert relative_or_english_date('올해 문을 열었다', '2026')[1] == '2026'
+    assert relative_or_english_date('opened in March 2024 in Seoul', None)[1] == '2024-03'
+    assert relative_or_english_date('지난해 문을 열었다', None)[1] is None          # no publication date -> no guess
+
+
+def test_bridge_effective_date_uses_tenure_and_relative_dates():
+    from kg_daemon.collect_bridge import effective_date
+    assert effective_date({'label': 'career', 'date_text': None, 'tenure_from': '2019'}) == '2019'
+    assert effective_date({'label': 'opening', 'date_text': '지난해 5월', 'published_at': '2026-03-02'}) == '2025-05'
+    assert effective_date({'label': 'opening', 'date_text': None}) is None

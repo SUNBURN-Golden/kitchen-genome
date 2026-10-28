@@ -51,7 +51,7 @@ def _latency_hours(published: str | None, detected: str):
 
 def apply_affiliation(conn, now: str | None = None, tier_of=lambda host: 'press') -> dict:
     """employment_claim(chef X works at restaurant Y; claim/fact, no ambiguity, both resolved, mapped to service rows) vs the chef's current open employment.
-    Same restaurant => confirmation only. Different => field_history('affiliation') + move_chef(status=unverified -> pending verification)."""
+    Same restaurant => confirmation only. Different => field_history('affiliation') + a review item (candidate move). Tenures are never changed here."""
     now = now or utcnow()
     out = {'checked': 0, 'confirmed': 0, 'changes': 0, 'skipped_unmapped': 0, 'skipped_ambiguous_move': 0, 'already_recorded': 0}
     rows = conn.execute("""SELECT e.*, tc.name_ko chef_name, tr.name_ko rest_name FROM extraction e JOIN target tc ON tc.target_id=e.resolved_chef_target
@@ -78,12 +78,10 @@ def apply_affiliation(conn, now: str | None = None, tier_of=lambda host: 'press'
         src = ensure_source(conn, e['host'], tier_of(e['host']), now)
         evidence = dict(source_id=src, source_url=e['canonical_url'], collected_at=now, quote=e['quote'][:200], locator={'extraction_id': e['extraction_id'], 'span': [e['span_start'], e['span_end']]},
                         published_at=e['published_at'], effective_from=(e['published_at'] or '')[:10] or None)
-        try:
-            mv = ont.move_chef(conn, chef_id=chef_id, effective_date=(pub[:10] or now[:10]), evidence=evidence, status='unverified', created_by=BY,
-                               to_branch_id=branch, role_text=e['role_text'], now=now)
-        except ont.AmbiguousMove:
-            out['skipped_ambiguous_move'] += 1
-            continue
+        # A single collected statement NEVER closes a tenure (and never with the fetch date as the end): the change is recorded and queued as a
+        # candidate move; only the daemon's verified path (official/human source or 2 independent trusted sources, stated date) may move a chef.
+        cl.queue_review(conn, 'move_needs_verification', 'chef', chef_id, {'to_branch_id': branch, 'from': old_val, 'evidence': evidence, 'stated_date': e['date_text']},
+                        dedupe_key=f'move_needs_verification:collect:{e["extraction_id"]}')
         conn.execute("INSERT INTO field_history(subject_id,field,old_value,new_value,old_extraction,new_extraction,published_at,detected_at,latency_hours) VALUES (?,?,?,?,?,?,?,?,?)",
                      (e['resolved_chef_target'], 'affiliation', old_val, e['rest_name'], None, e['extraction_id'], e['published_at'], now, _latency_hours(e['published_at'], now)))
         out['changes'] += 1
@@ -127,5 +125,27 @@ def apply_status(conn, now: str | None = None, tier_of=lambda host: 'press') -> 
                          (e['resolved_restaurant_target'], 'status', 'open', kind, None, e['extraction_id'], e['published_at'], now, _latency_hours(e['published_at'], now)))
             out['history'] += 1
         out['events'] += 1
+    conn.commit()
+    return out
+
+
+def revert_unverified_collect_moves(conn, now: str | None = None, by: str = 'repair:rules-1.4') -> dict:
+    """Undo tenure changes made by the old apply path (a single unverified statement closed the prior employment at the FETCH date).
+    Nothing is deleted: the closed prior row is reopened, rows the move created are marked 'rejected', every change goes to correction_history. Idempotent."""
+    now = now or utcnow()
+    out = {'reopened': 0, 'rejected': 0}
+    bad = [r['claim_id'] for r in conn.execute("SELECT claim_id FROM claim WHERE created_by=? AND note LIKE 'chef move:%' AND status IN ('unverified','ai_inference')", (BY,))]
+    for cid in bad:
+        for r in conn.execute("SELECT * FROM employment WHERE end_claim_id=? AND claim_id NOT IN (%s)" % ','.join('?' * len(bad)), (cid, *bad)).fetchall():
+            conn.execute("UPDATE employment SET state='active', valid_to=NULL, valid_to_precision=NULL, valid_to_kind='open', end_claim_id=NULL WHERE employment_id=?", (r['employment_id'],))
+            conn.execute('INSERT INTO correction_history(table_name,row_id,field,old_value,new_value,reason,corrected_by,corrected_at) VALUES (?,?,?,?,?,?,?,?)',
+                         ('employment', r['employment_id'], 'state/valid_to', f"closed/{r['valid_to']}", 'active/open', 'closed by an unverified single-source move at the fetch date', by, now))
+            out['reopened'] += 1
+        for r in conn.execute("SELECT * FROM employment WHERE claim_id=? AND (state<>'rejected' OR valid_to_kind='open')", (cid,)).fetchall():
+            # a rejected row must not keep an open end (quality invariant open_end_on_inactive_employment)
+            conn.execute("UPDATE employment SET state='rejected', valid_to_kind=CASE WHEN valid_to_kind='open' THEN 'unknown' ELSE valid_to_kind END WHERE employment_id=?", (r['employment_id'],))
+            conn.execute('INSERT INTO correction_history(table_name,row_id,field,old_value,new_value,reason,corrected_by,corrected_at) VALUES (?,?,?,?,?,?,?,?)',
+                         ('employment', r['employment_id'], 'state', r['state'], 'rejected', 'created by an unverified single-source move; kept as a candidate in review', by, now))
+            out['rejected'] += 1
     conn.commit()
     return out

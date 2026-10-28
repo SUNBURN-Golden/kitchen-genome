@@ -96,3 +96,32 @@ def queue_review(conn, reason: str, subject_type: str, subject_id: str | None, p
     conn.execute('INSERT OR IGNORE INTO review_queue(review_id,reason,subject_type,subject_id,payload_json,dedupe_key,created_at) VALUES (?,?,?,?,?,?,?)',
                  (rid, reason, subject_type, subject_id, json.dumps(payload or {}, ensure_ascii=False, sort_keys=True), dedupe_key, now or utcnow()))
     return rid
+
+
+def quote_fingerprint(quote: str | None) -> str:
+    """Wording fingerprint: letters/digits only, lower-cased. Syndicated or reposted articles repeat the same sentence verbatim."""
+    import re
+    return re.sub(r'[^0-9a-z가-힣]', '', (quote or '').lower())[:160]
+
+
+def independent_sources(evidence: list[tuple[str, str | None]]) -> int:
+    """[(url, quote)] -> number of INDEPENDENT sources. Hosts are merged when they carry the same wording (a repost / wire copy of one article
+    counts once); different hosts with different wording count separately. Union-find over hosts linked by a shared fingerprint."""
+    parent: dict = {}
+
+    def find(x):
+        while parent.setdefault(x, x) != x:
+            parent[x] = parent[parent[x]]
+            x = parent[x]
+        return x
+    by_fp: dict = {}
+    for url, quote in evidence:
+        h = host_of(url)
+        find(h)
+        fp = quote_fingerprint(quote)
+        if len(fp) >= 12:
+            if fp in by_fp:
+                parent[find(h)] = find(by_fp[fp])
+            else:
+                by_fp[fp] = h
+    return len({find(h) for h in parent})
