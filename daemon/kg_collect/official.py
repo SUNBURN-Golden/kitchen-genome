@@ -210,3 +210,66 @@ def site_basis_for(conn, target_id: str, host: str, now: str | None = None) -> s
             register_site(conn, target_id, site, 'seed', True, 'seed data site field', now)
         return 'seed'
     return None
+
+
+# ───────── official-site discovery: candidate URLs + strict verification ─────────
+REST_SIGNAL = re.compile(r'reserv|booking|book\s+a\s+table|menu|tasting|dining|restaurant|chef|예약|메뉴|코스|다이닝|레스토랑|셰프|오마카세|omakase', re.I)
+SPAM = re.compile(r'casino|카지노|토토|\bbet(?:ting)?\b|slot|giriş|porn|domain\s+(?:is\s+)?for\s+sale|buy\s+this\s+domain|parked\s+free|hugedomains|sedo|godaddy|under\s+construction', re.I)
+CITY = re.compile(r'seoul|서울|korea|한국|new\s*york|nyc|뉴욕|manhattan|brooklyn|busan|부산|ulsan|울산|gangnam|강남|청담|한남|성수|서초|명동|논현|신사|역삼|북촌|정동', re.I)
+STOP = {'restaurant', 'the', 'and', 'by', 'seoul', 'nyc', 'kr'}
+
+
+def slug(name_en: str | None) -> str | None:
+    if not name_en:
+        return None
+    words = [w for w in re.findall(r'[a-z0-9]+', name_en.lower().replace("'", '')) if w not in STOP]
+    s = ''.join(words)
+    return s if len(s) >= 4 else None
+
+
+def probe_candidates(t) -> list[str]:
+    """Domain guesses for a restaurant's own site. Cheap, polite (one GET each through robots), and ALWAYS verified before use."""
+    import json
+    s = slug(t['name_en'])
+    if not s:
+        return []
+    area = json.loads(t['attrs_json'] or '{}').get('area') or ''
+    nyc = '뉴욕' in area
+    c = ([f'https://{s}nyc.com', f'https://www.{s}nyc.com', f'https://{s}.nyc'] if nyc else []) + [f'https://{s}.com', f'https://www.{s}.co.kr', f'https://{s}.kr', f'https://{s}seoul.com']
+    return c[:5]
+
+
+def verify_site(text: str, title: str, url: str, target: dict) -> tuple[bool, str]:
+    """A guessed or press-linked page counts as the restaurant's own site only if it names the restaurant, looks like a restaurant site,
+    mentions the right city/area, and is not spam/parked."""
+    head = f'{title}\n{(text or "")[:4000]}'
+    if SPAM.search(head):
+        return False, 'spam_or_parked'
+    named = names_match(head, target)
+    s = slug(target.get('name_en'))
+    if not named and s and s in re.sub(r'[^a-z0-9]', '', head.lower()):
+        named = True
+    if not named:
+        return False, 'restaurant_name_absent'
+    if not REST_SIGNAL.search(head):
+        return False, 'no_restaurant_signal'
+    if not CITY.search(head + ' ' + url):
+        return False, 'no_city_or_area'
+    return True, f'names {target.get("name_en") or target.get("name_ko")}; restaurant signal; city/area present'
+
+
+def article_link_candidates(links, text, target, banned=()) -> list[str]:
+    """Outbound links in a press article that look like THE restaurant's site: host contains the restaurant's slug."""
+    s = slug(target.get('name_en'))
+    if not s or not names_match(text or '', target):
+        return []
+    out = []
+    for u, _a, _r in links:
+        h = _host(u)
+        if not h or any(h == b or h.endswith('.' + b) for b in banned):
+            continue
+        if s in re.sub(r'[^a-z0-9]', '', h.split('.')[0] if h.count('.') <= 2 else h):
+            root = f'https://{h}/'
+            if root not in out:
+                out.append(root)
+    return out[:2]

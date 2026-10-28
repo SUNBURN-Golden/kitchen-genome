@@ -246,8 +246,9 @@ def official_chain_jobs(conn, doc, parent_job, seeds, caps) -> dict:
                        state='skipped', error='sns_lead_recorded_only(connector policy: pause on checkpoint, no fetch from this path)', target_id=parent_job.get('target_id')):
                 made['sns_leads'] += 1
         elif any(uh == b or uh.endswith('.' + b) for b in booking):
-            if enqueue(conn, path='official_chain', pool='discovery', url=url, depth=parent_job['depth'] + 1, parent=parent_job['job_id'], relevance=0.5, caps=caps,
-                       state='skipped', error='booking_lead_recorded_only(registry: reservation platforms unsupported)', target_id=parent_job.get('target_id')):
+            # public booking page for THIS restaurant: fetched only through the polite net (robots decides; we never pose as a search engine)
+            if enqueue(conn, path='official_chain', pool='discovery', url=url, query='booking', depth=parent_job['depth'] + 1, parent=parent_job['job_id'], relevance=0.5, caps=caps,
+                       target_id=parent_job.get('target_id'), **({} if parent_job.get('target_id') else {'state': 'skipped', 'error': 'booking_lead_without_target'})):
                 made['booking_leads'] += 1
         elif low.endswith('.pdf'):
             if enqueue(conn, path='attachment', pool='discovery', url=url, depth=parent_job['depth'] + 1, parent=parent_job['job_id'], relevance=0.7, caps=caps, target_id=parent_job.get('target_id')):
@@ -272,3 +273,21 @@ def seed_official_site_jobs(conn) -> list[dict]:
         if site and not re.search(r'instagram|catchtable|facebook|naver', site):
             jobs.append({'path': 'official_chain', 'pool': 'refresh', 'url': site, 'target_id': r['target_id'], 'relevance': 0.85})
     return jobs
+
+
+# ── path 5b: find the restaurant's OWN site (domain probe / press-article link), verified before use ──
+def official_probe_jobs(conn, limit: int = 40) -> list[dict]:
+    """Restaurants with open gaps and no verified official site -> guessed-domain probe jobs (query='probe:probe_verified').
+    Each probe is one polite GET; the page must pass official.verify_site or it is discarded (never used as evidence)."""
+    from . import official
+    jobs = []
+    rows = conn.execute("""SELECT t.* FROM target t WHERE t.kind='restaurant' AND t.status='active'
+                           AND EXISTS (SELECT 1 FROM gap g WHERE g.target_id=t.target_id AND g.state='open')
+                           AND NOT EXISTS (SELECT 1 FROM official_site o WHERE o.target_id=t.target_id AND o.verified=1)
+                           ORDER BY t.name_en""").fetchall()
+    for t in rows:
+        for u in official.probe_candidates(t):
+            jobs.append({'path': 'official_chain', 'pool': 'discovery', 'url': u, 'query': 'probe:probe_verified', 'target_id': t['target_id'], 'relevance': 0.55})
+        if len(jobs) >= limit:
+            break
+    return jobs[:limit]

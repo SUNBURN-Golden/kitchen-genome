@@ -80,3 +80,21 @@ def test_profile_facts_fill_gaps_with_evidence_and_official_outranks_press():
     assert got['opened'][0] == '2018' and got['opened'][1].startswith('pf_')
     assert got['status_recent'][0] == 'operating'
     assert gaps.resolve_gaps(c, now) == {'resolved': 0, 'conflict': 0}          # idempotent
+
+
+def test_official_site_verification_rejects_spam_wrong_names_and_wrong_city():
+    t = {'target_id': 'x', 'name_ko': '가온', 'name_en': 'Gaon'}
+    assert official.verify_site('Vdcasino Giriş bonus slot', 'Vdcasino - Vdcasino Giriş', 'https://gaonkr.com', t) == (False, 'spam_or_parked')
+    assert not official.verify_site('Welcome to Atoboy, reservations', 'Atoboy', 'https://x.com', t)[0]
+    assert not official.verify_site('Gaon Dental clinic', 'Gaon', 'https://gaon.com', t)[0]
+    assert not official.verify_site('Gaon restaurant menu, Paris 75008', 'Gaon', 'https://gaon.fr', t)[0]          # wrong city
+    assert official.verify_site('Gaon, Korean fine dining in Seoul. Reservations open.', 'Gaon', 'https://gaon.kr', t)[0]
+
+
+def test_probe_candidates_and_article_link_candidates():
+    row = {'name_en': 'Atomix', 'attrs_json': json.dumps({'area': '뉴욕'})}
+    assert official.probe_candidates(row)[0] == 'https://atomixnyc.com'
+    assert official.slug('Restaurant Allen') == 'allen' and official.slug('ON') is None
+    links = [('https://www.atomixnyc.com/reserve', 'Atomix', []), ('https://www.instagram.com/atomixnyc', 'IG', []), ('https://news.example.com/a', 'x', [])]
+    got = official.article_link_candidates(links, '뉴욕 아토믹스(Atomix)는…', {'name_ko': '아토믹스', 'name_en': 'Atomix'}, banned=('instagram.com',))
+    assert got == ['https://atomixnyc.com/']
