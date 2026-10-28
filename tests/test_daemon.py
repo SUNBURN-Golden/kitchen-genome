@@ -69,8 +69,27 @@ def test_pipeline_applies_closure_with_two_independent_sources_as_verified(world
     assert c.execute('SELECT COUNT(*) FROM claim_evidence WHERE claim_id=?', (ev[0]['claim_id'],)).fetchone()[0] == 2
 
 
+def _corroborate_move(env):
+    v = json.load(open(env['vault_path'], encoding='utf-8'))
+    r = dict(next(x for x in v['records'] if x['record_id'] == 't:3'))
+    r.update(record_id='t:3b', url='https://other-press.example.org/m', source_host='other-press.example.org')
+    v['records'].append(r)
+    json.dump(v, open(env['vault_path'], 'w', encoding='utf-8'), ensure_ascii=False)
+
+
+def test_single_source_move_is_held_not_applied(world):
+    c, env, _ = world
+    cc = chef(c, '테스트셰프C')
+    before = [dict(r) for r in c.execute('SELECT employment_id, state, valid_to FROM employment WHERE chef_id=?', (cc,))]
+    daemon(c, env).run()
+    after = [dict(r) for r in c.execute('SELECT employment_id, state, valid_to FROM employment WHERE chef_id=?', (cc,))]
+    assert after == before                                   # nothing closed on one press article
+    assert c.execute("SELECT COUNT(*) FROM review_queue WHERE reason='move_needs_verification'").fetchone()[0] == 1
+
+
 def test_pipeline_chef_move_closes_old_and_adds_new_without_deleting(world):
     c, env, _ = world
+    _corroborate_move(env)                                   # 2 independent trusted hosts -> verified move
     cc = chef(c, '테스트셰프C')
     before = c.execute('SELECT COUNT(*) FROM employment WHERE chef_id=?', (cc,)).fetchone()[0]
     daemon(c, env).run()
@@ -79,6 +98,16 @@ def test_pipeline_chef_move_closes_old_and_adds_new_without_deleting(world):
     assert [e['branch_id'] for e in onto.current_employment(c, cc, '2026-10-27')] == [branch(c, '가상식당1')]
     assert any(r['state'] == 'closed' and r['valid_to'] == '2026-10-10' for r in rows)
     assert onto.current_employment(c, cc, '2026-09-01')[0]['branch_id'] == branch(c, '가상식당2')    # history preserved
+
+
+def test_held_move_applies_once_corroborated_on_a_later_run(world):
+    c, env, _ = world
+    cc = chef(c, '테스트셰프C')
+    daemon(c, env).run()
+    assert [e['branch_id'] for e in onto.current_employment(c, cc, '2026-10-27')] != [branch(c, '가상식당1')]
+    _corroborate_move(env)
+    daemon(c, env).run(resume=False)
+    assert [e['branch_id'] for e in onto.current_employment(c, cc, '2026-10-27')] == [branch(c, '가상식당1')]
 
 
 def test_pipeline_never_guesses_identity(world):
@@ -92,6 +121,7 @@ def test_pipeline_never_guesses_identity(world):
 
 def test_service_outputs_written_and_upserted(world):
     c, env, _ = world
+    _corroborate_move(env)
     daemon(c, env).run()
     n = counts(c)['service_output']
     assert n > 0
@@ -276,3 +306,43 @@ def test_rename_is_a_dated_status_event_and_never_changes_the_display_name(world
     ev = c.execute("SELECT detail FROM restaurant_status_event WHERE branch_id=? AND kind='rename'", (b,)).fetchall()
     assert len(ev) == 1 and '새이름식당' in ev[0]['detail']
     assert c.execute("SELECT COUNT(*) FROM restaurant WHERE name='가상식당8'").fetchone()[0] == 1
+
+
+def _out(c, key, subject):
+    r = c.execute('SELECT payload_json FROM service_output WHERE output_key=? AND subject_id=? ORDER BY as_of DESC LIMIT 1', (key, subject)).fetchone()
+    return json.loads(r[0]) if r else None
+
+
+def test_verified_move_propagates_to_detail_career_map_and_recommendations(world):
+    c, env, _ = world
+    _corroborate_move(env)
+    daemon(c, env).run()
+    cc, new_b, old_b = chef(c, '테스트셰프C'), branch(c, '가상식당1'), branch(c, '가상식당2')
+    cm = _out(c, 'career_map', cc)
+    assert [e['branch_id'] for e in cm['current']] == [new_b]
+    assert old_b in [e['branch_id'] for e in cm['past']] and old_b not in [e['branch_id'] for e in cm['current']]
+    assert cc in [x['chef_id'] for x in _out(c, 'restaurant_detail', new_b)['current_chefs']]
+    assert cc not in [x['chef_id'] for x in _out(c, 'restaurant_detail', old_b)['current_chefs']]
+    assert cc in [x['chef_id'] for x in _out(c, 'restaurant_detail', old_b)['former_chefs']]
+    assert cc in _out(c, 'recommendation_eligibility', new_b)['chef_ids']
+
+
+def test_collector_bridge_rules():
+    from kg_daemon import collect_bridge as cb
+    base = {'extraction_id': 'e1', 'span_start': 0, 'span_end': 10, 'extractor': 'rule:x', 'extractor_version': 'rules/1.3', 'role_text': None,
+            'tenure_from': None, 'tenure_to': None, 'org_text': None, 'published_at': '2026-10-01', 'date_text': None}
+    ch, rs = {'name_ko': '가셰프', 'seed_id': None}, {'name_ko': '가식당', 'seed_id': 'r1'}
+    mk = lambda **k: {'collect': {**base, **k}, 'tier': k.pop('tier', 'press') if 'tier' in k else 'press', 'chef': ch, 'restaurant': rs, 'org': None}  # noqa: E731
+    # co-working / guest event -> event, never mentorship
+    out = cb.candidates(mk(label='collab', epistemic='claim', ambiguity=None, quote='가셰프와 함께 일했다'), '2026-10-28')
+    assert [o[0] for o in out] == ['collab']
+    # employment claim without a move verb is NOT a move; old article cannot open a current tenure
+    out = cb.candidates(mk(label='employment_claim', epistemic='claim', ambiguity=None, quote='가식당의 가셰프', published_at='2019-01-01'), '2026-10-28')
+    assert out[0][0] == 'employment' and out[0][1]['current'] is False
+    out = cb.candidates(mk(label='employment_claim', epistemic='claim', ambiguity=None, quote='가셰프가 가식당으로 옮겼다'), '2026-10-28')
+    assert out[0][0] == 'chef_move'
+    # search snippets / hearsay stay leads; negated/planned statements are not candidates
+    out = cb.candidates(mk(label='opening', epistemic='unverified', ambiguity=None, quote='가식당 오픈'), '2026-10-28')
+    assert out[0][1]['lead_only'] is True
+    assert cb.candidates(mk(label='closure', epistemic='claim', ambiguity='negated_statement', quote='폐업 아니다'), '2026-10-28')[0][0] == 'ambiguous'
+    assert cb.candidates(mk(label='closure', epistemic='claim', ambiguity='temporary_closure', quote='휴업'), '2026-10-28')[0][0] == 'pause'

@@ -43,3 +43,20 @@ pip install -r daemon/requirements.txt   # pyyaml
 2. **P3 검증**: 검토 큐 UI 없이 CLI로 `human:` 승격/기각, 레거시 `source_claim` → 근거 locator 채워 `verified` 승격 배치, 아웃리치 회신을 `official` 근거로 연결.
 3. **P4 서비스 출력**: `service_output` → 읽기 API(Workers/D1) + S1–S5 질의 구현; 점수의 신뢰도 입력을 claim 상태 기반으로 교체(공개는 준태님 승인 후).
 4. **P5 운영**: 일일 파이프라인에서 crawl → daemon run → 요약 보고, 알림(failure_queue, 열린 conflict, IG 정지).
+
+## Phase 4 (2026-10-28): 실데이터로 9단계 실행
+
+- **입력**: 라이브 수집기(`kg_collect`)의 `extraction` 행(실제 웹, robots/403 준수)을 stage 2가 문서로 받아들인다(`collect_bridge.py`, `--collect-db`).
+  호스트 → tier(공식 사이트/언론/검색 스니펫) → 레지스트리 source. paused source(Instagram 등)는 받지 않는다.
+- **규칙**: 이동(move)은 *verified*(공식/사람 출처 또는 독립 trusted host 2곳)일 때만 이전 tenure를 닫고 새 tenure를 연다. 그 전에는
+  `move_needs_verification` 리뷰. 매 실행마다 재평가되어 뒷받침 근거가 생기면 자동 적용. 검색 스니펫·전언·Instagram은 `lead_only` → 최대 unverified.
+  1년 넘은 기사의 '현재 근무' 주장은 current tenure를 열지 못한다. '출신'(과거) 주장과 우리가 가진 current tenure가 충돌하면 덮어쓰지 않고 conflict + review.
+  collab/팝업/게스트 디너는 `menu_event`(collab/popup)일 뿐 mentorship이 아니다(품질 불변식 `collab_materialised_as_mentorship`).
+- **서비스 데이터**: `restaurant_detail`(현재/전 셰프·상태·이벤트), `career_map`(current/past/mentorship 출처 주장만), `recommendation_eligibility`.
+  모두 `employments_asof`에서 파생 → verified move가 같은 실행에서 세 뷰에 반영. 불변식 `past_shown_as_current`가 위반 시 실행을 실패시킨다.
+
+**실측 (kg_service.db 사본, 2026-10-28 10:48 KST)**: 문서 685(press 131 · official 10 · blog 8 · search 536), 후보 413, 적용 403
+(verified 36 · source_claim 46 · unverified 321, unverified는 서비스 뷰에 안 보임), 적용 403건 모두 URL+span 위치+collected_at+인용 보유,
+effective_from은 2건뿐(본문에 날짜가 거의 없음). tenure 신규 1(과거, 종료일 미상) / 이동으로 닫힌 tenure **0**(실데이터에 이동 동사+해소된 셰프·식당 조합 없음),
+conflict 7 → review(대부분 오추출: 모수 기사 속 '소믈리에 출신' 등, 1건은 실제 과거형—신용우·빌롱 팝업 2023), menu_event 135, mentorship(unverified) 3.
+첫 실행은 stage 7에서 실패(`KeyError new_name`, 3회 재시도 → failure_queue) → 수정 후 재실행이 **stage 7부터 resume**해 성공. 두 번째 실행은 결과 동일(idempotent).

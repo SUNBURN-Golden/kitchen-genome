@@ -201,6 +201,9 @@ class Daemon:
             out = res.output if isinstance(res, StageResult) else (res or {})
             self.conn.execute("UPDATE stage_checkpoint SET status='done', attempts=?, output_json=?, error=NULL, finished_at=? WHERE run_id=? AND stage=?",
                               (attempts + 1, json.dumps(out, ensure_ascii=False, sort_keys=True), self.clock(), run_id, st))
+            # the stage now succeeds on a resumed run: earlier failures of this stage in the resume chain are closed as 'dismissed' with resolved_at (kept, not deleted)
+            self.conn.execute("""UPDATE failure_queue SET state='dismissed', resolved_at=? WHERE stage=? AND state IN ('open','requeued')
+                                 AND run_id IN (SELECT run_id FROM daemon_run WHERE daemon=?)""", (self.clock(), st, self.config['daemon_name']))
             self.conn.commit()
             return 'done'
 
