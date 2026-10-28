@@ -18,7 +18,7 @@ echo "$IG_OUT"   # routine: on IG_BLOCKED, tell 준태님 and notify BabyShower;
 KG_DB="${KG_SERVICE_DB:-/workspace/kitchen-genome/data_store/kg_service.db}"
 if [ "${KG_COLLECT:-1}" = 1 ] && [ -f "$KG_DB" ]; then
   COLLECT_OUT=$(PYTHONPATH=daemon timeout "${KG_COLLECT_TIMEOUT:-1500}" python3 -m kg_collect --db "$KG_DB" cycle --units "${KG_COLLECT_UNITS:-60}" 2>/dev/null \
-    | python3 -c "import json,sys;d=json.load(sys.stdin);print('COLLECT='+d['status'], 'run='+d['run_id'], 'cost='+str(d.get('cost_used')))" 2>/dev/null) || true
+    | python3 -c "import json,sys;d=json.load(sys.stdin);print('COLLECT='+str(d.get('status')), 'run='+str(d.get('run_id')), 'cost='+str(d.get('cost_used')))" 2>/dev/null) || true
   [ -n "$COLLECT_OUT" ] || COLLECT_OUT="COLLECT=failed_or_timeout (non-fatal)"
   git checkout -q -- sources 2>/dev/null || true
   echo "$COLLECT_OUT"
