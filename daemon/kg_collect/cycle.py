@@ -11,7 +11,7 @@ import urllib.parse
 from kg_daemon import runner
 from kg_daemon.db import DEFAULT_DB, ROOT, connect, migrate, new_id, utcnow
 
-from . import EXTRACTOR_VERSION, apply as apply_mod, booking, discover, evaluate, gaps, official, scheduler
+from . import EXTRACTOR_VERSION, apply as apply_mod, booking, discover, evaluate, gaps, official, review, scheduler
 from .fetch import Doc, Fetcher, parse_feed
 from .htmlx import parse_html
 from . import net as net_mod
@@ -370,6 +370,7 @@ def stage_evaluate(ctx):
 def stage_gaps(ctx):
     bot: Bot = ctx.env['bot']
     conn = bot.conn
+    reviewed = review.review_candidates(conn)
     promoted = promote_candidates(conn)
     res = gaps.resolve_gaps(conn)
     cls = gaps.classify_gaps(conn)
@@ -386,7 +387,7 @@ def stage_gaps(ctx):
             seen.add(j['query'])
             made += discover.enqueue(conn, **j, caps=bot.seeds['caps'])
     conn.commit()
-    return runner.StageResult({'candidates_promoted': promoted, 'gap_resolution': res, 'gap_classes': cls, 'followup_jobs': made})
+    return runner.StageResult({'candidates_rejected': [r['name'] for r in reviewed['rejected']], 'candidates_for_review': len(reviewed['queued_for_review']), 'candidates_promoted': promoted, 'gap_resolution': res, 'gap_classes': cls, 'followup_jobs': made})
 
 
 # ───────────────────────── stage: apply / quality ─────────────────────────
