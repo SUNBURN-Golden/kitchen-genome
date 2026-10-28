@@ -18,7 +18,7 @@ import sys
 
 from . import collect_bridge
 from . import registry as reg_mod
-from .claims import add_evidence, create_claim, host_of, link_evidence, open_conflict, queue_review, RANK
+from .claims import independent_sources, add_evidence, create_claim, host_of, link_evidence, open_conflict, queue_review, RANK
 from .db import ROOT, new_id, stable_id, utcnow
 from .ontology import AmbiguousMove, branch_state_asof, current_employment, move_chef, parse_iso_date, pending_moves
 from .runner import NoActiveSources, NonRetryable, StageContext, StageResult
@@ -290,13 +290,14 @@ def evidence_verification(ctx: StageContext) -> StageResult:
         elif c['tier'] in ('social_lead', 'search_lead', 'specialist_blog'):
             v = 'unverified'                   # leads never become source_claim/verified on their own
         else:
-            hosts = {host_of(json.loads(r['evidence_json'])['source_url']) for r in ctx.conn.execute(
+            hosts = [(lambda e: (e['source_url'], e.get('quote')))(json.loads(r['evidence_json'])) for r in ctx.conn.execute(
                 """SELECT x.evidence_json FROM candidate_fact x JOIN source s ON s.source_id=x.source_id
                    WHERE x.fact_type=? AND IFNULL(x.resolved_chef_id,'')=IFNULL(?,'') AND IFNULL(x.resolved_branch_id,'')=IFNULL(?,'')
                    AND x.resolution='resolved' AND x.asserted_by='source' AND s.tier IN ('official','press','human')
                    AND IFNULL(json_extract(x.payload_json,'$.lead_only'),0)=0""",
-                (c['fact_type'], c['resolved_chef_id'], c['resolved_branch_id']))}
-            v = 'verified' if (c['tier'] in ('official', 'human') or len(hosts) >= 2) else 'source_claim'
+                (c['fact_type'], c['resolved_chef_id'], c['resolved_branch_id']))]
+            # 2 INDEPENDENT trusted sources: the same wording on two hosts is one syndicated/reposted article, not corroboration
+            v = 'verified' if (c['tier'] in ('official', 'human') or independent_sources(hosts) >= 2) else 'source_claim'
         ctx.conn.execute('UPDATE candidate_fact SET verification=? WHERE candidate_id=?', (v, c['candidate_id']))
         out[v] += 1
     ctx.conn.commit()

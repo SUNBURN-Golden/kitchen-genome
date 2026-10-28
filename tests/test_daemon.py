@@ -69,10 +69,13 @@ def test_pipeline_applies_closure_with_two_independent_sources_as_verified(world
     assert c.execute('SELECT COUNT(*) FROM claim_evidence WHERE claim_id=?', (ev[0]['claim_id'],)).fetchone()[0] == 2
 
 
-def _corroborate_move(env):
+def _corroborate_move(env, repost=False):
+    """A second trusted host reports the move. repost=True: it copies the first article word for word (syndication), which is NOT independent."""
     v = json.load(open(env['vault_path'], encoding='utf-8'))
-    r = dict(next(x for x in v['records'] if x['record_id'] == 't:3'))
+    r = json.loads(json.dumps(next(x for x in v['records'] if x['record_id'] == 't:3')))
     r.update(record_id='t:3b', url='https://other-press.example.org/m', source_host='other-press.example.org')
+    if not repost:
+        r.setdefault('evidence_locator', {})['quote'] = '다른 매체가 직접 취재해 다른 문장으로 쓴 이직 기사 (independent wording)'
     v['records'].append(r)
     json.dump(v, open(env['vault_path'], 'w', encoding='utf-8'), ensure_ascii=False)
 
@@ -346,3 +349,30 @@ def test_collector_bridge_rules():
     assert out[0][1]['lead_only'] is True
     assert cb.candidates(mk(label='closure', epistemic='claim', ambiguity='negated_statement', quote='폐업 아니다'), '2026-10-28')[0][0] == 'ambiguous'
     assert cb.candidates(mk(label='closure', epistemic='claim', ambiguity='temporary_closure', quote='휴업'), '2026-10-28')[0][0] == 'pause'
+
+
+def test_reposted_article_is_one_independent_source():
+    from kg_daemon.claims import independent_sources
+    q = '김하늘 셰프가 노을의 총괄 셰프로 합류했다고 밝혔다.'
+    assert independent_sources([('https://a.example/1', q), ('https://b.example/9', q)]) == 1          # same wording on two hosts = a repost
+    assert independent_sources([('https://a.example/1', q), ('https://b.example/9', '노을은 새 총괄 셰프로 김하늘을 영입했다.')]) == 2
+    assert independent_sources([('https://a.example/1', q), ('https://a.example/2', '다른 문장으로 쓴 같은 매체 기사입니다.')]) == 1
+
+
+def test_collect_plan_with_zero_budget_does_not_divide_by_zero():
+    import sqlite3
+    from kg_collect import scheduler
+    from kg_daemon.db import migrate
+    c = sqlite3.connect(':memory:')
+    c.row_factory = sqlite3.Row
+    migrate(c)
+    pl = scheduler.plan(c, 0)
+    assert all(v == 0 for v in pl['budgets'].values())
+
+
+def test_verbatim_repost_does_not_verify_a_move(world):
+    c, env, _ = world
+    _corroborate_move(env, repost=True)
+    cc = chef(c, '테스트셰프C')
+    daemon(c, env).run()
+    assert [e['branch_id'] for e in onto.current_employment(c, cc, '2026-10-27')] != [branch(c, '가상식당1')]   # still held: one source, reposted

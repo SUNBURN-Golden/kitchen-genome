@@ -40,6 +40,27 @@ TENURE_RE = re.compile(r'(20\d{2})\s?(?:년)?\s?(?:[~\-–]|부터)\s?(20\d{2}|�
 DURATION_RE = re.compile(r'(\d{1,2})\s?년(?:\s?간|\s?동안|\s?가량|\s?여)')
 
 
+REL_DATE = re.compile(r'(지난해|작년|올해|올\s|금년|내년)\s?(?:(\d{1,2})\s?월)?')
+EN_MONTHS = {m: i + 1 for i, m in enumerate(['january', 'february', 'march', 'april', 'may', 'june', 'july', 'august', 'september', 'october', 'november', 'december'])}
+EN_DATE = re.compile(r'\b(January|February|March|April|May|June|July|August|September|October|November|December)(?:\s(\d{1,2}),?)?\s(20\d{2})\b|\b(?:in|since|from)\s(20\d{2})\b')
+
+
+def relative_or_english_date(sent: str, pub_year=None) -> tuple[str | None, str | None, str | None]:
+    """(text, iso, note) for '지난해 5월' / '올해' (anchored on the PUBLICATION year, never the fetch date) and 'March 2024' / 'since 2019'."""
+    m = EN_DATE.search(sent)
+    if m:
+        if m.group(4):
+            return m.group(0), m.group(4), None
+        mo = EN_MONTHS[m.group(1).lower()]
+        return m.group(0), (f'{m.group(3)}-{mo:02d}-{int(m.group(2)):02d}' if m.group(2) else f'{m.group(3)}-{mo:02d}'), None
+    m = REL_DATE.search(sent)
+    if m and pub_year and str(pub_year).isdigit():
+        y = int(pub_year) + {'지난해': -1, '작년': -1, '내년': 1}.get(m.group(1).strip(), 0)
+        mo = int(m.group(2)) if m.group(2) and 1 <= int(m.group(2)) <= 12 else None
+        return m.group(0).strip(), (f'{y}-{mo:02d}' if mo else str(y)), 'relative_to_publication_date'
+    return None, None, None
+
+
 def iso_from_dateish(m, pub_year=None) -> tuple[str | None, str | None]:
     """(iso, note). Month without a stated year borrows the PUBLICATION year and says so; never guesses beyond that."""
     if not m:
@@ -350,6 +371,11 @@ def extract_text(text: str, *, gaz, host: str, published_at: str | None = None, 
         future = bool(FUTURE.search(sent))
         dm = DATE_RE.search(sent)
         date_iso, date_note = iso_from_dateish(dm, pub_year)
+        date_txt = dm.group(0) if dm else None
+        if dm and REL_DATE.search(sent[max(0, dm.start() - 5):dm.start() + 1]) and not dm.group(1) and not dm.group(4):
+            dm = None                              # '지난해 5월': the bare month must not borrow the publication year
+        if not dm:
+            date_txt, date_iso, date_note = relative_or_english_date(sent, pub_year)
         tm = TENURE_RE.search(sent)
         role = re.search(ROLE_RE, sent)
 
@@ -366,7 +392,7 @@ def extract_text(text: str, *, gaz, host: str, published_at: str | None = None, 
                 amb = 'planned_not_done'
             rec = {'label': label, 'epistemic': e, 'chef_text': chef, 'restaurant_text': rest, 'org_text': org,
                    'role_text': role.group(1) if role and label in ('career', 'employment_claim') else None,
-                   'date_text': dm.group(0) if dm and label != 'career' else None, 'date_iso': date_iso if label != 'career' else None, 'date_note': date_note if label != 'career' else None,
+                   'date_text': date_txt if label != 'career' else None, 'date_iso': date_iso if label != 'career' else None, 'date_note': date_note if label != 'career' else None,
                    'tenure_from': tm.group(1) if tm and label in ('career', 'employment_claim') else None,
                    'tenure_to': (tm.group(2) if tm and tm.group(2) not in ('현재', '지금') else None) if tm and label in ('career', 'employment_claim') else None,
                    'span_start': off, 'span_end': off + len(orig), 'quote': _quote(orig, amap[min(anchor, len(amap) - 1)]), 'extractor': f'rule:{label}',
