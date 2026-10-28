@@ -12,6 +12,19 @@ python3 crawler/crawl.py
 IG_OUT=$(timeout 900 python3 crawler/instagram.py 2>&1 | grep -E '^IG_(OK|SKIPPED|BLOCKED)' | tail -1) || true
 [ -n "$IG_OUT" ] || IG_OUT="IG_BLOCKED reason=ig_step_crashed_or_timeout"
 echo "$IG_OUT"   # routine: on IG_BLOCKED, tell 준태님 and notify BabyShower; never retry the same day
+# Kitchen Genome collection bot: one polite cycle into the SEPARATE, git-ignored service DB (never data/, web/ or the site). Non-fatal by design:
+# any failure/timeout prints COLLECT=... and the daily flow continues unchanged. Disable with KG_COLLECT=0. Machine-written registry growth is
+# discarded here (it ships through reviewed PRs), so this clone stays clean for tomorrow's ff-only pull.
+KG_DB="${KG_SERVICE_DB:-/workspace/kitchen-genome/data_store/kg_service.db}"
+if [ "${KG_COLLECT:-1}" = 1 ] && [ -f "$KG_DB" ]; then
+  COLLECT_OUT=$(PYTHONPATH=daemon timeout "${KG_COLLECT_TIMEOUT:-1500}" python3 -m kg_collect --db "$KG_DB" cycle --units "${KG_COLLECT_UNITS:-60}" 2>/dev/null \
+    | python3 -c "import json,sys;d=json.load(sys.stdin);print('COLLECT='+d['status'], 'run='+d['run_id'], 'cost='+str(d.get('cost_used')))" 2>/dev/null) || true
+  [ -n "$COLLECT_OUT" ] || COLLECT_OUT="COLLECT=failed_or_timeout (non-fatal)"
+  git checkout -q -- sources 2>/dev/null || true
+  echo "$COLLECT_OUT"
+else
+  echo "COLLECT=skipped (KG_COLLECT=0 or no service DB at $KG_DB)"
+fi
 python3 crawler/apply.py
 python3 data/enrich_en.py
 python3 scripts/build_deploy.py >/dev/null
