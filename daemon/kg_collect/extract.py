@@ -21,7 +21,7 @@ PATTERNS = {
     'co_worker': re.compile(r'함께\s?(?:일했|근무|일한)|같이\s?(?:일했|근무)|동료|동기로|호흡을\s?맞춰|한솥밥'),
     'mentor': re.compile(r'사사|스승|제자|밑에서\s?(?:배웠|수련|배운)|가르침|멘토'),
     'career': re.compile(r'출신|에서\s?(?:(?:20\d{2}\s?년?\s?(?:부터|[~\-–])\s?(?:20\d{2}\s?년?|현재|지금)(?:까지)?\s?)?)(?:' + ROLE_RE + r'로?\s?)?(?:\d{1,2}\s?년(?:간|동안)?\s?)?(?:근무|일했|일한|경력|수련|근속|지냈|재직|배웠)|를\s?거쳐|을\s?거쳐|에서\s?' + ROLE_RE + r'(?:로|를)?\s?(?:맡|지냈|역임|활약|일)|경력을\s?(?:쌓|가진)|출신으로'),
-    'employment': re.compile(r'(?:총괄|헤드|오너|수|수석)\s?(?:셰프|쉐프)(?:로|를)?\s?(?:부임|합류|영입|선임|취임|맡|이끌|활약|있|일하)|총괄(?:한다|하고\s?있|했)|(?:으)?로\s?(?:옮겼|이직했|이적했)|(?:이끌고\s?있|이끄는|맡고\s?있|합류했|합류한|부임했|영입했|영입된|선임됐)|(?<=[가-힣A-Za-z’\'”])의\s(?:총괄|헤드|오너|수|수석)?\s?(?:셰프|쉐프)'),
+    'employment': re.compile(r'(?:총괄|헤드|오너|수|수석)\s?(?:셰프|쉐프)(?:로|를)?\s?(?:부임|합류|영입|선임|취임|맡|이끌|활약|있|일하)|총괄(?:한다|하고\s?있|했|하며|하는|하고|해\s?온|해왔)|(?:이끌며|이끌어\s?온|이끌어왔|맡으며|맡아\s?온|맡아왔|운영하며|운영하는|운영\s?중인|운영하고\s?있)|(?:으)?로\s?(?:옮겼|이직했|이적했)|(?:이끌고\s?있|이끄는|맡고\s?있|합류했|합류한|부임했|영입했|영입된|선임됐)|(?<=[가-힣A-Za-z’\'”])의\s(?:총괄|헤드|오너|수|수석)?\s?(?:셰프|쉐프)'),
     'opening': re.compile(r'(?:그랜드\s?|가\s?|재\s?|신규\s?)?오픈(?:했|한다|할|하며|해|예정|을\s?앞|[\s,.]|$)|개업|문을\s?(?:연|열|열었)|[을를]\s?열었|개점|론칭'),
     'relocation': re.compile(r'이전\s?(?:오픈|개점|했|한다|할|예정)?|옮겨|옮긴다|새\s?둥지|자리를\s?옮|확장\s?이전|이사'),
     'closure': re.compile(r'폐업|폐점|문을\s?닫|영업\s?종료|영업을\s?종료|운영\s?종료|마지막\s?영업|영업을\s?마무리|영업을\s?마치|영업\s?마감|휴업|운영을\s?종료'),
@@ -96,8 +96,8 @@ def clean_name(nm: str, after: str = '') -> str | None:
     4 only with a double surname; strip one trailing particle; plural/collection wording means a category, not a person."""
     if nm in NOT_A_NAME or after.lstrip().startswith(('들', '컬렉션', '클래스', '출신들')):
         return None
-    if len(nm) >= 3 and nm[-1] in '은는의도를을와과':
-        nm = nm[:-1]
+    if (len(nm) >= 4 and nm[-1] in '은는의도를을와과') or (len(nm) == 3 and nm[-1] in '는의를와과'):
+        nm = nm[:-1]                  # 3-syllable names often END in 은/이/을 ('정다은'): only unambiguous particles are stripped there
     if len(nm) == 4 and not nm.startswith(DOUBLE_SURNAMES):
         return None
     if len(nm) == 5 or not 2 <= len(nm) <= 4:
@@ -112,6 +112,87 @@ def new_chef_names(sent: str, known_spans) -> list[dict]:
         if not nm or nm in CHEF_STOP or nm[0] not in SURNAMES or any(s <= m.start(1) < e for s, e in known_spans):
             continue
         out.append({'surface': nm, 'start': m.start(1), 'end': m.start(1) + len(nm)})
+    return out
+
+
+# ── rules/1.4: generalisation helpers ──
+PAREN = re.compile(r'\s?\(([^()]{1,40})\)')
+LIST_SEP = re.compile(r'^\s?[\'’"”」』]?\s?(?:(?:,|，|과|와|·|ㆍ|/|및|그리고|,\s?그리고|,\s?및)\s?(?:[\'‘"“「『]|(?:[가-힣A-Za-z]{1,10}\s){1,2}[\'‘"“「『])?|(?:(?:오너|총괄|헤드|수석)\s?)?(?:셰프|쉐프)?\s?겸\s?)\s?$')
+# '이타닉가든'과 레스케이프 호텔 '라망 시크레' (descriptor words allowed only before a QUOTED next item) / 'A 헤드 셰프 겸 B'
+PARTICLE_START = set('은는이가을를의에도와과로으만부까처랑나엔')
+AFTER_UI_KEEP = re.compile(r'^\s?(?:' + ROLE_RE + r'|메뉴|코스|오너|대표|주방|디저트|매장|지점|분점|팝업|레스토랑|식당|공동|새|신임|전\s|前|창업자|설립자|운영자|헤드|총괄|수석|파티시에)')
+SHORT_REF = re.compile(r'(?<![가-힣A-Za-z])([가-힣]{1,2})\s?(?:셰프|쉐프)(?![가-힣]{0,1}들)')
+
+
+def strip_parens(sent: str):
+    """'Lysée(리제)의 이은지(Eunji Lee)' -> 'Lysée의 이은지' with a map back to original offsets and the removed (head_end, inner) pairs.
+    Bilingual glosses / aliases in brackets break adjacency rules; the inner text is kept for gazetteer lookup."""
+    out, amap, removed, last = [], [], [], 0
+    for m in PAREN.finditer(sent):
+        out.append(sent[last:m.start()])
+        amap.extend(range(last, m.start()))
+        removed.append((len(amap), m.group(1).strip()))
+        last = m.end()
+    out.append(sent[last:])
+    amap.extend(range(last, len(sent)))
+    amap.append(len(sent))
+    return ''.join(out), amap, removed
+
+
+def is_common_word_use(sent: str, m: dict) -> bool:
+    """Short Hangul restaurant names that are ordinary words ('본연', '온기', '제철') are only a venue when the context says so.
+    Common use: glued to a non-particle syllable, or '<alias>의 <ordinary noun>' ('재료 본연의 맛')."""
+    surf = m['surface']
+    if not re.fullmatch(r'[가-힣]{1,3}', surf.replace(' ', '')):
+        return False
+    pre, post = sent[max(0, m['start'] - 1):m['start']], sent[m['end']:m['end'] + 14]
+    if pre in '‘\'"“「『' and pre:
+        return False
+    if post[:1] and re.match(r'[가-힣]', post[:1]) and post[0] not in PARTICLE_START:
+        return True
+    if post.startswith('의') and not AFTER_UI_KEEP.match(post[1:]):
+        nxt = re.match(r'\s?([가-힣]{2,4})', post[1:])
+        if nxt and not (nxt.group(1)[0] in SURNAMES and re.match(r'\s?[가-힣]{2,4}\s?(?:\(|셰프|쉐프|오너|총괄|대표)', post[1:])):
+            return True
+    return False
+
+
+def coordinated(items: list, anchor: dict, sent: str, cap: int = 5) -> list:
+    """Items joined to `anchor` by list separators ('A, B와 C') — the whole coordinated group, in order."""
+    items = sorted(items, key=lambda x: x['start'])
+    if anchor not in items:
+        return [anchor]
+    i = items.index(anchor)
+    lo = hi = i
+    while lo > 0 and LIST_SEP.match(sent[items[lo - 1]['end']:items[lo]['start']]):
+        lo -= 1
+    while hi + 1 < len(items) and LIST_SEP.match(sent[items[hi]['end']:items[hi + 1]['start']]):
+        hi += 1
+    grp, seen = [], set()
+    for it in items[lo:hi + 1]:
+        if it['surface'] not in seen:
+            seen.add(it['surface'])
+            grp.append(it)
+    return grp[:cap]
+
+
+def coref_short_forms(sent: str, known_spans, doc_chefs: list) -> list[dict]:
+    """'손 셰프' / '종원 셰프' -> the unique full name seen EARLIER in the same document. Ambiguous (two 손s) or unseen -> nothing."""
+    out = []
+    for m in SHORT_REF.finditer(sent):
+        g = m.group(1)
+        if any(s <= m.start(1) < e for s, e in known_spans):
+            continue
+        if len(g) == 1:
+            if g not in SURNAMES:
+                continue
+            cands = {n for n in doc_chefs if len(n) >= 2 and n[0] == g and re.fullmatch(r'[가-힣]{2,4}', n)}
+        else:
+            cands = {n for n in doc_chefs if len(n) == 3 and n[1:] == g}
+            if g in doc_chefs:
+                continue
+        if len(cands) == 1:
+            out.append({'surface': cands.pop(), 'start': m.start(1), 'end': m.end(1), 'coref': g})
     return out
 
 
@@ -173,7 +254,7 @@ def org_phrase_before(sent: str, idx: int) -> str | None:
 POPUP = re.compile(r'팝업(?:\s?(?:레스토랑|스토어|매장|다이닝))?')
 POPUP_RAN = re.compile(r'(?:운영했|운영한|이끌었|맡았|진행했)')
 # chef and restaurant written side by side with no relation verb ("'밍글스' 강민구 셰프", "강민구 셰프 '밍글스'"): a weak current-affiliation claim
-SIDE_GAP = re.compile(r'^\s?(?:(?:오너|총괄|헤드|수석|수|파티시에|페이스트리)?\s?(?:셰프|쉐프)(?:의)?)?\s?[‘\'"“]?\s?$|^[’\'"”]?\s?$')
+SIDE_GAP = re.compile(r'^\s?(?:(?:오너|총괄|헤드|수석|수|파티시에|페이스트리)?\s?(?:셰프|쉐프)(?:의)?)?\s?[‘\'"“]?\s?$|^[’\'"”]?\s?(?:의\s(?:(?:오너|총괄|헤드|수석|수)\s?)?(?:셰프\s|쉐프\s|파티시에\s)?)?$|^[’\'"”]?\s(?:오너|총괄|헤드|수석|수)?\s?(?:셰프|쉐프)(?:인|이자)\s$')
 # English press headlines
 EN_OPEN = re.compile(r'\b(?:opens|opened|to open|is opening|will open|debuts|launches|first opened)\b', re.I)
 EN_FORMER = re.compile(r'\b(?:former|ex-|formerly (?:of|at)|alum(?:nus|na)? of|previously (?:at|of))\b', re.I)
@@ -211,14 +292,40 @@ def extract_text(text: str, *, gaz, host: str, published_at: str | None = None, 
     out = []
     pub_year = (published_at or '')[:4] or None
     official_hosts = official_hosts or set()
-    for off, sent in sentences(text):
-        if len(sent) < 8:
+    doc_chefs: list = []
+    for off, orig in sentences(text):
+        if len(orig) < 8:
             continue
+        sent, amap, removed = strip_parens(orig)
         mentions = gaz.find(sent)
+        for pos, inner in removed:              # alias given only inside the brackets: attach it to the head word before the bracket
+            if any(m['start'] <= pos <= m['end'] + 1 for m in mentions):
+                continue
+            hit = gaz.lookup(inner)
+            hm = re.search(r'([A-Za-z가-힣][A-Za-z가-힣\'’.&\-]*(?:\s[A-Z][A-Za-z\'’.&\-]*)?)$', sent[:pos])
+            if hit and hm:
+                for ent in hit:
+                    mentions.append({**ent, 'start': hm.start(1), 'end': pos, 'surface': inner})
+        mentions = sorted([m for m in mentions if not (m['kind'] == 'restaurant' and is_common_word_use(sent, m))], key=lambda x: x['start'])
         known = [(m['start'], m['end']) for m in mentions]
         chefs = [m for m in mentions if m['kind'] == 'chef']
         rests = [m for m in mentions if m['kind'] == 'restaurant']
         new_chefs = new_chef_names(sent, known)
+        if re.search(ROLE_RE, sent):
+            for pos, inner in removed:          # '이은지(Eunji Lee)': a Hangul personal name glossed with a romanised one, in a sentence about chefs
+                hm = re.search(r'(?<![가-힣])([가-힣]{2,4})$', sent[:pos])
+                if hm and re.fullmatch(r"[A-Z][a-z]+(?:[\s\-][A-Z][a-z]+){1,2}", inner) and hm.group(1)[0] in SURNAMES and hm.group(1) not in CHEF_STOP \
+                        and not any(a <= hm.start(1) < b for a, b in known) and not any(c['start'] == hm.start(1) for c in new_chefs):
+                    nm = clean_name(hm.group(1))
+                    if nm:
+                        new_chefs.append({'surface': nm, 'start': hm.start(1), 'end': hm.start(1) + len(nm)})
+        corefs = coref_short_forms(sent, known + [(c['start'], c['end']) for c in new_chefs], doc_chefs)
+        given = {n[1:]: n for n in doc_chefs if len(n) == 3}
+        new_chefs = [({**c, 'surface': given[c['surface']]} if len(c['surface']) == 2 and c['surface'] in given else c) for c in new_chefs] + corefs
+        new_chefs.sort(key=lambda x: x['start'])
+        for c in chefs + new_chefs:
+            if 'coref' not in c and c['surface'] not in doc_chefs:
+                doc_chefs.append(c['surface'] if c in new_chefs else (c.get('name_ko') or c['surface']))
         hits = {k: p.search(sent) for k, p in PATTERNS.items()}
         ar = AT_RISK.search(sent) or COND_CLOSE.search(sent)
         if ar and hits['closure'] and ar.start() <= hits['closure'].start() <= ar.end():
@@ -227,8 +334,8 @@ def extract_text(text: str, *, gaz, host: str, published_at: str | None = None, 
         if popup and hits['collab'] is None:
             pass
         side = None
-        if chefs and rests and not hits['career'] and not hits['collab']:
-            for c in chefs:
+        if (chefs or new_chefs) and rests and not hits['career'] and not hits['collab'] and not hits['opening']:   # 'X 셰프 ‘R’ 오픈': the opening record carries the chef
+            for c in sorted(chefs + new_chefs, key=lambda x: x['start']):
                 for r in rests:
                     a, b = (c, r) if c['end'] <= r['start'] else (r, c)
                     if SIDE_GAP.match(sent[a['end']:b['start']]) and not re.match(r'\s?(?:출신|에서)', sent[b['end']:b['end'] + 4]):
@@ -236,7 +343,7 @@ def extract_text(text: str, *, gaz, host: str, published_at: str | None = None, 
                         break
                 if side:
                     break
-        if not any(hits.values()) and not APPOINT.search(sent) and not side and not (chefs and rests and re.search(r'[A-Za-z]{3}', sent)):
+        if not any(hits.values()) and not APPOINT.search(sent) and not side and not (popup and POPUP_RAN.search(sent)) and not (chefs and rests and re.search(r'[A-Za-z]{3}', orig)):
             continue
         base_unverified = bool(HEARSAY.search(sent)) or tier in ('social_lead', 'search_lead') or (ocr_conf is not None and ocr_conf < 60)
         negated = bool(NEGATION.search(sent))
@@ -262,7 +369,7 @@ def extract_text(text: str, *, gaz, host: str, published_at: str | None = None, 
                    'date_text': dm.group(0) if dm and label != 'career' else None, 'date_iso': date_iso if label != 'career' else None, 'date_note': date_note if label != 'career' else None,
                    'tenure_from': tm.group(1) if tm and label in ('career', 'employment_claim') else None,
                    'tenure_to': (tm.group(2) if tm and tm.group(2) not in ('현재', '지금') else None) if tm and label in ('career', 'employment_claim') else None,
-                   'span_start': off, 'span_end': off + len(sent), 'quote': _quote(sent, anchor), 'extractor': f'rule:{label}',
+                   'span_start': off, 'span_end': off + len(orig), 'quote': _quote(orig, amap[min(anchor, len(amap) - 1)]), 'extractor': f'rule:{label}',
                    'extractor_version': EXTRACTOR_VERSION, 'ambiguity': amb, 'published_at': published_at, **(extra or {})}
             rec['extraction_id'] = 'ext_' + hashlib.sha1('|'.join([content_hash, str(rec['span_start']), label, str(chef), str(rest), str(org), EXTRACTOR_VERSION]).encode()).hexdigest()[:14]
             out.append(rec)
@@ -303,7 +410,8 @@ def extract_text(text: str, *, gaz, host: str, published_at: str | None = None, 
             if is_collab:
                 pass                       # handled by the collab record (chef+restaurant now both attached below)
             else:
-                mk('employment_claim', chef=c['surface'], rest=r['surface'], anchor=c['start'], ambiguity='side_by_side_mention')
+                for rr in coordinated(rests, r, sent):
+                    mk('employment_claim', chef=c['surface'], rest=rr['surface'], anchor=c['start'], ambiguity='side_by_side_mention')
         # ── career: X came from ORG ──
         if hits['career'] and hits['career'].group(0).startswith('출신') and re.match(r'\s?(?:의\s?)?(?:소믈리에|바텐더|파티시에|직원|관계자|스태프|매니저|작가|기자)', sent[hits['career'].end():hits['career'].end() + 8]):
             hits['career'] = None             # '리츠칼튼 출신 소믈리에': the career belongs to an unnamed staff member, not to a chef in the sentence
@@ -328,6 +436,10 @@ def extract_text(text: str, *, gaz, host: str, published_at: str | None = None, 
             elif ctx and ctx.get('chef') and (PRONOUN_SUBJ.search(sent) or not names):
                 chef, inferred, amb = ctx['chef']['name_ko'], True, 'subject_from_job_context'
             career_org = org
+            if org and chef and cand_orgs and not bare and not amb:
+                for extra_org in coordinated(rests, cand_orgs[-1], sent)[:-1] if cand_orgs[-1] in rests else []:
+                    if extra_org['surface'] != org:
+                        mk('career', chef=chef, org=extra_org['surface'], anchor=m.start(), inferred=inferred)
             if org and chef and bare:
                 mk('career', chef=chef, org=org, anchor=m.start(), ambiguity=amb or 'org_name_unverified', epi='unverified')
             elif org and chef:
@@ -348,12 +460,12 @@ def extract_text(text: str, *, gaz, host: str, published_at: str | None = None, 
             cur = [r for r in rests if r['surface'] != career_org]
             if re.match(r'\s?(?:였|이었|였던|이었던)', sent[m.end():m.end() + 4]):
                 cur = []                  # '가온재의 헤드셰프였으며' is a past role (career), not a current employment
-            if m.group(0).startswith('의') and not any(r['end'] == m.start() for r in cur):
+            if m.group(0).startswith('의') and not any(r['end'] == m.start() or (r['end'] == m.start() - 1 and sent[r['end']] in '’\'"”」』') for r in cur):
                 cur = []                  # 'X의 셰프' only means employment when X is a known restaurant right before 의
             if cur and (pick or amb):
                 near = nearest_before(cur, m.start())
-                led_rests = [near] + [r for r in cur if r is not near and r['start'] > near['start'] and re.search(r'(?:과|와|,|·|및)\s?[\'’"”]?$', sent[near['end']:r['start']].strip() + ' ')] if hits['employment'].group(0).startswith(('이끄', '맡')) else [near]
-                for r in led_rests[:3]:
+                led_rests = coordinated(cur, near, sent)
+                for r in led_rests:
                     mk('employment_claim', chef=pick['surface'] if pick else None, rest=r['surface'], anchor=m.start(), ambiguity=amb)
         # ── appointment of a new chef ('X은 신임 총괄 셰프로 Y를 선임') ──
         ap = APPOINT.search(sent)

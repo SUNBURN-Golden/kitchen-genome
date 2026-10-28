@@ -29,7 +29,9 @@ def build_gold_db(gold: dict):
     return conn
 
 
-def evaluate_gold(gold: dict, gaz_conn=None) -> dict:
+def evaluate_gold(gold: dict, gaz_conn=None, context_fn=None) -> dict:
+    """context_fn(sentence_row) -> preceding document text or ''. With it, the sentence is extracted INSIDE its document (cross-sentence coreference
+    needs the earlier full name) and only records whose span lies in the gold sentence are scored. Labels are never touched."""
     conn = gaz_conn or build_gold_db(gold)
     gaz = Gazetteer(conn)
     tp = fp = fn = 0
@@ -37,7 +39,10 @@ def evaluate_gold(gold: dict, gaz_conn=None) -> dict:
     errors = []
     by_label: dict = {}
     for s in gold['sentences']:
-        got = extract_text(s['text'], gaz=gaz, host=s.get('host', 'example.test'), published_at=s.get('published_at'), tier=s.get('tier', 'press'), official_hosts=set(s.get('official_hosts', [])))
+        pre = (context_fn(s) or '') if context_fn else (s.get('context') or '')
+        pre = pre + '\n' if pre else ''
+        got = [g for g in extract_text(pre + s['text'], gaz=gaz, host=s.get('host', 'example.test'), published_at=s.get('published_at'), tier=s.get('tier', 'press'),
+                                       official_hosts=set(s.get('official_hosts', []))) if g['span_start'] >= len(pre)]
         gotmap = {}
         for g in got:
             gotmap.setdefault(_key(g['label'], g.get('chef_text'), g.get('restaurant_text'), g.get('org_text')), []).append(g)
@@ -88,5 +93,34 @@ def evaluate_gold(gold: dict, gaz_conn=None) -> dict:
     return res
 
 
-def run_file(path: str, gaz_conn=None) -> dict:
-    return evaluate_gold(json.load(open(path, encoding='utf-8')), gaz_conn)
+def doc_context_from_store(db_path: str):
+    """Context finder over the collector's stored texts: the document (same host) that contains the gold sentence -> text before it."""
+    import os
+    import sqlite3
+    root = os.path.join(os.path.dirname(os.path.abspath(db_path)), 'raw')
+    c = sqlite3.connect(db_path)
+    rows = c.execute("SELECT host, text_ref FROM fetch_record WHERE text_ref IS NOT NULL AND outcome='ok'").fetchall()
+    cache: dict = {}
+
+    def fn(s):
+        probe = s['text'].strip()[:40]
+        for host, ref in rows:
+            if s.get('host') and host != s['host']:
+                continue
+            if ref not in cache:
+                try:
+                    cache[ref] = open(os.path.join(root, ref), encoding='utf-8').read()
+                except OSError:
+                    cache[ref] = ''
+            i = cache[ref].find(probe)
+            if i >= 0:
+                return cache[ref][:i]
+        return ''
+    return fn
+
+
+def run_file(path: str, gaz_conn=None, gaz_db: str | None = None, docs_db: str | None = None) -> dict:
+    """gaz_db: use the PRODUCTION registry (targets in the collector DB) instead of the gold file's own target list."""
+    if gaz_db and gaz_conn is None:
+        gaz_conn = connect(gaz_db)
+    return evaluate_gold(json.load(open(path, encoding='utf-8')), gaz_conn, doc_context_from_store(docs_db) if docs_db else None)

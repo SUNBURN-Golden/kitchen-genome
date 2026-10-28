@@ -105,7 +105,8 @@ class Gazetteer:
     def find(self, sentence: str) -> list[dict]:
         """Mentions with offsets. Korean: substring with non-Hangul-or-particle boundary check on the left. Latin: word-boundary."""
         out, taken = [], []
-        low = unicodedata.normalize('NFKC', sentence)
+        # per-character NFKC that keeps offsets aligned with the caller's sentence ('…' -> '...' would shift every later span)
+        low = ''.join(n if len(n := unicodedata.normalize('NFKC', ch)) == 1 else ch for ch in sentence)
         for alias in self.keys:
             if len(alias) < 2:
                 continue

@@ -24,6 +24,8 @@ def main(argv=None) -> int:
     sub.add_parser('review')
     g = sub.add_parser('gold')
     g.add_argument('file')
+    g.add_argument('--registry', action='store_true', help='score with the production registry in --db (not the gold file targets)')
+    g.add_argument('--doc-context', action='store_true', help='extract each gold sentence inside its stored document (coreference)')
     a = ap.parse_args(argv)
     conn = connect(a.db)
     if a.cmd == 'init':
@@ -54,7 +56,7 @@ def main(argv=None) -> int:
         print(json.dumps(review_candidates(conn), ensure_ascii=False, indent=1))
     elif a.cmd == 'gold':
         from .gold import run_file
-        print(json.dumps(run_file(a.file), ensure_ascii=False, indent=1))
+        print(json.dumps(run_file(a.file, gaz_db=a.db if a.registry else None, docs_db=a.db if a.doc_context else None), ensure_ascii=False, indent=1))
     return 0
 
 
