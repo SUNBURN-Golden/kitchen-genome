@@ -11,7 +11,7 @@ import urllib.parse
 from kg_daemon import runner
 from kg_daemon.db import DEFAULT_DB, ROOT, connect, migrate, new_id, utcnow
 
-from . import EXTRACTOR_VERSION, apply as apply_mod, discover, evaluate, gaps, scheduler
+from . import EXTRACTOR_VERSION, apply as apply_mod, booking, discover, evaluate, gaps, official, scheduler
 from .fetch import Doc, Fetcher, parse_feed
 from .htmlx import parse_html
 from . import net as net_mod
@@ -232,13 +232,35 @@ def stage_fetch(ctx):
 def load_doc(conn, raw: RawStore, f) -> Doc:
     text = raw.read_text(f['text_ref']) if f['text_ref'] else ''
     items, links, images = [], [], []
+    html, jsonld, title = '', [], ''
     if f['method'] in ('feed', 'sitemap') and f['raw_ref']:
         items = parse_feed(raw.read(f['raw_ref']), f['url'])
     elif f['method'] in ('html', 'jsonld', 'browser') and f['raw_ref'] and f['raw_ref'].endswith('.html'):
-        p = parse_html(raw.read(f['raw_ref']).decode('utf-8', 'ignore'), f['url'])
+        html = raw.read(f['raw_ref']).decode('utf-8', 'ignore')
+        p = parse_html(html, f['url'])
         links, images = p['links'], p['images']
-    return Doc(f['fetch_id'], f['url'], f['canonical_url'], f['host'], f['method'], f['outcome'], text=text, published_at=f['published_at'], links=links, items=items, images=images,
-               content_hash=f['content_hash'], error=f['error'], page_no=f['page_no'] or 1)
+        jsonld, title = p['jsonld'], p['title'] or ''
+    d = Doc(f['fetch_id'], f['url'], f['canonical_url'], f['host'], f['method'], f['outcome'], text=text, published_at=f['published_at'], links=links, items=items, images=images,
+            content_hash=f['content_hash'], error=f['error'], page_no=f['page_no'] or 1)
+    d.html, d.jsonld, d.title = html, jsonld, title
+    return d
+
+
+def profile_facts_for(conn, doc: Doc, target_row, now: str) -> int:
+    """Restaurant's own page / allowed booking page -> field-level profile facts (official.py / booking.py)."""
+    if not target_row or target_row['kind'] != 'restaurant' or doc.method in ('feed', 'sitemap'):
+        return 0
+    tgt = {'target_id': target_row['target_id'], 'name_ko': target_row['name_ko'], 'name_en': target_row['name_en']}
+    if booking.is_booking_host(doc.host):
+        facts = booking.extract_booking(getattr(doc, 'html', ''), doc.text, getattr(doc, 'jsonld', []), target=tgt, host=doc.host, published_at=doc.published_at,
+                                        content_hash=doc.content_hash or '', title=getattr(doc, 'title', ''))
+    else:
+        basis = official.site_basis_for(conn, tgt['target_id'], doc.host, now)
+        if not basis:
+            return 0
+        facts = official.extract_profile(doc.text, getattr(doc, 'jsonld', []), target=tgt, host=doc.host, source_kind='official_site', site_basis=basis,
+                                         published_at=doc.published_at, content_hash=doc.content_hash or '', title=getattr(doc, 'title', ''))
+    return official.store(conn, facts, fetch_id=doc.fetch_id, canonical_url=doc.canonical_url, host=doc.host, now=now)
 
 
 def stage_extract(ctx):
@@ -265,7 +287,24 @@ def stage_extract(ctx):
         stats['new_extractions'] += r['new']
         for k, v in r['labels'].items():
             stats['labels'][k] = stats['labels'].get(k, 0) + v
+    stats['profile'] = profile_scan(conn, bot.raw)
     return runner.StageResult(stats)
+
+
+def profile_scan(conn, raw) -> dict:
+    """Read every ok fetch made for a restaurant target with the profile extractor once per OFFICIAL_VERSION."""
+    out = {'scanned': 0, 'facts_new': 0}
+    rows = conn.execute("""SELECT f.*, j.target_id AS tid FROM fetch_record f JOIN crawl_job j ON j.job_id=f.job_id JOIN target t ON t.target_id=j.target_id
+                            WHERE f.outcome='ok' AND t.kind='restaurant' AND f.method NOT IN ('feed','sitemap')
+                            AND NOT EXISTS (SELECT 1 FROM profile_scan s WHERE s.fetch_id=f.fetch_id AND s.version=?) ORDER BY f.fetched_at""", (official.OFFICIAL_VERSION,)).fetchall()
+    for f in rows:
+        t = conn.execute('SELECT * FROM target WHERE target_id=?', (f['tid'],)).fetchone()
+        n = profile_facts_for(conn, load_doc(conn, raw, f), t, utcnow())
+        conn.execute('INSERT OR IGNORE INTO profile_scan(fetch_id,version,facts,scanned_at) VALUES (?,?,?,?)', (f['fetch_id'], official.OFFICIAL_VERSION, n, utcnow()))
+        out['scanned'] += 1
+        out['facts_new'] += n
+    conn.commit()
+    return out
 
 
 # ───────────────────────── stage: evaluate ─────────────────────────

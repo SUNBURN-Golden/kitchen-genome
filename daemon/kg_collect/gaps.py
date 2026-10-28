@@ -70,8 +70,40 @@ def _evidence_for(conn, gap):
             continue                         # an opening without a year is not an opening DATE
         v = getter(dict(r))
         if not _is_empty(v):
-            out.append((r, str(v)))
+            out.append((dict(r), str(v)))
+    pf = profile_evidence(conn, gap)
+    if any(r['epistemic'] == 'fact' for r, _ in pf):
+        return [(r, v) for r, v in pf if r['epistemic'] == 'fact']   # the restaurant's own page outranks press for its own profile
+    return pf + out
+
+
+PROFILE_FIELDS = {'opened': ('opened',), 'chef': ('chef',), 'status_recent': ('status', 'relocation')}
+
+
+def profile_evidence(conn, gap) -> list:
+    """Profile facts read from the restaurant's own site / JSON-LD / an allowed booking page (official.py, booking.py). claim|fact only."""
+    fields = PROFILE_FIELDS.get(gap['field'])
+    if not fields:
+        return []
+    try:
+        rows = conn.execute(f"""SELECT * FROM profile_fact WHERE target_id=? AND field IN ({','.join('?' * len(fields))}) AND epistemic IN ('claim','fact')
+                                ORDER BY epistemic='fact' DESC, created_at DESC""", (gap['target_id'], *fields)).fetchall()
+    except Exception:                                  # DB without migration 0004
+        return []
+    out = []
+    for r in rows:
+        d = dict(r)
+        d['pf'] = True
+        v = 'relocated' if d['field'] == 'relocation' else d['value']
+        out.append((d, v))
     return out
+
+
+def _mark_resolved(conn, g, r, v, now):
+    if r.get('pf'):
+        conn.execute("UPDATE gap SET state='resolved', klass='resolved', resolved_at=?, resolved_by_fact=?, resolved_value=? WHERE gap_id=?", (now, r['fact_id'], v, g['gap_id']))
+    else:
+        conn.execute("UPDATE gap SET state='resolved', klass='resolved', resolved_at=?, resolved_by_extraction=?, resolved_value=? WHERE gap_id=?", (now, r['extraction_id'], v, g['gap_id']))
 
 
 def resolve_gaps(conn, now=None) -> dict:
@@ -86,7 +118,7 @@ def resolve_gaps(conn, now=None) -> dict:
         if g['field'] == 'status_recent':
             fresh = [(r, v) for r, v in ev]
             r, v = fresh[0]
-            conn.execute("UPDATE gap SET state='resolved', klass='resolved', resolved_at=?, resolved_by_extraction=?, resolved_value=? WHERE gap_id=?", (now, r['extraction_id'], v, g['gap_id']))
+            _mark_resolved(conn, g, r, v, now)
             res['resolved'] += 1
             continue
         if len(values) > 1 and g['field'] in ('opened', 'chef', 'current_employer', 'origin_kitchen'):
@@ -98,7 +130,7 @@ def resolve_gaps(conn, now=None) -> dict:
                 res['conflict'] += 1
                 continue
         r, v = ev[0]
-        conn.execute("UPDATE gap SET state='resolved', klass='resolved', resolved_at=?, resolved_by_extraction=?, resolved_value=? WHERE gap_id=?", (now, r['extraction_id'], v, g['gap_id']))
+        _mark_resolved(conn, g, r, v, now)
         res['resolved'] += 1
     conn.commit()
     return res
