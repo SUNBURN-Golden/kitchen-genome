@@ -39,7 +39,7 @@ def scoreboard(conn, bot=None, gold_paths=None) -> dict:
         'official_profile': _official(conn),
         'extractions': {r['epistemic']: r['n'] for r in conn.execute('SELECT epistemic, COUNT(*) n FROM extraction GROUP BY epistemic')},
     }
-    gp = gold_paths if gold_paths is not None else [p for p in (GOLD_SYNTH, os.path.join(ROOT, 'data_store', 'gold', 'gold_real.json')) if os.path.exists(p)]
+    gp = gold_paths if gold_paths is not None else [p for p in (GOLD_SYNTH, os.path.join(ROOT, 'data_store', 'gold', 'gold_real.json'), os.path.join(ROOT, 'data_store', 'gold', 'gold_heldout.json')) if os.path.exists(p)]
     if gp:
         from .gold import run_file
         sb['accuracy'] = {os.path.basename(p): {k: v for k, v in run_file(p).items() if k not in ('errors', 'by_label')} for p in gp}
