@@ -142,9 +142,20 @@ def test_affiliation_change_old_vs_new_detected(world):
     h = q(conn, "SELECT * FROM field_history WHERE field='affiliation'")
     assert len(h) == 1 and h[0]['old_value'] == '달빛정원' and h[0]['new_value'] == '모래시계'
     assert h[0]['latency_hours'] is not None and 0 <= h[0]['latency_hours'] <= 48
-    # the move is recorded as UNVERIFIED (pending verification), with evidence; the old employment is closed, not deleted
-    mv = q(conn, "SELECT e.state, e.valid_to_kind, c.status FROM employment e JOIN claim c USING(claim_id) WHERE e.chef_id=? ORDER BY e.rowid", chef)
-    assert any(r['status'] == 'unverified' for r in mv)
+    # one collected statement is a CANDIDATE move: recorded + queued for verification; the current tenure is NOT closed (no fetch-date end)
+    still = q(conn, "SELECT r.name FROM employment e JOIN branch b USING(branch_id) JOIN restaurant r USING(restaurant_id) WHERE e.chef_id=? AND e.state='active' AND e.valid_to_kind='open'", chef)
+    assert [r['name'] for r in still] == ['달빛정원']
+    assert q(conn, "SELECT COUNT(*) n FROM review_queue WHERE reason='move_needs_verification' AND subject_id=?", chef)[0]['n'] == 1
+    # repairing data written by the OLD apply path: reopen the closed tenure, reject the move-created row, log corrections (idempotent)
+    from kg_collect.apply import revert_unverified_collect_moves
+    from kg_daemon import ontology as ont
+    emp = still and conn.execute("SELECT employment_id FROM employment WHERE chef_id=? AND state='active' AND valid_to_kind='open'", (chef,)).fetchone()['employment_id']
+    brn = conn.execute("SELECT branch_id FROM branch b JOIN restaurant r USING(restaurant_id) WHERE r.name='모래시계'").fetchone()['branch_id']
+    ont.move_chef(conn, chef_id=chef, effective_date=today, evidence={'source_id': conn.execute('SELECT source_id FROM source LIMIT 1').fetchone()[0], 'source_url': 'https://press1.test/a/4',
+                  'collected_at': today}, status='unverified', created_by='collect:apply', to_branch_id=brn)
+    assert revert_unverified_collect_moves(conn) == {'reopened': 1, 'rejected': 1}
+    assert revert_unverified_collect_moves(conn) == {'reopened': 0, 'rejected': 0}
+    assert [r['employment_id'] for r in q(conn, "SELECT employment_id FROM employment WHERE chef_id=? AND state='active' AND valid_to_kind='open'", chef)] == [emp]
     assert scoreboard(conn)['change_latency_hours']['changes_detected'] >= 1
 
 

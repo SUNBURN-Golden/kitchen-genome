@@ -49,7 +49,9 @@ def collector_records(path, tier_to_source) -> dict:
     for t in c.execute('SELECT target_id, kind, name_ko, name_en, attrs_json FROM target'):
         a = json.loads(t['attrs_json'] or '{}')
         tgt[t['target_id']] = {'kind': t['kind'], 'name_ko': t['name_ko'], 'name_en': t['name_en'], 'seed_id': a.get('seed_id'), 'origin': a.get('origin_kitchen')}
-    rows = c.execute("""SELECT e.*, f.url, f.fetched_at FROM extraction e JOIN fetch_record f ON f.fetch_id=e.fetch_id ORDER BY e.rowid""").fetchall()
+    # only the CURRENT extractor's reading of each document: older rule versions' rows stay for audit but are not re-applied as new facts
+    rows = c.execute("""SELECT e.*, f.url, f.fetched_at FROM extraction e JOIN fetch_record f ON f.fetch_id=e.fetch_id
+                        WHERE f.extractor_version IS NULL OR e.extractor_version=f.extractor_version ORDER BY e.rowid""").fetchall()
     for e in rows:
         tier = tier_of(c, e['host'], official)
         sid = tier_to_source.get(tier, 'search_leads')
@@ -77,6 +79,8 @@ def effective_date(x):
     if not x.get('date_text'):
         # a stated tenure start ('2019년부터') is the effective date of a role
         return x.get('tenure_from') if x.get('label') in ('career', 'employment_claim') and x.get('tenure_from') else None
+    if re.fullmatch(r'\d{4}(-\d{2}(-\d{2})?)?', x['date_text'].strip()):     # the collector stores date_text already normalised to ISO
+        return x['date_text'].strip()
     try:
         from kg_collect.extract import DATE_RE, EN_DATE, REL_DATE, iso_from_dateish, relative_or_english_date
     except ImportError:  # pragma: no cover
@@ -105,18 +109,18 @@ def candidates(body, today) -> list[tuple]:
         if MOVE_VERB.search(quote or ''):
             out.append(('chef_move', {**p, 'to_target_id': rseed, 'effective_date': eff or (x.get('published_at') or '')[:7] or None}, loc, quote))
         else:
-            out.append(('employment', {**p, 'current': _young(x.get('published_at'), today)}, loc, quote))
+            out.append(('employment', {**p, 'current': _young(x.get('published_at'), today), 'effective_date': eff}, loc, quote))
     elif lab == 'career' and ch and ((org and org.get('seed_id')) or rseed):
         out.append(('employment', {**base, 'chef_name': ch['name_ko'], 'origin_kitchen': None, 'target_id': (org or {}).get('seed_id') or rseed,
-                                   'role_text': x.get('role_text'), 'past': True, 'tenure_text': '-'.join(filter(None, [x.get('tenure_from'), x.get('tenure_to')])) or None}, loc, quote))
+                                   'role_text': x.get('role_text'), 'past': True, 'effective_date': eff, 'tenure_text': '-'.join(filter(None, [x.get('tenure_from'), x.get('tenure_to')])) or None}, loc, quote))
     elif lab in ('opening', 'closure', 'relocation', 'rename') and rseed:
         kind = 'pause' if (lab == 'closure' and amb == 'temporary_closure') else lab
         out.append((kind, {**base, 'target_id': rseed, 'effective_date': eff, 'by_chef': ch['name_ko'] if (ch and lab == 'opening') else None}, loc, quote))
     elif lab == 'menu' and rseed:
-        out.append(('menu', {**base, 'target_id': rseed, 'title': (quote or '')[:120]}, loc, quote))
+        out.append(('menu', {**base, 'target_id': rseed, 'title': (quote or '')[:120], 'effective_date': eff}, loc, quote))
     elif lab == 'collab' and rseed:
         # working alongside / guest events are EVENTS. They never become mentorship.
-        out.append(('collab', {**base, 'target_id': rseed, 'title': (quote or '')[:120], 'chef_name': ch['name_ko'] if ch else None}, loc, quote))
+        out.append(('collab', {**base, 'target_id': rseed, 'title': (quote or '')[:120], 'chef_name': ch['name_ko'] if ch else None, 'effective_date': eff}, loc, quote))
     elif lab == 'mentorship_claim' and ch and not amb and x.get('org_text'):
         out.append(('mentorship', {**base, 'chef_name': ch['name_ko'], 'origin_kitchen': None, 'mentor_label': x['org_text'], 'assertion_text': quote}, loc, quote))
     return out

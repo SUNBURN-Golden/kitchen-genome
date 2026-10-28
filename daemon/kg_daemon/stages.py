@@ -370,7 +370,7 @@ def state_history_update(ctx: StageContext) -> StageResult:
                 claim = create_claim(ctx.conn, 'employment', c['verification'], f'daemon:{c["extractor"]}', claim_id=stable_id('clm', 'cand', c['candidate_id']))
                 link_evidence(ctx.conn, claim, add_evidence(ctx.conn, **_evidence_of(ctx, c)))
                 from .ontology import add_employment
-                add_employment(ctx.conn, chef_id=c['resolved_chef_id'], branch_id=c['resolved_branch_id'], claim_id=claim, role_text=p.get('role_text'),
+                add_employment(ctx.conn, chef_id=c['resolved_chef_id'], branch_id=c['resolved_branch_id'], claim_id=claim, role_text=p.get('role_text'), valid_from=p.get('effective_date') if parse_iso_date(p.get('effective_date') or '') else None,
                                valid_to_kind='open', last_confirmed_at=json.loads(c['evidence_json'])['collected_at'][:10], seed_ref=f'cand:{c["candidate_id"]}')
             elif ex:   # already known: this document just adds supporting evidence
                 link_evidence(ctx.conn, ex['claim_id'], add_evidence(ctx.conn, **_evidence_of(ctx, c)))
@@ -379,7 +379,7 @@ def state_history_update(ctx: StageContext) -> StageResult:
                 claim = create_claim(ctx.conn, 'employment', c['verification'], f'daemon:{c["extractor"]}', claim_id=stable_id('clm', 'cand', c['candidate_id']))
                 link_evidence(ctx.conn, claim, add_evidence(ctx.conn, **_evidence_of(ctx, c)))
                 from .ontology import add_employment
-                add_employment(ctx.conn, chef_id=c['resolved_chef_id'], branch_id=c['resolved_branch_id'], claim_id=claim, role_text=p.get('role_text'),
+                add_employment(ctx.conn, chef_id=c['resolved_chef_id'], branch_id=c['resolved_branch_id'], claim_id=claim, role_text=p.get('role_text'), valid_from=p.get('effective_date') if parse_iso_date(p.get('effective_date') or '') else None,
                                tenure_text=p.get('tenure_text'), valid_to_kind='unknown', seed_ref=f'cand:{c["candidate_id"]}')
         elif ft == 'chef_move':
             if c['verification'] != 'verified':

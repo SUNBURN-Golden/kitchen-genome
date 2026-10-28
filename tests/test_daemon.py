@@ -376,3 +376,10 @@ def test_verbatim_repost_does_not_verify_a_move(world):
     cc = chef(c, '테스트셰프C')
     daemon(c, env).run()
     assert [e['branch_id'] for e in onto.current_employment(c, cc, '2026-10-27')] != [branch(c, '가상식당1')]   # still held: one source, reposted
+
+
+def test_effective_date_accepts_collector_iso_date_text():
+    from kg_daemon.collect_bridge import effective_date
+    assert effective_date({'label': 'opening', 'date_text': '2024-11-21', 'published_at': '2024-10-30'}) == '2024-11-21'
+    assert effective_date({'label': 'employment_claim', 'date_text': '2025-03', 'published_at': '2025-03-03'}) == '2025-03'
+    assert effective_date({'label': 'collab', 'date_text': None, 'published_at': '2025-03-03'}) is None
