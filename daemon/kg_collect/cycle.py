@@ -98,6 +98,7 @@ def stage_plan(ctx):
         new['entity_status'] += discover.enqueue(conn, **j, caps=caps)
     for j in discover.seed_official_site_jobs(conn):
         new['official_roots'] += discover.enqueue(conn, **j, caps=caps)
+    new['official_probes'] = sum(discover.enqueue(conn, **j, caps=caps) for j in discover.official_probe_jobs(conn, limit=caps.get('max_official_probes_per_cycle', 40)))
     gaps.classify_gaps(conn)
     for j in gaps.gap_jobs(conn, limit=60):
         g = {k: v for k, v in j.items() if k not in ('field', 'absent', 'attempts')}
@@ -137,6 +138,20 @@ def _host_feed_jobs(conn, bot, d, job, caps) -> int:
     for u in urls[:3]:
         if host_of(u) == d.host and discover.enqueue(conn, path='sitemap' if 'sitemap' in u.lower() else 'feed', pool='discovery', url=u, depth=job['depth'], parent=job['job_id'], relevance=0.7, caps=caps):
             n += 1
+    return n
+
+
+def _article_site_leads(conn, d, job, gaz, caps) -> int:
+    """A press article mentions restaurant X and links a host containing X's slug -> probe that root as X's own site (basis article_link)."""
+    n = 0
+    rest_ids = {m['target_id'] for m in gaz.find(d.text or '') if m.get('kind') == 'restaurant' and m.get('target_id')}
+    for tid in rest_ids:
+        t = conn.execute('SELECT * FROM target WHERE target_id=?', (tid,)).fetchone()
+        if not t:
+            continue
+        for u in official.article_link_candidates(d.links, d.text, dict(t), banned=net_mod.BANNED):
+            n += discover.enqueue(conn, path='official_chain', pool='discovery', url=u, query='probe:article_link', target_id=tid, depth=job['depth'] + 1,
+                                  parent=job['job_id'], relevance=0.7, caps=caps)
     return n
 
 
@@ -181,6 +196,28 @@ def stage_fetch(ctx):
         docs = fetcher.fetch(job['url'], job_id=jid, allow_browser=allow_browser, max_pages=max_pages)
         stats['jobs_run'] += 1
         oks = [d for d in docs if d.ok]
+        probe = (job['query'] or '').startswith('probe:')
+        if probe:
+            stats.setdefault('probes', {'tried': 0, 'verified': 0, 'rejected': 0, 'unreachable': 0})['tried'] += 1
+            t = conn.execute('SELECT * FROM target WHERE target_id=?', (job['target_id'],)).fetchone()
+            good = None
+            for d in oks:
+                ok_v, why = official.verify_site(d.text, getattr(d, 'title', '') or '', d.url, dict(t))
+                if ok_v:
+                    good = (d, why)
+                    break
+            if not oks:
+                stats['probes']['unreachable'] += 1
+                conn.execute("UPDATE crawl_job SET state='failed', attempts=3, last_error=?, finished_at=? WHERE job_id=?", (f'probe_unreachable: {docs[-1].outcome}', utcnow(), jid))
+                conn.commit(); done.add(jid); ctx.save_cursor({'done': sorted(done)})
+                continue
+            if not good:
+                stats['probes']['rejected'] += 1
+                _finish_job(conn, jid, 'dropped', f'probe_rejected: {why}')
+                conn.commit(); done.add(jid); ctx.save_cursor({'done': sorted(done)})
+                continue
+            stats['probes']['verified'] += 1
+            official.register_site(conn, job['target_id'], good[0].url, job['query'].split(':', 1)[1], True, good[1], utcnow())
         if oks:
             stats['ok_docs'] += len(oks)
             if host and not discover.is_search_host(host):
@@ -194,8 +231,10 @@ def stage_fetch(ctx):
                     stats['host_feeds'] = stats.get('host_feeds', 0) + _host_feed_jobs(conn, bot, d, jd, caps)
                 if job['path'] == 'directory' and d.links:
                     stats['children_queued'] += discover.directory_link_jobs(conn, d, jd, bot.seeds, caps)
+                if d.links and d.method in ('html', 'jsonld', 'browser') and job['path'] != 'official_chain':
+                    stats['article_site_leads'] = stats.get('article_site_leads', 0) + _article_site_leads(conn, d, jd, gaz, caps)
                 if d.links or d.images:
-                    off = official_hosts(conn)
+                    off = official_hosts(conn) | {r['host'] for r in conn.execute('SELECT host FROM official_site WHERE verified=1')}
                     if job['path'] == 'official_chain' or d.host in off:
                         r = discover.official_chain_jobs(conn, d, jd, bot.seeds, caps)
                         for k, v in r.items():

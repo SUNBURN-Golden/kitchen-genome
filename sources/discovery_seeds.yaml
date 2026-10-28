@@ -39,8 +39,9 @@ caps:
   max_followups_per_extraction: 3
   max_queued_per_pool: {discovery: 400, backfill: 400, refresh: 200}
   pagination_max_pages: 3
+  max_official_probes_per_cycle: 40   # guessed-domain probes for restaurants with open gaps (one GET each, verified before use)
 
 official_chain:
   subpage_hints: [about, story, chef, menu, news, press, notice, history, 소개, 메뉴, 셰프, 스토리, 공지]
   sns_hosts: [instagram.com, facebook.com, youtube.com, blog.naver.com, naver.me, tiktok.com, x.com, twitter.com]
-  booking_hosts: [catchtable.co.kr, catchtable.net, tabling.co.kr, resy.com, opentable.com, toasttab.com, tock.com]
+  booking_hosts: [catchtable.co.kr, catchtable.net, tabling.co.kr, resy.com, opentable.com, toasttab.com, tock.com, exploretock.com, place.naver.com]

@@ -36,6 +36,7 @@ def scoreboard(conn, bot=None, gold_paths=None) -> dict:
         'cost': {'units_spent': round(spent, 1), 'by_pool': by_pool, 'valid_items': valid_items, 'units_per_valid_item': round(spent / valid_items, 3) if valid_items else None,
                  'units_per_new_valid_source': round(spent / len(promoted), 1) if promoted else None},
         'fetch_outcomes': fetch,
+        'official_profile': _official(conn),
         'extractions': {r['epistemic']: r['n'] for r in conn.execute('SELECT epistemic, COUNT(*) n FROM extraction GROUP BY epistemic')},
     }
     gp = gold_paths if gold_paths is not None else [p for p in (GOLD_SYNTH, os.path.join(ROOT, 'data_store', 'gold', 'gold_real.json')) if os.path.exists(p)]
@@ -43,3 +44,16 @@ def scoreboard(conn, bot=None, gold_paths=None) -> dict:
         from .gold import run_file
         sb['accuracy'] = {os.path.basename(p): {k: v for k, v in run_file(p).items() if k not in ('errors', 'by_label')} for p in gp}
     return sb
+
+
+def _official(conn) -> dict:
+    try:
+        sites = {r['basis']: r['n'] for r in conn.execute('SELECT basis, COUNT(DISTINCT target_id) n FROM official_site WHERE verified=1 GROUP BY basis')}
+        facts = {f"{r['field']}:{r['epistemic']}": r['n'] for r in conn.execute('SELECT field, epistemic, COUNT(*) n FROM profile_fact GROUP BY field, epistemic')}
+        by_fact = conn.execute('SELECT COUNT(*) FROM gap WHERE resolved_by_fact IS NOT NULL').fetchone()[0]
+        probes = {r['s']: r['n'] for r in conn.execute("""SELECT CASE WHEN last_error LIKE 'probe_rejected%' THEN 'rejected' WHEN last_error LIKE 'probe_unreachable%' THEN 'unreachable'
+                                                           WHEN state='done' THEN 'verified' ELSE state END s, COUNT(*) n FROM crawl_job WHERE query LIKE 'probe:%' GROUP BY s""")}
+        booking = {r['outcome']: r['n'] for r in conn.execute("""SELECT f.outcome, COUNT(*) n FROM fetch_record f JOIN crawl_job j ON j.job_id=f.job_id WHERE j.query='booking' GROUP BY f.outcome""")}
+    except Exception:  # noqa: BLE001  (DB before migration 0004)
+        return {}
+    return {'verified_sites_by_basis': sites, 'profile_facts': facts, 'gaps_resolved_by_profile_fact': by_fact, 'probe_jobs': probes, 'booking_fetches': booking}
