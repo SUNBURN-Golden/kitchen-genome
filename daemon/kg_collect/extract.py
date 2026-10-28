@@ -17,7 +17,7 @@ CHEF_STOP = {'총괄', '헤드', '오너', '수석', '스타', '미쉐린', '미
 SENT_SPLIT = re.compile(r'(?<=[.!?。])\s+|\n+')
 
 PATTERNS = {
-    'collab': re.compile(r'게스트\s?(?:셰프|쉐프|다이닝|디너)|팝업|콜라보|협업|초청|내한|원\s?나이트|투\s?나이트|스페셜\s?디너|합작|함께\s?선보|공동\s?개발|손잡고|손을\s?잡고'),
+    'collab': re.compile(r'게스트\s?(?:셰프|쉐프|다이닝|디너)|콜라보|협업|초청|내한|원\s?나이트|투\s?나이트|스페셜\s?디너|합작|함께\s?선보|공동\s?개발|손잡고|손을\s?잡고|(?:갈라|와인|페어링|마리아주|스페셜|특별)\s?(?:디너|만찬|런치)|(?:디너|만찬|행사|이벤트)\s?(?:를\s?|을\s?)?(?:개최|진행|연다|열어|선보)'),
     'co_worker': re.compile(r'함께\s?(?:일했|근무|일한)|같이\s?(?:일했|근무)|동료|동기로|호흡을\s?맞춰|한솥밥'),
     'mentor': re.compile(r'사사|스승|제자|밑에서\s?(?:배웠|수련|배운)|가르침|멘토'),
     'career': re.compile(r'출신|에서\s?(?:(?:20\d{2}\s?년?\s?(?:부터|[~\-–])\s?(?:20\d{2}\s?년?|현재|지금)(?:까지)?\s?)?)(?:' + ROLE_RE + r'로?\s?)?(?:\d{1,2}\s?년(?:간|동안)?\s?)?(?:근무|일했|일한|경력|수련|근속|지냈|재직|배웠)|를\s?거쳐|을\s?거쳐|에서\s?' + ROLE_RE + r'(?:로|를)?\s?(?:맡|지냈|역임|활약|일)|경력을\s?(?:쌓|가진)|출신으로'),
@@ -170,6 +170,41 @@ def org_phrase_before(sent: str, idx: int) -> str | None:
     return None
 
 
+POPUP = re.compile(r'팝업(?:\s?(?:레스토랑|스토어|매장|다이닝))?')
+POPUP_RAN = re.compile(r'(?:운영했|운영한|이끌었|맡았|진행했)')
+# chef and restaurant written side by side with no relation verb ("'밍글스' 강민구 셰프", "강민구 셰프 '밍글스'"): a weak current-affiliation claim
+SIDE_GAP = re.compile(r'^\s?(?:(?:오너|총괄|헤드|수석|수|파티시에|페이스트리)?\s?(?:셰프|쉐프)(?:의)?)?\s?[‘\'"“]?\s?$|^[’\'"”]?\s?$')
+# English press headlines
+EN_OPEN = re.compile(r'\b(?:opens|opened|to open|is opening|will open|debuts|launches|first opened)\b', re.I)
+EN_FORMER = re.compile(r'\b(?:former|ex-|formerly (?:of|at)|alum(?:nus|na)? of|previously (?:at|of))\b', re.I)
+EN_CHEF = r'(?:executive |head |pastry |sous |chef-owner |owner )?(?:chef|pastry chef|star)'
+
+
+def _en_rules(sent, chefs, rests, mk):
+    """General English-headline rules. Only fire when BOTH a known chef and a known restaurant are in the sentence."""
+    if not chefs or not rests or not re.search(r'[A-Za-z]{3}', sent):
+        return
+    c, r = chefs[0], rests[0]
+    seg_c = sent[max(0, c['start'] - 40):c['start']]
+    former = EN_FORMER.search(sent[max(0, r['start'] - 20):r['start'] + 1]) or EN_FORMER.search(seg_c)
+    op = EN_OPEN.search(sent)
+    if former:
+        mk('career', chef=c['surface'], org=r['surface'], anchor=r['start'])
+    if op and op.start() > c['start']:
+        target = next((x for x in rests if x['start'] > op.start()), None)
+        if target:
+            mk('opening', chef=c['surface'], rest=target['surface'], anchor=op.start())
+            return
+    if former:
+        return
+    # "R's Pastry Chef X" / "R's ... Chef X" / "At R, ... Chef X" / "X, chef at R"
+    poss = re.search(re.escape(r['surface']) + r'[’\']s\b', sent)
+    at = re.search(r'\bat\s+' + re.escape(r['surface']) + r'\b', sent, re.I)
+    chef_word = re.search(r'\b' + EN_CHEF + r'\b', sent, re.I)
+    if (poss or at) and chef_word:
+        mk('employment_claim', chef=c['surface'], rest=r['surface'], anchor=chef_word.start())
+
+
 def extract_text(text: str, *, gaz, host: str, published_at: str | None = None, tier: str = 'press', ctx: dict | None = None,
                  ocr_conf: float | None = None, official_hosts: set | None = None, content_hash: str = '') -> list[dict]:
     """ctx: {'chef': target-row?, 'restaurant': target-row?} the job's target (used ONLY when the sentence has no subject; marks epistemic=inference)."""
@@ -188,7 +223,20 @@ def extract_text(text: str, *, gaz, host: str, published_at: str | None = None, 
         ar = AT_RISK.search(sent) or COND_CLOSE.search(sent)
         if ar and hits['closure'] and ar.start() <= hits['closure'].start() <= ar.end():
             hits['closure'] = None                    # 'closure crisis' / 'closes if sales fail' is a risk or a rule, not a closure
-        if not any(hits.values()) and not APPOINT.search(sent):
+        popup = POPUP.search(sent)
+        if popup and hits['collab'] is None:
+            pass
+        side = None
+        if chefs and rests and not hits['career'] and not hits['collab']:
+            for c in chefs:
+                for r in rests:
+                    a, b = (c, r) if c['end'] <= r['start'] else (r, c)
+                    if SIDE_GAP.match(sent[a['end']:b['start']]) and not re.match(r'\s?(?:출신|에서)', sent[b['end']:b['end'] + 4]):
+                        side = (c, r)
+                        break
+                if side:
+                    break
+        if not any(hits.values()) and not APPOINT.search(sent) and not side and not (chefs and rests and re.search(r'[A-Za-z]{3}', sent)):
             continue
         base_unverified = bool(HEARSAY.search(sent)) or tier in ('social_lead', 'search_lead') or (ocr_conf is not None and ocr_conf < 60)
         negated = bool(NEGATION.search(sent))
@@ -220,10 +268,19 @@ def extract_text(text: str, *, gaz, host: str, published_at: str | None = None, 
             out.append(rec)
 
         chef_names = [c['surface'] for c in chefs] + [c['surface'] for c in new_chefs]
+        if re.search(r'[A-Za-z]{3}', sent) and not re.search(r'[가-힣]', sent):
+            _en_rules(sent, chefs, rests, mk)
+            continue
+        if popup and chef_names and POPUP_RAN.search(sent) and not hits['collab']:
+            pv = QUOTED_VENUE.search(sent) or re.search(r'[‘\'“"]([^’\'”"]{2,30})[’\'”"]', sent[popup.start():])
+            pname = next((r['surface'] for r in rests if r['start'] >= popup.start()), None) or (clean_venue(pv.group(1)) if pv else None)
+            if pname:
+                mk('career', chef=chef_names[0], org=pname, anchor=popup.start(), extra={'venue_format': 'popup'})
+                continue
         # ── collab / co-working first: they veto employment readings ──
         is_collab = bool(hits['collab'])
         if is_collab and (chef_names or rests):
-            mk('collab', chef=chef_names[0] if chef_names else None, rest=rests[0]['surface'] if rests else None, anchor=hits['collab'].start(),
+            mk('collab', chef=chef_names[0] if chef_names else None, rest=(side[1]['surface'] if side else (rests[0]['surface'] if rests else None)), anchor=hits['collab'].start(),
                extra={'collab_kind': 'guest_event'})
         if hits['co_worker'] and not hits['mentor'] and (chef_names or rests):
             mk('collab', chef=chef_names[0] if chef_names else None, rest=rests[0]['surface'] if rests else None, anchor=hits['co_worker'].start(),
@@ -241,6 +298,12 @@ def extract_text(text: str, *, gaz, host: str, published_at: str | None = None, 
                ambiguity=None if clear else 'mentor_or_mentee_unclear', epi=None if clear else 'unverified',
                extra={'mentor_text': mentor['surface'] if mentor else None})
         career_org = None
+        if side and not hits['employment'] and not APPOINT.search(sent):
+            c, r = side
+            if is_collab:
+                pass                       # handled by the collab record (chef+restaurant now both attached below)
+            else:
+                mk('employment_claim', chef=c['surface'], rest=r['surface'], anchor=c['start'], ambiguity='side_by_side_mention')
         # ── career: X came from ORG ──
         if hits['career'] and hits['career'].group(0).startswith('출신') and re.match(r'\s?(?:의\s?)?(?:소믈리에|바텐더|파티시에|직원|관계자|스태프|매니저|작가|기자)', sent[hits['career'].end():hits['career'].end() + 8]):
             hits['career'] = None             # '리츠칼튼 출신 소믈리에': the career belongs to an unnamed staff member, not to a chef in the sentence
@@ -335,7 +398,8 @@ def extract_text(text: str, *, gaz, host: str, published_at: str | None = None, 
                     mk(label, chef=cn, rest=subject_rest, anchor=hits[label].start(), ambiguity='temporary_closure', inferred=inferred_subject)
                     continue
                 mk(label, chef=cn, rest=subject_rest, anchor=hits[label].start(), inferred=inferred_subject,
-                   ambiguity=None if (status_rests or inferred_subject) else 'restaurant_not_identified')
+                   ambiguity=None if (status_rests or inferred_subject) else 'restaurant_not_identified',
+                   extra={'venue_format': 'popup'} if (label == 'opening' and popup) else None)
         if hits['menu'] and rests and not is_collab and not any(h for k, h in hits.items() if k in ('opening', 'closure', 'relocation', 'rename', 'career')):
             mk('menu', rest=rests[0]['surface'], anchor=hits['menu'].start(), epi='unverified' if (ocr_conf is not None and ocr_conf < 60) else None)
     # de-dup identical ids

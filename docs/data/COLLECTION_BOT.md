@@ -77,3 +77,19 @@ exploretock Cloudflare 403. → 추출기(`booking.py`)는 있지만 이 플랫�
 **정확도**: in-sample real gold P 1.0 / R 0.941 (튜닝셋). **held-out** (cycle 8–10 문서 30문장, 17 항목, 규칙 동결 후 수집, 작성자 단독 라벨):
 **P 0.667 / R 0.353 / F1 0.462**, epistemic 1.0. 과적합 확인 — 영문 헤드라인, '팝업 오픈'(collab로 오분류), '현업 셰프 + 식당' 병기 누락이 주 원인.
 held-out은 튜닝에 쓰지 않았다(다음 개선 후 새 held-out 필요). 공식 사이트 chef 추출은 7개 중 2개만 정답이어서 #47로 수정(사후 판정, 블라인드 아님).
+
+## Phase 4 (2026-10-28): rules/1.3 + 새 held-out v2
+
+rules/1.3 (일반 규칙): '팝업'은 collab이 아니라 매장 형식(opening에 `venue_format=popup`, 셰프가 팝업을 '운영했다'면 career),
+'갈라/와인/페어링 디너·행사 개최'는 collab, 셰프+식당 병기(관계 동사 없음)는 약한 employment_claim(`ambiguity=side_by_side_mention`),
+영문 헤드라인 규칙(Former X → career, X Opens R → opening, R's/At R … Chef X → employment_claim).
+
+| 평가셋 | rules/1.2 | rules/1.3 |
+|---|---|---|
+| 구 held-out (cycle 8–10, **이제 튜닝에 사용 → dev셋**) | P 0.667 / R 0.353 | P 1.0 / R 0.882 (in-sample, 의미 없음) |
+| gold_real (in-sample) | P 1.0 / R 0.941 | P 0.889 / R 0.941 (병기 규칙 FP 3) |
+| **새 held-out v2** (cycle 11 신규 79문서, 대상 언급 27문장 전수, 규칙 동결 후 라벨 선작성, 9항목) | – | **P 0.0 / R 0.0** (FP 1, FN 9) |
+
+v2 실패 원인: 성씨 약칭 공지시('손 셰프' → 손종원) 미지원 4, '이타닉가든·라망시크레 … 이끈/겸하고 있다' 다중 식당 열거 미지원 4,
+"'Lysée(리제)'의 이은지(Eunji Lee) 셰프" 괄호 병기 미지원 1, '본연' 오탐(일반명사와 같은 식당명) 1.
+동명이인 음성 샘플(뮤지컬 배우 김호영, 구청장 박준희, 밴드 멤버 이준용)은 모두 정상적으로 무추출. 샘플이 작고(9항목) 한 인물 기사에 몰려 있다.
