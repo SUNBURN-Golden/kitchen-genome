@@ -5,6 +5,7 @@ import re
 
 from kg_daemon.db import utcnow
 
+from .review import reject_reason
 from .targets import Gazetteer, norm, upsert_target
 
 NEW_NAME_OK = re.compile(r'^[가-힣]{2,4}$')
@@ -41,7 +42,7 @@ def resolve_chef(conn, gaz: Gazetteer, name: str | None, context_restaurant_targ
         if len(narrowed) == 1:
             return narrowed[0], 'homonym_resolved_by_restaurant_context'
         return None, 'homonym_unresolved'          # never guess
-    if allow_new and NEW_NAME_OK.match(name):
+    if allow_new and NEW_NAME_OK.match(name) and not reject_reason('chef', name):
         t = upsert_target(conn, 'chef', name, origin='discovered', via=via, status='candidate', attrs={'first_url': doc_url})
         return t, 'new_candidate'
     return None, 'unknown_name'
@@ -55,7 +56,7 @@ def resolve_restaurant(conn, gaz: Gazetteer, name: str | None, allow_new: bool, 
         return next(iter(cands)), None
     if len(cands) > 1:
         return None, 'restaurant_homonym_unresolved'
-    if allow_new and 3 <= len(name) <= 24:
+    if allow_new and 3 <= len(name) <= 24 and not reject_reason('restaurant', name):
         t = upsert_target(conn, 'restaurant', name, origin='discovered', via=via, status='candidate', attrs={'first_url': doc_url})
         return t, 'new_candidate'
     return None, 'unknown_restaurant'

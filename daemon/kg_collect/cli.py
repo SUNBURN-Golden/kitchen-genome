@@ -21,6 +21,7 @@ def main(argv=None) -> int:
     c.add_argument('--no-browser', action='store_true')
     sub.add_parser('status')
     sub.add_parser('scoreboard')
+    sub.add_parser('review')
     g = sub.add_parser('gold')
     g.add_argument('file')
     a = ap.parse_args(argv)
@@ -48,6 +49,9 @@ def main(argv=None) -> int:
     elif a.cmd == 'scoreboard':
         from .scoreboard import scoreboard
         print(json.dumps(scoreboard(conn), ensure_ascii=False, indent=1))
+    elif a.cmd == 'review':
+        from .review import review_candidates
+        print(json.dumps(review_candidates(conn), ensure_ascii=False, indent=1))
     elif a.cmd == 'gold':
         from .gold import run_file
         print(json.dumps(run_file(a.file), ensure_ascii=False, indent=1))

@@ -93,3 +93,19 @@ def test_directory_links_skip_wiki_chrome(conn):
 def test_zero_unit_plan_is_empty_not_a_crash(conn):
     pl = scheduler.plan(conn, 0)
     assert all(not v for v in pl['chosen'].values()) if isinstance(pl.get('chosen'), dict) else True
+
+
+def test_candidate_review_drops_acronyms_and_institutions_and_queues_the_rest(conn):
+    from kg_collect import review
+    from kg_collect.targets import upsert_target
+    assert review.reject_reason('restaurant', 'CIA') == 'acronym_not_a_venue'
+    assert review.reject_reason('restaurant', 'C.I.A.') == 'acronym_not_a_venue'
+    assert review.reject_reason('restaurant', '르 꼬르동 블루') == 'institution_not_a_venue'
+    assert review.reject_reason('restaurant', '세옥') is None and review.reject_reason('chef', '여경옥') is None
+    a = upsert_target(conn, 'restaurant', 'CIA', origin='discovered', via='t', status='candidate', attrs={})
+    b = upsert_target(conn, 'chef', '여경옥', origin='discovered', via='t', status='candidate', attrs={})
+    out = review.review_candidates(conn)
+    st = {r['target_id']: r['status'] for r in conn.execute('SELECT target_id,status FROM target WHERE target_id IN (?,?)', (a, b))}
+    assert st[a] == 'rejected' and st[b] == 'candidate'
+    assert [p['name'] for p in out['queued_for_review']] == ['여경옥']
+    assert review.review_candidates(conn)['rejected'] == []                     # idempotent
