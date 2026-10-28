@@ -16,6 +16,7 @@ import json
 import os
 import sys
 
+from . import collect_bridge
 from . import registry as reg_mod
 from .claims import add_evidence, create_claim, host_of, link_evidence, open_conflict, queue_review, RANK
 from .db import ROOT, new_id, stable_id, utcnow
@@ -88,11 +89,12 @@ def incremental_fetch(ctx: StageContext) -> StageResult:
     raw_dir = ctx.env.get('raw_dir')           # RAW STORE: outside git (data_store/raw by default; never committed)
     counts, stubbed = {}, []
     vault = _vault_by_source(ctx)
+    collected = collect_bridge.collector_records(ctx.env.get('collect_db'), reg_mod.TIER_TO_SOURCE) if ctx.env.get('collect_db') else {}
     for sid in ctx.prev['source_discovery']['active']:
         s = reg['sources'][sid]
         adapter = s['adapter']
         fetcher = (ctx.env.get('fetchers') or {}).get(adapter)
-        records = list(vault.get(sid, []))                       # local, free: whatever the existing crawler already collected for this source
+        records = list(vault.get(sid, [])) + list(collected.get(sid, []))   # local, free: what the crawler + live collector already fetched
         if adapter == 'instagram_py':
             records = list(_instagram_records(ctx))
         elif fetcher:
@@ -154,7 +156,7 @@ def change_detection(ctx: StageContext) -> StageResult:
 
 # ───────────── 4. extraction ─────────────
 def _cand(ctx, doc, ftype, payload, extractor, locator, quote, asserted_by='source'):
-    key = _sha(f'{doc["content_hash"]}|{ftype}|{json.dumps(payload, ensure_ascii=False, sort_keys=True)}')
+    key = _sha(f'{doc["canonical_url"]}|{doc["content_hash"]}|{ftype}|{json.dumps(payload, ensure_ascii=False, sort_keys=True)}')
     ev = {'source_url': doc['url'], 'locator': locator or {}, 'quote': (quote or None) and quote[:200],
           'collected_at': doc['fetched_at'], 'effective_from': payload.get('effective_date')}
     ctx.conn.execute("""INSERT OR IGNORE INTO candidate_fact(candidate_id,idempotency_key,document_id,source_id,fact_type,payload_json,evidence_json,extractor,asserted_by,created_at)
@@ -167,10 +169,18 @@ def extract_from_body(ctx, doc, body) -> int:
     before = ctx.conn.total_changes
     tid, f, loc = body.get('target_id'), body.get('extracted_facts') or {}, body.get('evidence_locator') or {}
     quote = loc.get('quote') or body.get('title')
+    if body.get('collect'):
+        today = ctx.env.get('today') or utcnow()[:10]
+        for ftype, payload, loc2, q in collect_bridge.candidates(body, today):
+            if ftype == 'ambiguous':
+                ctx.env.setdefault('_ambiguous_skipped', [0])[0] += 1   # negated / planned / unclear subject: not a fact, not a candidate
+                continue
+            _cand(ctx, doc, ftype, payload, f"collect:{body['collect']['extractor']}", loc2, q)
+        return ctx.conn.total_changes - before
     if body.get('instagram'):   # IG findings are keyword hits with a <=40-char excerpt: lead only
         kind = {'closure': 'closure', 'rename': 'rename', 'opening': 'opening', 'chef_move': 'chef_move'}.get(body.get('kind'))
         if kind:
-            _cand(ctx, doc, kind, {'target_id': tid, 'excerpt': (body.get('title') or '')[:40]}, 'rule:instagram_keyword', {'post_url': doc['url']}, body.get('title'))
+            _cand(ctx, doc, kind, {'target_id': tid, 'excerpt': (body.get('title') or '')[:40], 'lead_only': True, 'instagram': True}, 'rule:instagram_keyword', {'post_url': doc['url']}, body.get('title'))
         return ctx.conn.total_changes - before
     if f.get('closure') and parse_iso_date(str(f['closure'])):
         _cand(ctx, doc, 'closure', {'target_id': tid, 'effective_date': str(f['closure'])}, 'rule:vault_facts', loc, quote)
@@ -253,7 +263,7 @@ def entity_resolution(ctx: StageContext) -> StageResult:
                 chef_id = cs[0]
             else:
                 reason = 'unknown_chef' if not cs else 'homonym'
-        if not reason and c['fact_type'] in ('closure', 'opening', 'relocation', 'rename') and not branch_id:
+        if not reason and c['fact_type'] in ('closure', 'opening', 'relocation', 'rename', 'pause', 'menu', 'collab') and not branch_id:
             reason = 'unknown_target'
         if reason:
             ctx.conn.execute("UPDATE candidate_fact SET resolution='needs_review' WHERE candidate_id=?", (c['candidate_id'],))
@@ -269,8 +279,13 @@ def entity_resolution(ctx: StageContext) -> StageResult:
 # ───────────── 6. evidence verification ─────────────
 def evidence_verification(ctx: StageContext) -> StageResult:
     out = {'verified': 0, 'source_claim': 0, 'unverified': 0, 'ai_inference': 0}
-    for c in ctx.conn.execute("SELECT c.*, s.tier FROM candidate_fact c JOIN source s ON s.source_id=c.source_id WHERE c.resolution='resolved' AND c.verification IS NULL ORDER BY c.rowid").fetchall():
+    for c in ctx.conn.execute("""SELECT c.*, s.tier FROM candidate_fact c JOIN source s ON s.source_id=c.source_id WHERE c.resolution='resolved'
+                                   AND (c.verification IS NULL OR (c.fact_type='chef_move' AND c.applied_claim_id IS NULL)) ORDER BY c.rowid""").fetchall():
         if c['asserted_by'] == 'ai_inference':
+            v = 'ai_inference'
+        elif json.loads(c['payload_json']).get('lead_only'):
+            v = 'unverified'                   # search snippet / hearsay / Instagram: a candidate to check, never a fact on its own
+        elif False:
             v = 'ai_inference'
         elif c['tier'] in ('social_lead', 'search_lead', 'specialist_blog'):
             v = 'unverified'                   # leads never become source_claim/verified on their own
@@ -278,7 +293,8 @@ def evidence_verification(ctx: StageContext) -> StageResult:
             hosts = {host_of(json.loads(r['evidence_json'])['source_url']) for r in ctx.conn.execute(
                 """SELECT x.evidence_json FROM candidate_fact x JOIN source s ON s.source_id=x.source_id
                    WHERE x.fact_type=? AND IFNULL(x.resolved_chef_id,'')=IFNULL(?,'') AND IFNULL(x.resolved_branch_id,'')=IFNULL(?,'')
-                   AND x.resolution='resolved' AND x.asserted_by='source' AND s.tier IN ('official','press','human')""",
+                   AND x.resolution='resolved' AND x.asserted_by='source' AND s.tier IN ('official','press','human')
+                   AND IFNULL(json_extract(x.payload_json,'$.lead_only'),0)=0""",
                 (c['fact_type'], c['resolved_chef_id'], c['resolved_branch_id']))}
             v = 'verified' if (c['tier'] in ('official', 'human') or len(hosts) >= 2) else 'source_claim'
         ctx.conn.execute('UPDATE candidate_fact SET verification=? WHERE candidate_id=?', (v, c['candidate_id']))
@@ -324,14 +340,38 @@ def state_history_update(ctx: StageContext) -> StageResult:
             held += 1
             continue
         ft = c['fact_type']
-        if ft in ('closure', 'opening', 'relocation'):
-            claim = _apply_status_event(ctx, c, p, {'closure': 'close', 'opening': 'open', 'relocation': 'move'}[ft])
+        if ft in ('closure', 'opening', 'relocation', 'pause'):
+            claim = _apply_status_event(ctx, c, p, {'closure': 'close', 'opening': 'open', 'relocation': 'move', 'pause': 'pause'}[ft])
+        elif ft in ('menu', 'collab'):
+            # menus and collab / pop-up / guest events are dated EVENTS of a branch. Working alongside someone is never mentorship.
+            claim = create_claim(ctx.conn, 'menu_event', c['verification'], f'daemon:{c["extractor"]}', claim_id=stable_id('clm', 'cand', c['candidate_id']))
+            link_evidence(ctx.conn, claim, add_evidence(ctx.conn, **_evidence_of(ctx, c)))
+            kind = 'popup' if '팝업' in (p.get('title') or '') else ft
+            ctx.conn.execute('INSERT OR IGNORE INTO menu_event(menu_event_id,branch_id,kind,title,starts_on,claim_id,created_at) VALUES (?,?,?,?,?,?,?)',
+                             (stable_id('mev', c['candidate_id']), c['resolved_branch_id'], kind, (p.get('title') or ft)[:120], p.get('effective_date'), claim, utcnow()))
         elif ft == 'rename':       # recorded as a dated status event carrying the new name; the display name is never auto-changed
             p = {**p, 'excerpt': f"rename -> {p['new_name']}"[:200]}
             claim = _apply_status_event(ctx, c, p, 'rename')
         elif ft == 'employment':
-            ex = ctx.conn.execute("SELECT employment_id, claim_id FROM employment WHERE chef_id=? AND branch_id=? AND state<>'rejected' LIMIT 1", (c['resolved_chef_id'], c['resolved_branch_id'])).fetchone()
-            if ex:   # already known: this document just adds supporting evidence
+            ex = ctx.conn.execute("SELECT employment_id, claim_id, valid_to_kind, state FROM employment WHERE chef_id=? AND branch_id=? AND state<>'rejected' ORDER BY valid_to_kind='open' DESC LIMIT 1", (c['resolved_chef_id'], c['resolved_branch_id'])).fetchone()
+            if ex and p.get('past') and ex['valid_to_kind'] == 'open' and ex['state'] == 'active':
+                # source says 'ex-/출신' while we hold this tenure as current: keep both, open a conflict for a human
+                claim = create_claim(ctx.conn, 'employment_end', c['verification'], f'daemon:{c["extractor"]}', note='source describes this tenure as past',
+                                     claim_id=stable_id('clm', 'cand', c['candidate_id']))
+                link_evidence(ctx.conn, claim, add_evidence(ctx.conn, **_evidence_of(ctx, c)))
+                cf = open_conflict(ctx.conn, 'employment', ex['employment_id'], 'employment.current_vs_past', ex['claim_id'], claim)
+                queue_review(ctx.conn, 'conflict', 'conflict', cf, {'employment_id': ex['employment_id'], 'quote': json.loads(c['evidence_json']).get('quote')}, dedupe_key=f'conflict:{cf}')
+            elif ex and p.get('current') and ex['valid_to_kind'] == 'open':
+                link_evidence(ctx.conn, ex['claim_id'], add_evidence(ctx.conn, **_evidence_of(ctx, c)))
+                ctx.conn.execute('UPDATE employment SET last_confirmed_at=MAX(IFNULL(last_confirmed_at,\'\'),?) WHERE employment_id=?', (json.loads(c['evidence_json'])['collected_at'][:10], ex['employment_id']))
+                claim = ex['claim_id']
+            elif not ex and p.get('current'):
+                claim = create_claim(ctx.conn, 'employment', c['verification'], f'daemon:{c["extractor"]}', claim_id=stable_id('clm', 'cand', c['candidate_id']))
+                link_evidence(ctx.conn, claim, add_evidence(ctx.conn, **_evidence_of(ctx, c)))
+                from .ontology import add_employment
+                add_employment(ctx.conn, chef_id=c['resolved_chef_id'], branch_id=c['resolved_branch_id'], claim_id=claim, role_text=p.get('role_text'),
+                               valid_to_kind='open', last_confirmed_at=json.loads(c['evidence_json'])['collected_at'][:10], seed_ref=f'cand:{c["candidate_id"]}')
+            elif ex:   # already known: this document just adds supporting evidence
                 link_evidence(ctx.conn, ex['claim_id'], add_evidence(ctx.conn, **_evidence_of(ctx, c)))
                 claim = ex['claim_id']
             else:
@@ -341,6 +381,19 @@ def state_history_update(ctx: StageContext) -> StageResult:
                 add_employment(ctx.conn, chef_id=c['resolved_chef_id'], branch_id=c['resolved_branch_id'], claim_id=claim, role_text=p.get('role_text'),
                                tenure_text=p.get('tenure_text'), valid_to_kind='unknown', seed_ref=f'cand:{c["candidate_id"]}')
         elif ft == 'chef_move':
+            if c['verification'] != 'verified':
+                # a move closes a tenure ONLY once verified (official/human source or 2 independent trusted hosts). Until then: candidate to check.
+                queue_review(ctx.conn, 'move_needs_verification', 'candidate_fact', c['candidate_id'], {'payload': p, 'verification': c['verification']},
+                             dedupe_key=f'move_needs_verification:{c["candidate_id"]}')
+                held += 1
+                continue
+            same = ctx.conn.execute("SELECT employment_id, claim_id FROM employment WHERE chef_id=? AND branch_id=? AND state='active' AND valid_to_kind='open'",
+                                    (c['resolved_chef_id'], c['resolved_branch_id'])).fetchone()
+            if same:     # already there: confirmation, not a move
+                link_evidence(ctx.conn, same['claim_id'], add_evidence(ctx.conn, **_evidence_of(ctx, c)))
+                ctx.conn.execute('UPDATE candidate_fact SET applied_claim_id=? WHERE candidate_id=?', (same['claim_id'], c['candidate_id']))
+                applied += 1
+                continue
             if not (p.get('effective_date') and parse_iso_date(p['effective_date'])):
                 ctx.conn.execute("UPDATE candidate_fact SET resolution='needs_review' WHERE candidate_id=?", (c['candidate_id'],))
                 queue_review(ctx.conn, 'move_without_date', 'candidate_fact', c['candidate_id'], {'payload': p}, dedupe_key=f'move_without_date:{c["candidate_id"]}')

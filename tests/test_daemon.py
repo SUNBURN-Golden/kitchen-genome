@@ -69,8 +69,27 @@ def test_pipeline_applies_closure_with_two_independent_sources_as_verified(world
     assert c.execute('SELECT COUNT(*) FROM claim_evidence WHERE claim_id=?', (ev[0]['claim_id'],)).fetchone()[0] == 2
 
 
+def _corroborate_move(env):
+    v = json.load(open(env['vault_path'], encoding='utf-8'))
+    r = dict(next(x for x in v['records'] if x['record_id'] == 't:3'))
+    r.update(record_id='t:3b', url='https://other-press.example.org/m', source_host='other-press.example.org')
+    v['records'].append(r)
+    json.dump(v, open(env['vault_path'], 'w', encoding='utf-8'), ensure_ascii=False)
+
+
+def test_single_source_move_is_held_not_applied(world):
+    c, env, _ = world
+    cc = chef(c, '테스트셰프C')
+    before = [dict(r) for r in c.execute('SELECT employment_id, state, valid_to FROM employment WHERE chef_id=?', (cc,))]
+    daemon(c, env).run()
+    after = [dict(r) for r in c.execute('SELECT employment_id, state, valid_to FROM employment WHERE chef_id=?', (cc,))]
+    assert after == before                                   # nothing closed on one press article
+    assert c.execute("SELECT COUNT(*) FROM review_queue WHERE reason='move_needs_verification'").fetchone()[0] == 1
+
+
 def test_pipeline_chef_move_closes_old_and_adds_new_without_deleting(world):
     c, env, _ = world
+    _corroborate_move(env)                                   # 2 independent trusted hosts -> verified move
     cc = chef(c, '테스트셰프C')
     before = c.execute('SELECT COUNT(*) FROM employment WHERE chef_id=?', (cc,)).fetchone()[0]
     daemon(c, env).run()
@@ -79,6 +98,16 @@ def test_pipeline_chef_move_closes_old_and_adds_new_without_deleting(world):
     assert [e['branch_id'] for e in onto.current_employment(c, cc, '2026-10-27')] == [branch(c, '가상식당1')]
     assert any(r['state'] == 'closed' and r['valid_to'] == '2026-10-10' for r in rows)
     assert onto.current_employment(c, cc, '2026-09-01')[0]['branch_id'] == branch(c, '가상식당2')    # history preserved
+
+
+def test_held_move_applies_once_corroborated_on_a_later_run(world):
+    c, env, _ = world
+    cc = chef(c, '테스트셰프C')
+    daemon(c, env).run()
+    assert [e['branch_id'] for e in onto.current_employment(c, cc, '2026-10-27')] != [branch(c, '가상식당1')]
+    _corroborate_move(env)
+    daemon(c, env).run(resume=False)
+    assert [e['branch_id'] for e in onto.current_employment(c, cc, '2026-10-27')] == [branch(c, '가상식당1')]
 
 
 def test_pipeline_never_guesses_identity(world):
@@ -92,6 +121,7 @@ def test_pipeline_never_guesses_identity(world):
 
 def test_service_outputs_written_and_upserted(world):
     c, env, _ = world
+    _corroborate_move(env)
     daemon(c, env).run()
     n = counts(c)['service_output']
     assert n > 0
