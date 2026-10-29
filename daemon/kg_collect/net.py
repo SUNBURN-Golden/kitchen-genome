@@ -22,6 +22,40 @@ LOGIN_HINTS = ('로그인', '회원가입', 'sign in', 'log in', 'login', '비�
 CHALLENGE_HINTS = ('just a moment', 'captcha', 'checking your browser', 'access denied', 'attention required', 'unusual traffic', '접근이 제한', '비정상적인 접근', 'security check')
 
 
+_PCT_STRAY = re.compile(r'%(?![0-9A-Fa-f]{2})')
+_PATH_SAFE = "/%:@!$&'()*+,;=-._~"
+_QUERY_SAFE = _PATH_SAFE + '?'
+
+
+def _idna_host(host: str) -> str:
+    if not host or host.isascii():
+        return host
+    try:
+        return host.encode('idna').decode('ascii')
+    except UnicodeError:
+        return '.'.join(lbl if lbl.isascii() else 'xn--' + lbl.encode('punycode').decode('ascii') for lbl in host.split('.'))
+
+
+def to_uri(url: str) -> str:
+    """IRI -> URI (RFC 3987 3.1): non-ASCII host labels -> IDNA, non-ASCII/space in path, query and fragment -> UTF-8 percent-encoding.
+    Existing %XX escapes are kept as they are (no double encoding); a stray '%' not followed by two hex digits becomes %25.
+    Already-ASCII URLs without stray characters come back unchanged."""
+    if not url:
+        return url
+    p = urllib.parse.urlsplit(url.strip())
+    netloc = p.netloc
+    if netloc and not netloc.isascii():
+        userinfo, _, hostport = netloc.rpartition('@')
+        host, port = hostport, ''
+        if not hostport.startswith('[') and ':' in hostport:
+            host, _, port = hostport.rpartition(':')
+        netloc = (urllib.parse.quote(userinfo, safe="%:!$&'()*+,;=-._~") + '@' if userinfo else '') + _idna_host(host) + (':' + port if port else '')
+
+    def enc(part, safe):
+        return urllib.parse.quote(_PCT_STRAY.sub('%25', part), safe=safe) if part else part
+    return urllib.parse.urlunsplit((p.scheme, netloc, enc(p.path, _PATH_SAFE), enc(p.query, _QUERY_SAFE), enc(p.fragment, _QUERY_SAFE)))
+
+
 def host_of(url: str) -> str:
     return urllib.parse.urlparse(url or '').netloc.lower().removeprefix('www.').removeprefix('m.')
 
@@ -84,7 +118,7 @@ class PoliteNet:
 
     # ── robots ──
     def robots(self, url):
-        p = urllib.parse.urlparse(url)
+        p = urllib.parse.urlparse(to_uri(url))
         base = f'{p.scheme}://{p.netloc}'
         if base not in self._robots:
             self._wait(p.netloc)
@@ -103,6 +137,7 @@ class PoliteNet:
         return self._robots[base]
 
     def robots_info(self, url) -> dict:
+        url = to_uri(url)
         rp = self.robots(url)
         return {'allowed': rp.can_fetch(UA, url), 'crawl_delay': rp.crawl_delay(UA) or rp.crawl_delay('*')}
 
@@ -118,6 +153,7 @@ class PoliteNet:
         self._last[netloc] = self.clock()
 
     def get(self, url, extra_headers=None) -> Response:
+        url = to_uri(url)               # IRIs (e.g. ko.wikipedia.org/wiki/마스터셰프_코리아) must be ASCII on the wire AND for the robots check
         h = host_of(url)
         if is_banned(url):
             return Response(url, 0, {}, b'', error='banned')
