@@ -31,7 +31,7 @@ pip install -r daemon/requirements.txt   # pyyaml
 - **재시도(상한)**: 단계 실패 시 `max_attempts=3`, 지수 백오프(2s·2ⁿ, 상한 30s). 시도 중 부분 쓰기는 롤백. NonRetryable은 즉시 실패.
 - **실패 큐**: 상한 초과 → `failure_queue(stage, error, attempts)` + run `failed`(`failed_stage`). 사람이 `requeue`로 표시.
 - **비용 상한**: `CostMeter`가 `http_request` / `llm_tokens_k` 단위로 계량해 `cost_ledger`에 기록. 상한(`cost_cap_units`, 기본 200) 초과 직전에 **중단 → run `paused_cost_cap`**(실패 아님, 큐 적재 없음). 상한을 올려 다시 실행하면 이어서 진행.
-- **실패 단계부터 재개**: 다음 `run`은 직전 failed/paused/중단된 run을 `resumed_from`으로 잇고, 이미 `done`인 단계는 출력만 복사해 **다시 실행하지 않는다**(테스트로 검증).
+- **실패 단계부터 재개**: 다음 `run`은 직전 failed/paused/중단된 run을 `resumed_from`으로 잇고, 이미 `done`인 단계는 출력만 복사해 **다시 실행하지 않는다**(테스트로 검증). 중단돼 `running`으로 남은 run은 이어받는 순간 `abandoned`(finished_at = 후속 run 시작 시각)로 닫힌다 — failed/paused run은 자기 최종 상태를 유지.
 - **정지 규약**: 출처가 429/403/503/챌린지/체크포인트 신호를 내면 그 출처만 정지(플래그/`paused`), 신원·프록시·계정 교체 없음. 레지스트리 검증이 `block_evasion: forbidden`을 강제.
 
 ## 4.3 Phase 1에서 **실제로 구현된 것 / 스텁**
