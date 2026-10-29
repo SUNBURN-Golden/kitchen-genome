@@ -16,7 +16,7 @@ from .fetch import Doc, Fetcher, parse_feed
 from .htmlx import parse_html
 from . import net as net_mod
 from .net import PoliteNet, host_of
-from .pipeline import check_extractor_health, fetch_regression_alert, official_hosts, process_doc
+from .pipeline import check_extractor_health, fetch_regression_alert, official_hosts, process_doc, reconcile_host_yield_alerts
 from .rawstore import RawStore
 from .resolve import promote_candidates
 from .targets import Gazetteer, load_seed_targets
@@ -318,7 +318,7 @@ def stage_extract(ctx):
             jctx = {t['kind']: {'name_ko': t['name_ko'], 'target_id': t['target_id']}} if t and t['kind'] in ('chef', 'restaurant') else None
         r = process_doc(conn, doc, gaz, tier=tier_of(doc.host), ctx=jctx, via=f['url'], model_hook=bot.model_hook)
         n_all = conn.execute('SELECT COUNT(*) FROM extraction WHERE fetch_id=?', (f['fetch_id'],)).fetchone()[0]
-        for a in check_extractor_health(conn, doc, n_all, bot.raw):
+        for a in check_extractor_health(conn, doc, n_all, bot.raw, gaz=gaz):
             stats['alerts'].append(a)
         conn.execute('UPDATE fetch_record SET extracted_at=?, extractor_version=? WHERE fetch_id=?', (utcnow(), EXTRACTOR_VERSION, f['fetch_id']))
         conn.commit()
@@ -326,6 +326,7 @@ def stage_extract(ctx):
         stats['new_extractions'] += r['new']
         for k, v in r['labels'].items():
             stats['labels'][k] = stats['labels'].get(k, 0) + v
+    stats['host_alerts'] = reconcile_host_yield_alerts(conn, bot.raw, gaz)
     stats['profile'] = profile_scan(conn, bot.raw)
     return runner.StageResult(stats)
 
