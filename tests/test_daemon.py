@@ -383,3 +383,41 @@ def test_effective_date_accepts_collector_iso_date_text():
     assert effective_date({'label': 'opening', 'date_text': '2024-11-21', 'published_at': '2024-10-30'}) == '2024-11-21'
     assert effective_date({'label': 'employment_claim', 'date_text': '2025-03', 'published_at': '2025-03-03'}) == '2025-03'
     assert effective_date({'label': 'collab', 'date_text': None, 'published_at': '2025-03-03'}) is None
+
+
+class _Crash(BaseException):
+    """Simulates the process dying mid-stage (not an Exception, so the runner cannot record it)."""
+
+
+def test_resumed_crashed_run_is_closed_as_abandoned_not_left_running(world):
+    c, env, _ = world
+
+    def crash(ctx):
+        raise _Crash()
+    with pytest.raises(_Crash):
+        daemon(c, env, {**HANDLERS, 'entity_resolution': crash}).run()
+    dead = c.execute("SELECT * FROM daemon_run").fetchone()
+    assert dead['status'] == 'running' and dead['finished_at'] is None
+    rep = daemon(c, env).run()
+    assert rep['status'] == 'succeeded' and rep['resumed_from'] == dead['run_id']
+    old = c.execute('SELECT * FROM daemon_run WHERE run_id=?', (dead['run_id'],)).fetchone()
+    new = c.execute('SELECT * FROM daemon_run WHERE run_id=?', (rep['run_id'],)).fetchone()
+    assert old['status'] == 'abandoned' and old['finished_at'] == new['started_at']
+    assert c.execute("SELECT COUNT(*) FROM daemon_run WHERE status='running'").fetchone()[0] == 0
+
+
+def test_close_superseded_runs_repairs_legacy_rows_and_keeps_live_or_final_ones(world):
+    c, env, _ = world
+    ins = 'INSERT INTO daemon_run(run_id,daemon,status,trigger,cost_cap_units,resumed_from,started_at,finished_at) VALUES (?,?,?,?,?,?,?,?)'
+    c.execute(ins, ('run_stale', 'kg-daemon', 'running', 'manual', 10, None, '2026-10-28T01:25:13Z', None))
+    c.execute(ins, ('run_next', 'kg-daemon', 'succeeded', 'manual', 10, 'run_stale', '2026-10-28T01:55:26Z', '2026-10-28T01:58:04Z'))
+    c.execute(ins, ('run_failed', 'kg-daemon', 'failed', 'manual', 10, None, '2026-10-27T01:00:00Z', '2026-10-27T01:05:00Z'))
+    c.execute(ins, ('run_after_fail', 'kg-daemon', 'succeeded', 'manual', 10, 'run_failed', '2026-10-27T02:00:00Z', '2026-10-27T02:05:00Z'))
+    c.execute(ins, ('run_other', 'kg-collect', 'running', 'manual', 10, None, '2026-10-28T01:00:00Z', None))
+    c.execute(ins, ('run_other_next', 'kg-collect', 'running', 'manual', 10, 'run_other', '2026-10-28T02:00:00Z', None))
+    d = daemon(c, env)
+    assert d.close_superseded_runs() == 1 and d.close_superseded_runs() == 0          # idempotent, only this daemon's rows
+    row = lambda r: tuple(c.execute('SELECT status, finished_at FROM daemon_run WHERE run_id=?', (r,)).fetchone())  # noqa: E731
+    assert row('run_stale') == ('abandoned', '2026-10-28T01:55:26Z')
+    assert row('run_failed') == ('failed', '2026-10-27T01:05:00Z')                      # final statuses are history, untouched
+    assert row('run_other') == ('running', None)                                        # another daemon's chain is its own business

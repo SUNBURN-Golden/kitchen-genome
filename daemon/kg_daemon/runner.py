@@ -118,11 +118,22 @@ class Daemon:
         return self.conn.execute("""SELECT r.* FROM daemon_run r WHERE r.daemon=? AND r.status IN ('failed','paused_cost_cap','paused_source','running')
             AND NOT EXISTS (SELECT 1 FROM daemon_run n WHERE n.resumed_from=r.run_id) ORDER BY r.started_at DESC, r.rowid DESC LIMIT 1""", (self.config['daemon_name'],)).fetchone()
 
+    def close_superseded_runs(self) -> int:
+        """A run left 'running' (its process died: no lock, no finished_at) that a later run resumed is over: mark it 'abandoned' with
+        finished_at = the moment its successor took over. Idempotent; also repairs rows written before resume closed them."""
+        cur = self.conn.execute("""UPDATE daemon_run SET status='abandoned',
+                                     finished_at=(SELECT MIN(n.started_at) FROM daemon_run n WHERE n.resumed_from=daemon_run.run_id)
+                                   WHERE daemon=? AND status='running'
+                                     AND EXISTS (SELECT 1 FROM daemon_run n WHERE n.resumed_from=daemon_run.run_id)""", (self.config['daemon_name'],))
+        return cur.rowcount
+
     def _start_run(self, trigger: str, resume: bool) -> str:
         prev = self._resumable() if resume else None
         run_id = new_id('run')
         self.conn.execute('INSERT INTO daemon_run(run_id,daemon,status,trigger,cost_cap_units,resumed_from,started_at) VALUES (?,?,?,?,?,?,?)',
                           (run_id, self.config['daemon_name'], 'running', trigger, self.config['cost_cap_units'], prev['run_id'] if prev else None, self.clock()))
+        # we hold the lock, so a resumed 'running' predecessor is dead: close it (failed/paused predecessors keep their own final status)
+        self.close_superseded_runs()
         for i, st in enumerate(self.stages):
             carried = None
             if prev:
