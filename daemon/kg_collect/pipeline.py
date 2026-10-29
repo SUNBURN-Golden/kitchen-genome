@@ -79,7 +79,7 @@ def process_doc(conn, doc: Doc, gaz: Gazetteer, *, tier: str, ctx: dict | None =
 
 
 # ───────────── extractor health: a broken extractor must be detected, not silently produce empty output ─────────────
-def check_extractor_health(conn, doc: Doc, n_extractions: int, raw_store, now=None) -> list[dict]:
+def check_extractor_health(conn, doc: Doc, n_extractions: int, raw_store, now=None, gaz: Gazetteer | None = None) -> list[dict]:
     now = now or utcnow()
     alerts = []
 
@@ -109,14 +109,106 @@ def check_extractor_health(conn, doc: Doc, n_extractions: int, raw_store, now=No
             alert('structure_change' if sig_changed else 'yield_drop',
                   f"previously {prev['n_ext']} labelled extractions on this URL, now 0" + (' and the page structure signature changed' if sig_changed else ''),
                   {'extractions': prev['n_ext']}, {'extractions': 0, 'structure_changed': sig_changed})
-    # host-level: documents that mention our targets but never yield anything
-    rows = conn.execute("""SELECT f.fetch_id, (SELECT COUNT(*) FROM extraction e WHERE e.fetch_id=f.fetch_id) n,
-                           (SELECT COALESCE(SUM(mentions),0) FROM doc_target d WHERE d.fetch_id=f.fetch_id) m
-                           FROM fetch_record f WHERE f.host=? AND f.outcome='ok' ORDER BY f.fetched_at DESC, f.rowid DESC LIMIT 6""", (doc.host,)).fetchall()
-    from .net import is_search_host
-    if len(rows) >= 6 and not is_search_host(doc.host) and all(r['m'] >= 2 and r['n'] == 0 for r in rows):
-        alert('yield_drop', f'last 6 documents on {doc.host} mention targets but produced no labelled extraction', {}, {'docs': 6})
+    # host-level: prose documents that mention our targets (outside site boilerplate) but never yield anything — ONE open alert per host
+    alerts.extend(host_yield_check(conn, doc.host, raw_store, gaz=gaz, now=now, trigger_url=doc.canonical_url))
     return alerts
+
+
+HOST_WINDOW = 6
+NON_PROSE_METHODS = ('sitemap', 'feed', 'api')         # URL lists / JSON: never carry labelled sentences (sitemap items have no title)
+HOST_YIELD_PREFIX = 'last 6 documents on '
+_CTX_CACHE: dict = {}
+CTX_CHARS = 24
+
+
+def _mention_contexts(conn, raw_store, gaz, fetch_id, text_ref) -> list[tuple[str, str, str]] | None:
+    """[(target_id, left context, right context)] (24 chars each side incl. the mention, whitespace-normalised) per gazetteer mention."""
+    key = (id(gaz), fetch_id)
+    if key not in _CTX_CACHE:
+        if len(_CTX_CACHE) > 5000:
+            _CTX_CACHE.clear()
+        try:
+            text = raw_store.read_text(text_ref) if text_ref else ''
+        except Exception:  # noqa: BLE001 — a missing raw file must not break extraction; fall back to doc_target counts
+            text = None
+        ws = lambda x: re.sub(r'\s+', ' ', x)  # noqa: E731
+        # a side cut off by the start/end of the text is not evidence of anything (None): only full-width contexts can recur
+        _CTX_CACHE[key] = None if text is None else [
+            (m['target_id'], 'L' + ws(text[m['start'] - CTX_CHARS:m['end']]) if m['start'] >= CTX_CHARS else None,
+             'R' + ws(text[m['start']:m['end'] + CTX_CHARS]) if m['end'] + CTX_CHARS <= len(text) else None) for m in gaz.find(text)]
+    return _CTX_CACHE[key]
+
+
+def host_yield_window(conn, host, raw_store=None, gaz=None) -> dict:
+    """Last HOST_WINDOW prose docs on the host. A mention whose surrounding text recurs in >= half of the window is site boilerplate
+    (sidebar / most-read / related-articles widgets), not something the article says, so it does not count. Without gaz/raw_store the
+    stored doc_target counts are used as before."""
+    rows = conn.execute(f"""SELECT f.fetch_id, f.canonical_url, f.text_ref, (SELECT COUNT(*) FROM extraction e WHERE e.fetch_id=f.fetch_id) n,
+                           (SELECT COALESCE(SUM(mentions),0) FROM doc_target d WHERE d.fetch_id=f.fetch_id) m
+                           FROM fetch_record f WHERE f.host=? AND f.outcome='ok' AND f.method NOT IN ({','.join('?' * len(NON_PROSE_METHODS))})
+                           ORDER BY f.fetched_at DESC, f.rowid DESC LIMIT ?""", (host, *NON_PROSE_METHODS, HOST_WINDOW)).fetchall()
+    docs = [{'fetch_id': r['fetch_id'], 'url': r['canonical_url'], 'n': r['n'], 'm': r['m']} for r in rows]
+    if gaz is not None and raw_store is not None and docs:
+        ctxs = [_mention_contexts(conn, raw_store, gaz, r['fetch_id'], r['text_ref']) for r in rows]
+        from collections import Counter
+        spread = Counter(c for cs in ctxs if cs for c in {side for x in cs for side in x[1:] if side})
+        for d, cs in zip(docs, ctxs):
+            if cs is not None:      # boilerplate = the text on EITHER side of the mention recurs in >= half of the window's documents
+                d['m'] = sum(1 for _, lc, rc in cs if max(spread[lc] if lc else 0, spread[rc] if rc else 0) * 2 < len(docs))
+    return {'docs': docs, 'silent': len(docs) >= HOST_WINDOW and all(d['m'] >= 2 and d['n'] == 0 for d in docs),
+            'yielding': any(d['n'] > 0 for d in docs)}
+
+
+def _open_host_alerts(conn, host):
+    return conn.execute("""SELECT * FROM extractor_alert WHERE host=? AND kind='yield_drop' AND state='open'
+                           AND (detail LIKE ? OR baseline_json LIKE '%"scope": "host"%') ORDER BY created_at, alert_id""", (host, HOST_YIELD_PREFIX + '%')).fetchall()
+
+
+def host_yield_check(conn, host, raw_store=None, gaz=None, now=None, trigger_url=None) -> list[dict]:
+    """Opens at most ONE host-level yield_drop alert per host (later evidence updates it), dedupes older per-document copies and
+    auto-acknowledges them once the condition no longer holds (a recent prose doc yields again, or the 'mentions' were boilerplate/non-prose)."""
+    from .net import is_search_host
+    now = now or utcnow()
+    if is_search_host(host):
+        return []
+    w = host_yield_window(conn, host, raw_store, gaz)
+    existing = _open_host_alerts(conn, host)
+    out = []
+    obs = {'docs': len(w['docs']), 'urls': [d['url'] for d in w['docs']], 'checked_at': now}
+    if w['silent']:
+        keep = existing[0] if existing else None
+        if keep is None:
+            aid = stable_id('alr', host, 'host_yield_drop', now)
+            conn.execute('INSERT OR IGNORE INTO extractor_alert(alert_id,host,canonical_url,kind,detail,baseline_json,observed_json,created_at) VALUES (?,?,?,?,?,?,?,?)',
+                         (aid, host, trigger_url, 'yield_drop', f'{HOST_YIELD_PREFIX}{host} mention targets (outside site boilerplate) but produced no labelled extraction',
+                          json.dumps({'scope': 'host'}), json.dumps(obs), now))
+            out.append({'kind': 'yield_drop', 'detail': f'host {host}: last {HOST_WINDOW} prose docs mention targets, 0 extractions', 'url': trigger_url})
+        else:
+            conn.execute('UPDATE extractor_alert SET observed_json=? WHERE alert_id=?', (json.dumps({**obs, 'deduped': len(existing) - 1}), keep['alert_id']))
+        dupes = existing[1:]
+        reason = 'deduplicated: one open host-level yield_drop per host'
+    else:
+        dupes = existing
+        reason = ('a recent prose document on the host yields labelled extractions again' if w['yielding'] else
+                  'condition no longer holds: remaining target mentions are site boilerplate / non-prose documents, or fewer than '
+                  f'{HOST_WINDOW} prose documents')
+    for a in dupes:
+        o = json.loads(a['observed_json'] or '{}')
+        o.update({'auto_acknowledged_at': now, 'reason': reason})
+        conn.execute("UPDATE extractor_alert SET state='acknowledged', observed_json=? WHERE alert_id=?", (json.dumps(o, ensure_ascii=False), a['alert_id']))
+    return out
+
+
+def reconcile_host_yield_alerts(conn, raw_store=None, gaz=None, now=None) -> dict:
+    """Re-check every host that has open host-level yield_drop alerts (repairs the per-document alert flood written before this check existed)."""
+    before = conn.execute("SELECT COUNT(*) FROM extractor_alert WHERE state='open'").fetchone()[0]
+    hosts = [r['host'] for r in conn.execute("""SELECT DISTINCT host FROM extractor_alert WHERE kind='yield_drop' AND state='open'
+                                                 AND (detail LIKE ? OR baseline_json LIKE '%"scope": "host"%')""", (HOST_YIELD_PREFIX + '%',))]
+    for h in hosts:
+        host_yield_check(conn, h, raw_store, gaz, now=now)
+    conn.commit()
+    after = conn.execute("SELECT COUNT(*) FROM extractor_alert WHERE state='open'").fetchone()[0]
+    return {'hosts': len(hosts), 'open_before': before, 'open_after': after}
 
 
 def fetch_regression_alert(conn, doc, now=None) -> dict | None:
