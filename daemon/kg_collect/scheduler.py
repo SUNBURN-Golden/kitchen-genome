@@ -14,6 +14,14 @@ VOLATILE_LABELS = ('closure', 'relocation', 'rename', 'employment_claim', 'openi
 # Structured / entity-driven paths beat blind keyword search when their other terms tie: otherwise hundreds of cheap, equally scored keyword queries
 # starve directories, sitemaps, official sites and the article follow-ups that actually discover new hosts (seen in the first real run).
 PATH_BONUS = {'directory': 1.2, 'sitemap': 1.0, 'official_chain': 0.6, 'entity_followup': 0.8, 'feed': 0.8, 'keyword_search': 0.0, 'reverse_gap': 0.3}
+def _canon(u: str) -> str:
+    try:
+        from .fetch import canonicalize_url
+        return canonicalize_url(u)
+    except Exception:  # noqa: BLE001
+        return (u or '').strip()
+
+
 TIER_QUALITY = {'promoted': 1.0, 'trial': 0.6, 'deprioritized': 0.2, 'blocked': 0.0}
 
 
@@ -79,24 +87,43 @@ def plan(conn, total_units: float, now: dt.datetime | None = None, max_attempts:
         ranked[p].sort(key=lambda x: -x[0])
     chosen: dict = {p: [] for p in SHARES}
     left = dict(budgets)
+    # The same URL can sit in several pools (e.g. a refresh keyword job and a backfill reverse-gap job for the same query); fetching it twice in one
+    # cycle burns budget for an identical response. Pick it once per plan; the twin stays queued for a later cycle.
+    taken_urls: set = set()
+    skipped_same_url = 0
+
+    def _url_key(j):
+        return _canon(j['url']) if j['url'] else None
+
     for p in ('discovery', 'backfill', 'refresh'):
         for pr, j, comp in ranked[p]:
             c = est_cost(j)
+            k = _url_key(j)
+            if k and k in taken_urls:
+                skipped_same_url += 1
+                continue
             if left[p] >= c:
                 chosen[p].append(j['job_id'])
                 left[p] -= c
+                if k:
+                    taken_urls.add(k)
     spill = left['discovery']                       # nobody could use the reserved share -> others may
     for p in ('backfill', 'refresh'):
         for pr, j, comp in ranked[p]:
             if j['job_id'] in chosen[p]:
                 continue
+            k = _url_key(j)
+            if k and k in taken_urls:
+                continue
             c = est_cost(j)
             if spill >= c:
                 chosen[p].append(j['job_id'])
                 spill -= c
+                if k:
+                    taken_urls.add(k)
     conn.commit()
     return {'budgets': {k: round(v, 2) for k, v in budgets.items()}, 'chosen': chosen, 'queued_by_pool': {p: len(ranked[p]) for p in ranked},
-            'discovery_reserved_share': DISCOVERY_RESERVED}
+            'discovery_reserved_share': DISCOVERY_RESERVED, 'skipped_same_url': skipped_same_url}
 
 
 def requeue_due(conn, now: dt.datetime | None = None) -> int:

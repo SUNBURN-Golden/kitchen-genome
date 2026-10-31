@@ -109,3 +109,16 @@ def test_candidate_review_drops_acronyms_and_institutions_and_queues_the_rest(co
     assert st[a] == 'rejected' and st[b] == 'candidate'
     assert [p['name'] for p in out['queued_for_review']] == ['여경옥']
     assert review.review_candidates(conn)['rejected'] == []                     # idempotent
+
+
+def test_plan_fetches_a_url_only_once_even_if_queued_in_two_pools(conn):
+    caps = {'max_depth': 3, 'relevance_floor': 0.0}
+    u = 'https://www.bing.com/news/search?format=rss&setlang=ko&q=%ED%95%80%EC%A6%88%20%ED%8F%90%EC%97%85'
+    assert discover.enqueue(conn, path='keyword_search', pool='refresh', url=u, query='핀즈 폐업', relevance=0.7, caps=caps)
+    assert discover.enqueue(conn, path='reverse_gap', pool='backfill', url=u, query='핀즈 폐업', relevance=0.7, caps=caps)
+    conn.commit()
+    pl = scheduler.plan(conn, 100, dt.datetime.now(dt.timezone.utc))
+    chosen = [j for p in pl['chosen'].values() for j in p]
+    urls = [conn.execute('SELECT url FROM crawl_job WHERE job_id=?', (j,)).fetchone()['url'] for j in chosen]
+    assert urls.count(u) == 1
+    assert pl['skipped_same_url'] >= 1
