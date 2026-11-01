@@ -18,6 +18,18 @@ PROMOTE_AT, DEPRIORITIZE_AT, MIN_TRIAL_OK, TRIAL_SAMPLE = 0.50, 0.30, 2, 3
 FOOD_CUES = re.compile(r'셰프|쉐프|레스토랑|오마카세|파인다이닝|미쉐린|미슐랭|블루리본|수셰프|주방|오픈|폐업|이전|출신')
 DISCOVERED_REGISTRY = os.path.join(ROOT, 'sources', 'registry.discovered.yaml')
 SHINGLE = 6
+REEVALUATE_AFTER_DAYS = 7   # an unchanged host is re-scored (and its robots.txt re-read) at most this often
+
+
+def _stale(evaluated_at: str | None, now: str, days: int = REEVALUATE_AFTER_DAYS) -> bool:
+    if not evaluated_at:
+        return True
+    import datetime as _dt
+    f = '%Y-%m-%dT%H:%M:%SZ'
+    try:
+        return (_dt.datetime.strptime(now, f) - _dt.datetime.strptime(evaluated_at, f)).days >= days
+    except ValueError:
+        return True
 
 
 def shingles(text: str) -> set:
@@ -80,6 +92,11 @@ def score_host(conn, host: str, net: PoliteNet, raw_store, gaz: Gazetteer, offic
     if prof['in_initial_registry'] or prof['state'] == 'blocked':
         return dict(prof)
     recs = conn.execute('SELECT * FROM fetch_record WHERE host=? ORDER BY fetched_at', (host,)).fetchall()
+    # Nothing new fetched from this host since its last decision and the decision is recent: keep it. Re-scoring every known host each cycle
+    # re-read ~100 robots.txt files a day and once ran the evaluate stage past the daily collect timeout (cycle 2026-11-01 abandoned).
+    if (prof['evaluated_at'] and not _stale(prof['evaluated_at'], now) and prof['trial_fetches'] == len(recs)
+            and not any((r['fetched_at'] or '') > prof['evaluated_at'] for r in recs)):
+        return dict(prof)
     oks = [r for r in recs if r['outcome'] == 'ok']
     login = any(r['outcome'] == 'fail_login_page' for r in recs)
     perm, robots = 1.0, None

@@ -122,3 +122,36 @@ def test_plan_fetches_a_url_only_once_even_if_queued_in_two_pools(conn):
     urls = [conn.execute('SELECT url FROM crawl_job WHERE job_id=?', (j,)).fetchone()['url'] for j in chosen]
     assert urls.count(u) == 1
     assert pl['skipped_same_url'] >= 1
+
+
+def test_evaluate_skips_unchanged_hosts_until_stale(conn):
+    """A host with no new fetches since its last decision is not re-scored (no robots.txt re-read) until the decision is a week old."""
+    from kg_collect import evaluate
+    from kg_collect.targets import Gazetteer
+    calls = []
+
+    class Net:
+        def robots_info(self, url):
+            calls.append(url)
+            return {'allowed': True, 'crawl_delay': None}
+
+    class Raw:
+        def read_text(self, ref):
+            return ''
+
+    def add_fetch(fid, when):
+        conn.execute("""INSERT INTO fetch_record(fetch_id,url,canonical_url,host,method,outcome,fetcher_version,extractor_version,fetched_at)
+                        VALUES (?,?,?,?,?,?,?,?,?)""", (fid, f'https://same.test/{fid}', f'https://same.test/{fid}', 'same.test', 'html', 'fail_empty', 't', 't', when))
+
+    add_fetch('f1', '2026-11-01T00:00:00Z')
+    g = Gazetteer(conn)
+    evaluate.score_host(conn, 'same.test', Net(), Raw(), g, set(), now='2026-11-01T01:00:00Z')
+    assert len(calls) == 1
+    evaluate.score_host(conn, 'same.test', Net(), Raw(), g, set(), now='2026-11-02T01:00:00Z')
+    assert len(calls) == 1                                   # unchanged and fresh: skipped
+    add_fetch('f2', '2026-11-02T02:00:00Z')
+    evaluate.score_host(conn, 'same.test', Net(), Raw(), g, set(), now='2026-11-02T03:00:00Z')
+    assert len(calls) == 2                                   # new trial fetch: re-scored
+    assert conn.execute("SELECT trial_fetches FROM domain_profile WHERE host='same.test'").fetchone()['trial_fetches'] == 2
+    evaluate.score_host(conn, 'same.test', Net(), Raw(), g, set(), now='2026-11-09T03:00:00Z')
+    assert len(calls) == 3                                   # a week old: re-scored even without new fetches
