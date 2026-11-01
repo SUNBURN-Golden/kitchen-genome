@@ -118,44 +118,6 @@
   "first_seen": "2026-10-21"
  },
  {
-  "id": "iter_md",
-  "name": "이테르 명동",
-  "kind": "site_down",
-  "new_name": null,
-  "field": null,
-  "value": null,
-  "reliable_hosts": [
-   "iter-restaurants.com"
-  ],
-  "sources": [
-   "https://iter-restaurants.com/ko/"
-  ],
-  "dates": [
-   "2026-11-01"
-  ],
-  "note": null,
-  "first_seen": "2026-11-01"
- },
- {
-  "id": "jungsik_r",
-  "name": "정식당",
-  "kind": "site_down",
-  "new_name": null,
-  "field": null,
-  "value": null,
-  "reliable_hosts": [
-   "jungsik.com"
-  ],
-  "sources": [
-   "https://www.jungsik.com/hello/"
-  ],
-  "dates": [
-   "2026-11-01"
-  ],
-  "note": null,
-  "first_seen": "2026-10-28"
- },
- {
   "id": "lamant",
   "name": "라망 시크레",
   "kind": "chef_move",
@@ -170,25 +132,6 @@
   ],
   "dates": [
    "2026-10-24"
-  ],
-  "note": null,
-  "first_seen": "2026-11-01"
- },
- {
-  "id": "lysee",
-  "name": "리제",
-  "kind": "site_down",
-  "new_name": null,
-  "field": null,
-  "value": null,
-  "reliable_hosts": [
-   "lyseenyc.com"
-  ],
-  "sources": [
-   "https://www.lyseenyc.com/about"
-  ],
-  "dates": [
-   "2026-11-01"
   ],
   "note": null,
   "first_seen": "2026-11-01"
@@ -228,28 +171,9 @@
    "https://odrenyc.com/homepage"
   ],
   "dates": [
-   "2026-11-01"
+   "2026-11-02"
   ],
   "note": null,
   "first_seen": "2026-10-24"
- },
- {
-  "id": "orzo",
-  "name": "오스테리아 오르조",
-  "kind": "site_down",
-  "new_name": null,
-  "field": null,
-  "value": null,
-  "reliable_hosts": [
-   "catchtable.co.kr"
-  ],
-  "sources": [
-   "https://www.catchtable.co.kr"
-  ],
-  "dates": [
-   "2026-11-01"
-  ],
-  "note": null,
-  "first_seen": "2026-11-01"
  }
 ]
