@@ -78,6 +78,19 @@ svg text{font-family:var(--font)}
 .note{background:var(--accent-soft);border-radius:var(--r);padding:var(--s2) var(--s3);margin:var(--s2) 0}
 input,select,textarea{width:100%;min-height:var(--tap);padding:var(--s1) var(--s2);margin:var(--s1) 0;border:1px solid var(--line);border-radius:var(--r);background:var(--bg);color:var(--ink);font:var(--f-m) var(--font)}
 .filters{display:grid;grid-template-columns:repeat(auto-fit,minmax(200px,1fr));gap:var(--s1)}
+/* Customizable native select (Chrome 135+); other browsers keep the select above. */
+@supports (appearance:base-select){
+ .filters select,.filters select::picker(select){appearance:base-select}
+ .filters select{display:flex;align-items:center;justify-content:space-between;gap:var(--s1);background:var(--surface);cursor:pointer}
+ .filters select:focus-visible{outline:2px solid var(--ink);outline-offset:2px}
+ .filters select::picker-icon{color:var(--ink-2);transition:rotate var(--dur)}
+ .filters select:open::picker-icon{rotate:180deg}
+ .filters select::picker(select){margin-top:4px;padding:4px;border:1px solid var(--line);border-radius:var(--r);background:var(--surface);color:var(--ink);box-shadow:0 8px 24px rgba(0,0,0,.14)}
+ .filters select option{min-height:var(--tap);padding:var(--s1) var(--s2);border-radius:8px;display:flex;align-items:center;gap:var(--s1)}
+ .filters select option:hover,.filters select option:focus-visible{background:var(--accent-soft)}
+ .filters select option:checked{font-weight:600}
+ .filters select option::checkmark{color:var(--accent)}
+}
 .news{display:flex;gap:var(--s1);flex-wrap:wrap}.news input{flex:1;min-width:200px;margin:0}
 .foot{color:var(--ink-2);font-size:var(--f-s);padding-top:var(--s6);padding-bottom:var(--s6)}
 .foot a{display:inline-block;min-height:var(--tap);line-height:var(--tap)}
