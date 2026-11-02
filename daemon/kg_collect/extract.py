@@ -22,7 +22,7 @@ PATTERNS = {
     'mentor': re.compile(r'사사|스승|제자|밑에서\s?(?:배웠|수련|배운)|가르침|멘토'),
     'career': re.compile(r'출신|에서\s?(?:(?:20\d{2}\s?년?\s?(?:부터|[~\-–])\s?(?:20\d{2}\s?년?|현재|지금)(?:까지)?\s?)?)(?:' + ROLE_RE + r'로?\s?)?(?:\d{1,2}\s?년(?:간|동안)?\s?)?(?:근무|일했|일한|경력|수련|근속|지냈|재직|배웠)|를\s?거쳐|을\s?거쳐|에서\s?' + ROLE_RE + r'(?:로|를)?\s?(?:맡|지냈|역임|활약|일)|경력을\s?(?:쌓|가진)|출신으로'),
     'employment': re.compile(r'(?:총괄|헤드|오너|수|수석)\s?(?:셰프|쉐프)(?:로|를)?\s?(?:부임|합류|영입|선임|취임|맡|이끌|활약|있|일하)|총괄(?:한다|하고\s?있|했|하며|하는|하고|해\s?온|해왔)|(?:이끌며|이끌어\s?온|이끌어왔|맡으며|맡아\s?온|맡아왔|운영하며|운영하는|운영\s?중인|운영하고\s?있)|(?:으)?로\s?(?:옮겼|이직했|이적했)|(?:이끌고\s?있|이끄는|맡고\s?있|합류했|합류한|부임했|영입했|영입된|선임됐)|(?<=[가-힣A-Za-z’\'”])의\s(?:총괄|헤드|오너|수|수석)?\s?(?:셰프|쉐프)'),
-    'opening': re.compile(r'(?:그랜드\s?|가\s?|재\s?|신규\s?)?오픈(?:했|한다|할|하며|해|예정|을\s?앞|[\s,.]|$)|개업|문을\s?(?:연|열|열었)|[을를]\s?열었|개점|론칭'),
+    'opening': re.compile(r'(?:그랜드\s?|가\s?|재\s?|신규\s?)?오픈(?:했|한다|할|하며|해|예정|을\s?앞|[\s,.…·!?’”\'"」』)\]]|$)|개업|문을\s?(?:연|열|열었)|[을를]\s?열었|개점|론칭'),
     'relocation': re.compile(r'이전\s?(?:오픈|개점|했|한다|할|예정)?|옮겨|옮긴다|새\s?둥지|자리를\s?옮|확장\s?이전|이사'),
     'closure': re.compile(r'폐업|폐점|문을\s?닫|영업\s?종료|영업을\s?종료|운영\s?종료|마지막\s?영업|영업을\s?마무리|영업을\s?마치|영업\s?마감|휴업|운영을\s?종료'),
     'rename': re.compile(r'리브랜딩|상호를\s?변경|이름을\s?(?:바꿨|바꿔|바꾸|변경)|새\s?이름|간판을\s?(?:바꿔|교체)|으로\s?재탄생'),
@@ -220,7 +220,18 @@ def coref_short_forms(sent: str, known_spans, doc_chefs: list) -> list[dict]:
 # '<hotel/restaurant>은 신임 총괄 셰프로 ‘기욤 콤파라(Guillaume Comparat)’를 선임했다': appointment of a (possibly foreign, never-seen) chef.
 APPOINT = re.compile(r'(?:총괄|헤드|수석|오너|수)?\s?(?:셰프|쉐프|주방장)(?:로|에)\s?[‘\'"“]?([가-힣A-Za-z][가-힣A-Za-z\s·.\-]{1,24}?)\s?(?:\([^)]{2,40}\))?[’\'"”]?(?:를|을)\s?(?:신임\s?|새\s?)?(?:선임|영입|임명|발탁|맞이|모셨|모시|영입했|내정)')
 # '한식당 ‘세옥(SEOK)’이 문을 열었다' / '레스토랑, ‘SEOK’이 ...': venue-type noun + quoted name
-QUOTED_VENUE = re.compile(r'(?:한식당|양식당|일식당|중식당|레스토랑|식당|다이닝|비스트로|오마카세|바|카페|베이커리|펍)[,\s]*[‘\'“"]([^’\'”"]{2,30})[’\'”"]')
+QUOTED_VENUE = re.compile(r'(?:한식당|양식당|일식당|중식당|레스토랑|식당|다이닝|비스트로|오마카세|바|카페|베이커리|펍|\d\s?스타)[,\s]*[‘\'“"]([^’\'”"]{2,30})[’\'”"]')
+
+
+# a quoted name directly in front of the opening verb ('X 셰프 ‘R’ 오픈', '‘R’ 7일 오픈') names the venue even without a venue noun
+QUOTED_OPEN = re.compile(r'[‘\'“"]([^’\'”"]{2,30})[’\'”"](?:\s?\([^)]{1,30}\))?\s?(?:[을를이가]\s?)?(?:\d{1,2}일\s?)?(?:그랜드\s?|정식\s?)?(?:오픈|개업|개점|문을\s?(?:연|열))')
+CLAUSE_BREAK = re.compile(r'\s[—–|]\s|…')
+
+
+def same_clause(sent: str, a: int, b: int) -> bool:
+    """Headlines glue several clauses with '—', '…' or '|': a cue in one clause must not veto a statement in another."""
+    lo, hi = sorted((a, b))
+    return not CLAUSE_BREAK.search(sent[lo:hi])
 
 
 def clean_venue(nm: str) -> str | None:
@@ -413,7 +424,8 @@ def extract_text(text: str, *, gaz, host: str, published_at: str | None = None, 
         # ── collab / co-working first: they veto employment readings ──
         is_collab = bool(hits['collab'])
         if is_collab and (chef_names or rests):
-            mk('collab', chef=chef_names[0] if chef_names else None, rest=(side[1]['surface'] if side else (rests[0]['surface'] if rests else None)), anchor=hits['collab'].start(),
+            qcv = None if rests else QUOTED_VENUE.search(sent)      # 'X 2스타 레스토랑 ‘R’의 Y 셰프와 협업': an unregistered quoted venue is still the partner restaurant
+            mk('collab', chef=chef_names[0] if chef_names else None, rest=(side[1]['surface'] if side else (rests[0]['surface'] if rests else (clean_venue(qcv.group(1)) if qcv else None))), anchor=hits['collab'].start(),
                extra={'collab_kind': 'guest_event'})
         if hits['co_worker'] and not hits['mentor'] and (chef_names or rests):
             mk('collab', chef=chef_names[0] if chef_names else None, rest=rests[0]['surface'] if rests else None, anchor=hits['co_worker'].start(),
@@ -508,7 +520,7 @@ def extract_text(text: str, *, gaz, host: str, published_at: str | None = None, 
                 mk('employment_claim', chef=nm, rest=org_nm, anchor=ap.start(), ambiguity=None if rests else 'org_name_unverified', extra={'appointment': True})
         # ── status events about a restaurant ──
         status_rests = [r for r in rests if r['surface'] != career_org]
-        qv = QUOTED_VENUE.search(sent) if hits['opening'] else None
+        qv = (QUOTED_VENUE.search(sent) or QUOTED_OPEN.search(sent)) if hits['opening'] else None
         new_venue = clean_venue(qv.group(1)) if qv else None
         if new_venue and any(norm_key(new_venue) == norm_key(r['surface']) for r in rests):
             new_venue = None
@@ -521,8 +533,8 @@ def extract_text(text: str, *, gaz, host: str, published_at: str | None = None, 
         inferred_subject = not status_rests and not new_venue and subject_rest is not None
         for label in ('opening', 'relocation', 'closure', 'rename'):
             if hits[label] and (subject_rest or chef_names):
-                if label == 'opening' and is_collab:
-                    continue
+                if label == 'opening' and is_collab and same_clause(sent, hits['collab'].start(), hits['opening'].start()):
+                    continue          # a collab cue vetoes an 'opening' only inside the same headline clause
                 if label == 'opening' and re.search(r'이전\s?(?:오픈|개점|했)', sent):
                     continue          # 'moved and reopened' is a relocation, not a new opening
                 if label == 'closure' and negated and hits['relocation']:
