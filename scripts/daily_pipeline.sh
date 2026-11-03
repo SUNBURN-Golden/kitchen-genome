@@ -1,10 +1,17 @@
 #!/usr/bin/env bash
 # Kitchen Genome daily pipeline: crawl -> apply -> build -> PR/squash-merge -> deploy prep.
 # Headless up to the Cloudflare deploy; the deploy itself needs the user-Cloudflare connector (see README "자동 크롤러").
-# Usage: bash scripts/daily_pipeline.sh [/path/to/clone]   (default /tmp/kg)
+# Usage: bash scripts/daily_pipeline.sh [/path/to/clone]   (default /tmp/kg; falls back to /workspace/kitchen-genome when that path is gone,
+# e.g. /tmp/kg symlink lost after a box restore — the 2026-11-03 07:00 run died on `cd /tmp/kg`)
 # Exit 0 always on success; last line is one of: RESULT=NO_CHANGE | RESULT=MERGED_NO_DEPLOY pr=<url> | RESULT=NEEDS_DEPLOY pr=<url>
 set -euo pipefail
-REPO="${1:-/tmp/kg}"; cd "$REPO"
+REPO="${1:-/tmp/kg}"; KG_HOME="${KG_HOME:-/workspace/kitchen-genome}"
+if [ ! -d "$REPO/.git" ] && [ ! -f "$REPO/.git" ]; then
+  if [ -d "$KG_HOME/.git" ]; then echo "WARN: $REPO is not a clone; using $KG_HOME"; REPO="$KG_HOME"
+  else echo "FATAL: no clone at $REPO or $KG_HOME"; exit 2; fi
+fi
+[ "${KG_RESOLVE_ONLY:-0}" = 1 ] && { echo "REPO=$REPO"; exit 0; }
+cd "$REPO"
 DAY=$(date +%Y%m%d); BR="crawl/$DAY"
 git checkout -q main && git pull -q --ff-only
 git branch -D "$BR" >/dev/null 2>&1 || true; git checkout -q -b "$BR"
