@@ -90,6 +90,7 @@ class Gazetteer:
     """alias -> [target rows]; longest-match scan over text. Built from DB so discovered targets join immediately."""
 
     def __init__(self, conn, kinds=('chef', 'restaurant')):
+        self.conn = conn
         self.by_alias: dict[str, list[dict]] = {}
         rows = conn.execute(f"""SELECT a.alias, t.target_id, t.kind, t.name_ko, t.name_en, t.origin, t.status, t.attrs_json FROM target_alias a JOIN target t USING(target_id)
                                 WHERE t.kind IN ({','.join('?' * len(kinds))}) AND t.status<>'rejected'""", kinds).fetchall()

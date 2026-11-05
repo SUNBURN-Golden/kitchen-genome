@@ -120,6 +120,23 @@ sources:
     known_state: "PAUSED since 2026-10-24T07:12+09:00 (LoginException: checkpoint). Flag left in place; documented limit."
     adapter: instagram_py   # existing crawler/instagram.py; daemon only READS its output + the pause flag
 
+  instagram_kitchen_genome:
+    name: "Instagram @kitchen.genome dedicated collection"
+    kind: social
+    tier: social_lead
+    role: required_candidate_discovery
+    collect_permission: allowed_with_limits
+    collectible_fields: [caption_excerpt_40, post_url, post_date]
+    refresh_cadence: "06:45-08:00 KST; <=25 handles/day, >=8s every request, <=6 captions, <=10 follows"
+    retention_days: 30
+    quote_max_chars: 40
+    pause_flag: crawler/out/ig_kg_blocked.flag
+    pause_on: [checkpoint, challenge, http_429, login_failed, invalid_session]
+    block_evasion: forbidden
+    trust_ceiling: unverified
+    unsupported_scope: ["private/personal accounts, media, stories, DMs, comments, full captions", "publication: all findings pending-only"]
+    adapter: instagram_kg_review_only
+
   michelin_manual:
     name: "MICHELIN Guide (guide.michelin.com)"
     kind: guide

@@ -59,6 +59,7 @@ class CostMeter:
         units = self.unit_costs.get(kind, 1.0) * count
         if units <= 0:
             return
+        self.used = self.conn.execute('SELECT cost_used_units FROM daemon_run WHERE run_id=?', (self.run_id,)).fetchone()[0]
         if self.used + units > self.cap:
             raise CostCapExceeded(f'{kind} x{count} would exceed cap {self.cap} (used {self.used})')
         self.used += units

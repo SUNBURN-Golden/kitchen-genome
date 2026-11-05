@@ -778,3 +778,21 @@ intact. Never "roll back" by activating the legacy account or by deleting
   currently enforced and that `crawler/crawl.py` needs either the shared guard or
   removal from the daily path. No runtime code, tests, configuration, or secrets
   changed in this revision.
+
+
+## BUILD notes
+
+The shared client and reservation adapter live in `daemon/kg_ai/`. Migration
+`0006_deepseek_collection.sql` adds private accounting/quota/provenance state.
+`kg_collect` wires gap planning and difficult extraction; `kg_daemon` reuses
+the contract for eligible local documents and preserves bridge provenance.
+The dedicated IG collector writes directly to the private review queue; its
+explicit account provenance never enters generic social-tier routing.
+The daily pipeline opens PRs and stops before merge/deploy.
+
+Live browser fallback and automatic redirects are disabled because their
+subrequests were outside the durable dispatch guard. This conservative
+implementation leaves those pages as coverage gaps. The read-only IG backend
+does not execute follows; only an explicitly injected guarded follow transport
+can do so. Unknown/failed model attempts are not automatically rescheduled.
+Thirty-day IG cleanup also clears cached model excerpts while retaining audit IDs.
