@@ -3,7 +3,7 @@
  1 source_discovery          IMPLEMENTED  registry -> active/paused/skipped (IG pause flag honoured). Cadence scheduler: STUB (all active sources due)
  2 incremental_fetch         IMPLEMENTED for local crawler outputs (crawler/vault.json, crawler/out/ig-*.json); network fetchers: STUB (injected, absent = recorded as stubbed)
  3 change_detection          IMPLEMENTED  new / modified per canonical URL via content hash
- 4 extraction                IMPLEMENTED  rule extractor over vault facts + IG findings; AI extractor hook: STUB (candidates only, asserted_by=ai_inference)
+ 4 extraction                IMPLEMENTED  rule extractor over vault facts + IG findings; DeepSeek bounded extraction (candidates only, asserted_by=ai_inference)
  5 entity_resolution         IMPLEMENTED  exact name/alias + homonym scope; never auto-creates chefs; fuzzy matching: STUB
  6 evidence_verification     IMPLEMENTED  status from tier + independent trusted hosts; social/search leads never exceed 'unverified'
  7 state_history_update      IMPLEMENTED  status events, chef moves (close+add), mentorship (source-asserted only), conflicts
@@ -16,6 +16,7 @@ import json
 import os
 import sys
 
+from kg_ai import pending
 from . import collect_bridge
 from . import registry as reg_mod
 from .claims import independent_sources, add_evidence, create_claim, host_of, link_evidence, open_conflict, queue_review, RANK
@@ -68,7 +69,7 @@ def _vault_by_source(ctx) -> dict:
     for rec in json.load(open(path, encoding='utf-8')).get('records', []):
         tier = rec.get('source_tier') or 'search_lead'
         sid = 'manual_clip' if rec.get('collection_path') == 'manual_clip' else reg_mod.TIER_TO_SOURCE.get(tier, 'search_leads')
-        body = {k: rec.get(k) for k in ('target_id', 'kind', 'title', 'published_at', 'extracted_facts', 'evidence_locator')}
+        body = {k: rec.get(k) for k in ('target_id', 'kind', 'title', 'published_at', 'extracted_facts', 'evidence_locator', 'pending_only', 'asserted_by', 'extractor', 'collector_account')}
         # one article can back several target records: identity is (url, target, kind) so they are not mistaken for edits of each other
         out.setdefault(sid, []).append({'url': rec['url'], 'doc_key': f"#target={rec.get('target_id')}&kind={rec.get('kind')}",
                                         'published_at': rec.get('published_at'), 'body': body, 'collected_at': rec.get('collected_at')})
@@ -156,12 +157,23 @@ def change_detection(ctx: StageContext) -> StageResult:
 
 # ───────────── 4. extraction ─────────────
 def _cand(ctx, doc, ftype, payload, extractor, locator, quote, asserted_by='source'):
-    key = _sha(f'{doc["canonical_url"]}|{doc["content_hash"]}|{ftype}|{json.dumps(payload, ensure_ascii=False, sort_keys=True)}')
+    held = asserted_by == 'ai_inference' or pending(payload) or pending({'extractor': extractor})
+    if held:
+        payload = {**payload, 'pending_only': True}
+        if not payload.get('instagram'):
+            asserted_by = 'ai_inference'
+    key = _sha(f'{extractor}|{asserted_by}|{doc["canonical_url"]}|{doc["content_hash"]}|{ftype}|{json.dumps(payload, ensure_ascii=False, sort_keys=True)}')
     ev = {'source_url': doc['url'], 'locator': locator or {}, 'quote': (quote or None) and quote[:200],
           'collected_at': doc['fetched_at'], 'effective_from': payload.get('effective_date')}
     ctx.conn.execute("""INSERT OR IGNORE INTO candidate_fact(candidate_id,idempotency_key,document_id,source_id,fact_type,payload_json,evidence_json,extractor,asserted_by,created_at)
                         VALUES (?,?,?,?,?,?,?,?,?,?)""", (stable_id('cnd', key), key, doc['document_id'], doc['source_id'], ftype,
                                                           json.dumps(payload, ensure_ascii=False, sort_keys=True), json.dumps(ev, ensure_ascii=False), extractor, asserted_by, utcnow()))
+    if held:
+        cid = stable_id('cnd', key)
+        ctx.conn.execute("UPDATE candidate_fact SET resolution='needs_review',verification=? WHERE candidate_id=?",
+                         ('ai_inference' if asserted_by == 'ai_inference' else 'unverified', cid))
+        queue_review(ctx.conn, 'ai_inference' if asserted_by == 'ai_inference' else 'pending_only', 'candidate_fact', cid,
+                     {'pending_only': True, 'asserted_by': asserted_by, 'payload': payload, 'evidence': ev}, dedupe_key='pending:' + cid)
 
 
 def extract_from_body(ctx, doc, body) -> int:
@@ -172,10 +184,13 @@ def extract_from_body(ctx, doc, body) -> int:
     if body.get('collect'):
         today = ctx.env.get('today') or utcnow()[:10]
         for ftype, payload, loc2, q in collect_bridge.candidates(body, today):
-            if ftype == 'ambiguous':
+            if ftype == 'ambiguous' and not pending(body['collect']):
                 ctx.env.setdefault('_ambiguous_skipped', [0])[0] += 1   # negated / planned / unclear subject: not a fact, not a candidate
                 continue
-            _cand(ctx, doc, ftype, payload, f"collect:{body['collect']['extractor']}", loc2, q)
+            _cand(ctx, doc, ftype, payload, f"collect:{body['collect']['extractor']}", loc2, q, asserted_by='ai_inference' if pending(body['collect']) else 'source')
+        return ctx.conn.total_changes - before
+    if pending(body):
+        queue_review(ctx.conn, 'pending_only', 'document', doc['document_id'], {'pending_only': True, 'body': body}, dedupe_key='pending:doc:' + doc['document_id'])
         return ctx.conn.total_changes - before
     if body.get('instagram'):   # IG findings are keyword hits with a <=40-char excerpt: lead only
         kind = {'closure': 'closure', 'rename': 'rename', 'opening': 'opening', 'chef_move': 'chef_move'}.get(body.get('kind'))
@@ -204,17 +219,19 @@ def extract_from_body(ctx, doc, body) -> int:
 def extraction(ctx: StageContext) -> StageResult:
     rows = ctx.conn.execute("""SELECT d.*, c.change_id FROM change_event c JOIN document d ON d.document_id=c.document_id WHERE c.state='pending' ORDER BY d.rowid""").fetchall()
     extracted = missing_raw = 0
-    ai = ctx.env.get('ai_extractor')     # STUB hook: callable(doc, body)->list[(fact_type,payload,quote)] ; stored as asserted_by='ai_inference'
+    ai = ctx.env.get('ai_extractor')
+    if ctx.env.get('deepseek') and ai is None:
+        from .deepseek import extract
+        ai = lambda doc, body: extract(ctx, doc, body)
     for d in rows:
         if not d['raw_ref'] or not os.path.exists(d['raw_ref']):
             missing_raw += 1
             continue
         body = json.load(open(d['raw_ref'], encoding='utf-8'))
         extract_from_body(ctx, d, body)
-        if ai:
-            ctx.cost.charge('llm_tokens_k', 1.0)
+        if ai and not body.get('collect') and not body.get('instagram') and not pending(body):
             for ftype, payload, quote in ai(d, body):
-                _cand(ctx, d, ftype, payload, 'ai:hook', {}, quote, asserted_by='ai_inference')
+                _cand(ctx, d, ftype, payload, 'deepseek:local' if ctx.env.get('deepseek') else 'ai:hook', payload.get('evidence_locator') or {}, quote, asserted_by='ai_inference')
         ctx.conn.execute("UPDATE change_event SET state='extracted' WHERE change_id=?", (d['change_id'],))
         extracted += 1
     ctx.conn.commit()
@@ -242,6 +259,11 @@ def entity_resolution(ctx: StageContext) -> StageResult:
     res = needs = 0
     for c in ctx.conn.execute("SELECT * FROM candidate_fact WHERE resolution='pending' ORDER BY rowid").fetchall():
         p = json.loads(c['payload_json'])
+        if pending(p) or pending(c):
+            ctx.conn.execute("UPDATE candidate_fact SET resolution='needs_review' WHERE candidate_id=?", (c['candidate_id'],))
+            queue_review(ctx.conn, 'pending_only', 'candidate_fact', c['candidate_id'], {'pending_only': True, 'payload': p}, dedupe_key='pending:' + c['candidate_id'])
+            needs += 1
+            continue
         chef_id = branch_id = None
         reason = None
         t = p.get('target_id') or p.get('target_kitchen_id')
@@ -281,12 +303,10 @@ def evidence_verification(ctx: StageContext) -> StageResult:
     out = {'verified': 0, 'source_claim': 0, 'unverified': 0, 'ai_inference': 0}
     for c in ctx.conn.execute("""SELECT c.*, s.tier FROM candidate_fact c JOIN source s ON s.source_id=c.source_id WHERE c.resolution='resolved'
                                    AND (c.verification IS NULL OR (c.fact_type='chef_move' AND c.applied_claim_id IS NULL)) ORDER BY c.rowid""").fetchall():
-        if c['asserted_by'] == 'ai_inference':
+        if pending(c) or pending(json.loads(c['payload_json'])):
             v = 'ai_inference'
         elif json.loads(c['payload_json']).get('lead_only'):
             v = 'unverified'                   # search snippet / hearsay / Instagram: a candidate to check, never a fact on its own
-        elif False:
-            v = 'ai_inference'
         elif c['tier'] in ('social_lead', 'search_lead', 'specialist_blog'):
             v = 'unverified'                   # leads never become source_claim/verified on their own
         else:
@@ -294,6 +314,9 @@ def evidence_verification(ctx: StageContext) -> StageResult:
                 """SELECT x.evidence_json FROM candidate_fact x JOIN source s ON s.source_id=x.source_id
                    WHERE x.fact_type=? AND IFNULL(x.resolved_chef_id,'')=IFNULL(?,'') AND IFNULL(x.resolved_branch_id,'')=IFNULL(?,'')
                    AND x.resolution='resolved' AND x.asserted_by='source' AND s.tier IN ('official','press','human')
+                   AND x.extractor NOT LIKE '%deepseek%' AND x.extractor NOT LIKE '%model:%' AND x.extractor NOT LIKE '%ai:%'
+                   AND IFNULL(json_extract(x.payload_json,'$.pending_only'),0)=0
+                   AND IFNULL(json_extract(x.payload_json,'$.asserted_by'),'source')<>'ai_inference'
                    AND IFNULL(json_extract(x.payload_json,'$.lead_only'),0)=0""",
                 (c['fact_type'], c['resolved_chef_id'], c['resolved_branch_id']))]
             # 2 INDEPENDENT trusted sources: the same wording on two hosts is one syndicated/reposted article, not corroboration
@@ -335,7 +358,7 @@ def state_history_update(ctx: StageContext) -> StageResult:
     for c in ctx.conn.execute("SELECT * FROM candidate_fact WHERE resolution='resolved' AND verification IS NOT NULL AND applied_claim_id IS NULL ORDER BY rowid").fetchall():
         p = json.loads(c['payload_json'])
         claim = None
-        if c['verification'] == 'ai_inference':        # AI inference is never materialised as a fact
+        if c['verification'] == 'ai_inference' or pending(c) or pending(p):        # AI inference is never materialised as a fact
             ctx.conn.execute("UPDATE candidate_fact SET resolution='needs_review' WHERE candidate_id=?", (c['candidate_id'],))
             queue_review(ctx.conn, 'ai_inference', 'candidate_fact', c['candidate_id'], {'fact_type': c['fact_type'], 'payload': p}, dedupe_key=f'ai_inference:{c["candidate_id"]}')
             held += 1

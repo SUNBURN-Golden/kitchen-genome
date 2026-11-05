@@ -1,62 +1,100 @@
 #!/usr/bin/env bash
-# Kitchen Genome daily pipeline: crawl -> apply -> build -> PR/squash-merge -> deploy prep.
-# Headless up to the Cloudflare deploy; the deploy itself needs the user-Cloudflare connector (see README "자동 크롤러").
-# Usage: bash scripts/daily_pipeline.sh [/path/to/clone]   (default /tmp/kg; falls back to /workspace/kitchen-genome when that path is gone,
-# e.g. /tmp/kg symlink lost after a box restore — the 2026-11-03 07:00 run died on `cd /tmp/kg`)
-# Exit 0 always on success; last line is one of: RESULT=NO_CHANGE | RESULT=MERGED_NO_DEPLOY pr=<url> | RESULT=NEEDS_DEPLOY pr=<url>
+# Daily deterministic + pending-only collection. Publishes a reviewable PR; never merges/deploys.
 set -euo pipefail
 REPO="${1:-/tmp/kg}"; KG_HOME="${KG_HOME:-/workspace/kitchen-genome}"
+STAGE=resolve; COLLECT_STATE=skipped; IG_STATE=skipped; REVIEW_PENDING=unknown; FINAL=0
+finish() {
+  local rc=$?
+  if [ "$FINAL" = 0 ]; then
+    echo "RESULT=FAILED stage=$STAGE collect=$COLLECT_STATE ig=$IG_STATE reason=command_failed exit=$rc"
+  fi
+}
+trap finish EXIT
 if [ ! -d "$REPO/.git" ] && [ ! -f "$REPO/.git" ]; then
-  if [ -d "$KG_HOME/.git" ]; then echo "WARN: $REPO is not a clone; using $KG_HOME"; REPO="$KG_HOME"
-  else echo "FATAL: no clone at $REPO or $KG_HOME"; exit 2; fi
+  if [ -d "$KG_HOME/.git" ]; then echo "WARN: missing clone; using $KG_HOME"; REPO="$KG_HOME"
+  else echo 'FATAL: no clone available'; exit 2; fi
 fi
-[ "${KG_RESOLVE_ONLY:-0}" = 1 ] && { echo "REPO=$REPO"; exit 0; }
+[ "${KG_RESOLVE_ONLY:-0}" = 1 ] && { echo "REPO=$REPO"; FINAL=1; exit 0; }
 cd "$REPO"
-DAY=$(date +%Y%m%d); BR="crawl/$DAY"
-git checkout -q main && git pull -q --ff-only
-git branch -D "$BR" >/dev/null 2>&1 || true; git checkout -q -b "$BR"
+STAGE=git
+GIT_COMMON=$(git rev-parse --git-common-dir)
+exec 9>"$GIT_COMMON/kg_daily.lock"
+if ! flock -n 9; then FINAL=1; echo 'RESULT=SKIPPED reason=locked'; exit 0; fi
+if ! git diff --quiet || ! git diff --cached --quiet; then echo 'FATAL: tracked changes present'; exit 2; fi
+DAY=$(TZ=Asia/Seoul date +%Y%m%d); BR="crawl/$DAY-$(date +%H%M%S)-$$"
+git checkout -q main
+git pull -q --ff-only
+git checkout -q -b "$BR"
+KG_DB="${KG_SERVICE_DB:-$REPO/data_store/kg_service.db}"
+export KG_SERVICE_DB="$KG_DB"
+STAGE=crawl
 python3 crawler/crawl.py
-IG_OUT=$(timeout 900 python3 crawler/instagram.py 2>&1 | grep -E '^IG_(OK|SKIPPED|BLOCKED)' | tail -1) || true
-[ -n "$IG_OUT" ] || IG_OUT="IG_BLOCKED reason=ig_step_crashed_or_timeout"
-echo "$IG_OUT"   # routine: on IG_BLOCKED, tell 준태님 and notify BabyShower; never retry the same day
-# Kitchen Genome collection bot: one polite cycle into the SEPARATE, git-ignored service DB (never data/, web/ or the site). Non-fatal by design:
-# any failure/timeout prints COLLECT=... and the daily flow continues unchanged. Disable with KG_COLLECT=0. Machine-written registry growth is
-# discarded here (it ships through reviewed PRs), so this clone stays clean for tomorrow's ff-only pull.
-KG_DB="${KG_SERVICE_DB:-/workspace/kitchen-genome/data_store/kg_service.db}"
+AI_ARGS=()
+[ "${KG_DEEPSEEK:-1}" != 1 ] || AI_ARGS=(--deepseek)
+STAGE=collect
 if [ "${KG_COLLECT:-1}" = 1 ] && [ -f "$KG_DB" ]; then
-  COLLECT_OUT=$(PYTHONPATH=daemon timeout "${KG_COLLECT_TIMEOUT:-1500}" python3 -m kg_collect --db "$KG_DB" cycle --units "${KG_COLLECT_UNITS:-60}" 2>/dev/null \
-    | python3 -c "import json,sys;d=json.load(sys.stdin);print('COLLECT='+str(d.get('status')), 'run='+str(d.get('run_id')), 'cost='+str(d.get('cost_used')))" 2>/dev/null) || true
-  [ -n "$COLLECT_OUT" ] || COLLECT_OUT="COLLECT=failed_or_timeout (non-fatal)"
-  git checkout -q -- sources 2>/dev/null || true
-  echo "$COLLECT_OUT"
-else
-  echo "COLLECT=skipped (KG_COLLECT=0 or no service DB at $KG_DB)"
-fi
-python3 crawler/apply.py
-python3 data/enrich_en.py
-python3 scripts/build_deploy.py >/dev/null
-# guards: verdicts and newsletter stay hidden, no noindex anywhere
-grep -q '^const SHOW_VERDICTS=false;' web/app.js
-grep -q '^const SHOW_NEWSLETTER=false;' web/app.js
-if grep -rqi 'noindex' web; then echo "GUARD FAIL: noindex found"; exit 3; fi
-git add -A data crawler web scripts .gitignore
-if git diff --cached --quiet; then git checkout -q main; git branch -D "$BR" -q; echo "$IG_OUT"; echo "RESULT=NO_CHANGE"; exit 0; fi
-WEB_CHANGED=0; git diff --cached --quiet -- web || WEB_CHANGED=1
-SUM=$(python3 -c "import json;s=json.load(open('crawler/out/last_summary.json'));print('; '.join(f\"{a['name']}: {a['kind']} {a.get('new_name') or a.get('field') or ''}\" for a in s['applied']) or 'pending queue only', '| pending', s['pending_count'])")
-git commit -q -m "crawl $DAY: $SUM"
-git push -q -u origin "$BR" --force
-PR=$(gh pr create --repo SUNBURN-Golden/kitchen-genome --base main --head "$BR" --title "crawl $DAY: $SUM" \
-  --body "Automated daily crawl (scripts/daily_pipeline.sh). Applied only with >=2 independent reliable sources; see crawler/applied.json. Review queue: crawler/pending.json. SHOW_VERDICTS/SHOW_NEWSLETTER=false, no noindex (guards passed).")
-gh pr merge "$PR" --squash --delete-branch
-git checkout -q main && git pull -q --ff-only
-python3 scripts/build_deploy.py >/dev/null   # dist/deploy_kitchengenome.js from merged main
-echo "$IG_OUT"
-if [ "$WEB_CHANGED" = 1 ]; then
-  if [ -f /home/box/.secrets/cloudflare_pages_token ]; then
-    ./deploy.sh main >/dev/null && echo "RESULT=DEPLOYED pr=$PR" || echo "RESULT=NEEDS_DEPLOY pr=$PR"
+  COLLECT_JSON=$(mktemp)
+  COLLECT_RC=0
+  PYTHONPATH=daemon timeout "${KG_COLLECT_TIMEOUT:-1500}" python3 -m kg_collect --db "$KG_DB" cycle \
+    --units "${KG_COLLECT_UNITS:-60}" --cost-cap "${KG_COLLECT_COST_CAP:-78}" --no-browser "${AI_ARGS[@]}" >"$COLLECT_JSON" 2>/dev/null || COLLECT_RC=$?
+  if [ "$COLLECT_RC" = 0 ]; then
+    COLLECT_OUT=$(python3 -c 'import json,sys; d=json.load(open(sys.argv[1])); s=d.get("ai_stats") or {}; print("COLLECT="+d["status"], "run="+str(d.get("run_id")), "ai="+d.get("ai","disabled"), "reason="+d.get("ai_reason","none"), "cost="+str(d.get("cost_used")), "ai_docs=%s/%s/%s/%s" % (s.get("considered",0), s.get("skipped_filter",0), s.get("called",0), s.get("findings",0)))' "$COLLECT_JSON") || COLLECT_OUT='COLLECT=failed reason=invalid_summary'
   else
-    echo "RESULT=NEEDS_DEPLOY pr=$PR"
+    COLLECT_OUT="COLLECT=failed reason=exit_$COLLECT_RC"
+  fi
+  rm -f "$COLLECT_JSON"
+  # Machine registry edits ship separately through human-reviewed PRs.
+  git checkout -q -- sources 2>/dev/null || true
+else
+  COLLECT_OUT='COLLECT=skipped reason=disabled_or_missing_db ai=disabled'
+fi
+echo "$COLLECT_OUT"
+COLLECT_STATE=${COLLECT_OUT#COLLECT=}; COLLECT_STATE=${COLLECT_STATE%% *}
+STAGE=instagram
+if [ "${KG_IG:-1}" = 1 ] && [ -f "$KG_DB" ]; then
+  IG_RC=0
+  IG_OUT=$(PYTHONPATH=daemon timeout --kill-after=15 900 python3 crawler/instagram_kg.py --db "$KG_DB" \
+    --cost-cap "${KG_IG_COST_CAP:-20}" "${AI_ARGS[@]}" 2>/dev/null) || IG_RC=$?
+  if [ "$IG_RC" = 124 ] || [ "$IG_RC" = 137 ]; then
+    IG_OUT=$(PYTHONPATH=daemon python3 crawler/instagram_kg.py --db "$KG_DB" --mark-timeout 2>/dev/null) || true
+    IG_OUT="IG_FAILED account=kitchen.genome reason=timeout"
+  fi
+  IG_OUT=$(printf '%s\n' "$IG_OUT" | sed -n '/^IG_\(OK\|SKIPPED\|BLOCKED\|FAILED\) /p' | tail -1)
+  if [ -z "$IG_OUT" ]; then
+    IG_OUT="IG_FAILED account=kitchen.genome reason=exit_$IG_RC"
+    PYTHONPATH=daemon python3 crawler/instagram_kg.py --db "$KG_DB" --mark-timeout >/dev/null 2>&1 || true
   fi
 else
-  echo "RESULT=MERGED_NO_DEPLOY pr=$PR"
+  IG_OUT='IG_SKIPPED account=kitchen.genome reason=disabled_or_missing_db'
 fi
+echo "$IG_OUT"
+IG_STATE=${IG_OUT%% *}; IG_STATE=${IG_STATE#IG_}
+STAGE=daemon
+if [ "${KG_COLLECT:-1}" = 1 ] && [ -f "$KG_DB" ]; then
+  DAEMON_RC=0
+  PYTHONPATH=daemon timeout 600 python3 -m kg_daemon --db "$KG_DB" run --collect-db "$KG_DB" \
+    --cost-cap "${KG_DAEMON_COST_CAP:-20}" "${AI_ARGS[@]}" >/dev/null 2>&1 || DAEMON_RC=$?
+  echo "DAEMON=finished exit=$DAEMON_RC"
+  REVIEW_PENDING=$(PYTHONPATH=daemon python3 -c 'import sqlite3,sys; c=sqlite3.connect(sys.argv[1]); print(c.execute("SELECT COUNT(*) FROM review_queue WHERE state=?",("open",)).fetchone()[0])' "$KG_DB" 2>/dev/null) || REVIEW_PENDING=unknown
+fi
+STAGE=apply
+python3 crawler/apply.py
+python3 data/enrich_en.py
+STAGE=build
+python3 scripts/build_deploy.py >/dev/null
+grep -q '^const SHOW_VERDICTS=false;' web/app.js
+grep -q '^const SHOW_NEWSLETTER=false;' web/app.js
+if grep -rqi 'noindex' web; then echo 'GUARD FAIL: noindex found'; exit 3; fi
+STAGE=pr
+# Stage only publication artifacts (new files included); private inbox/session/runtime output never enters git.
+git add -A -- data/seed.json crawler/pending.json crawler/applied.json web
+if git diff --cached --quiet; then
+  FINAL=1; echo "RESULT=NO_CHANGE review_pending=$REVIEW_PENDING collect=$COLLECT_STATE ig=$IG_STATE"; exit 0
+fi
+SUM="daily deterministic collection; private leads require review"
+git commit -q -m "crawl $DAY: $SUM"
+git push -q -u origin "$BR"
+PR=$(gh pr create --repo SUNBURN-Golden/kitchen-genome --base main --head "$BR" --title "crawl $DAY: review collection" \
+  --body 'Daily deterministic collection. AI and dedicated Instagram findings stay in the private pending inbox. Build guards passed. Human review required; squash merge is a later action.')
+FINAL=1
+echo "RESULT=PR_CREATED pr=$PR review_pending=$REVIEW_PENDING collect=$COLLECT_STATE ig=$IG_STATE"

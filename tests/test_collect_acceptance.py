@@ -3,6 +3,7 @@ They prove behaviour (discovery, evaluation, html/pdf/image fetch, gaps, change 
 They do not measure accuracy on real press; real-run evidence lives in docs/data/COLLECTION_BOT.md."""
 import json
 import os
+import shutil
 import sys
 
 import pytest
@@ -60,6 +61,8 @@ def test_cycle_discovers_new_sources_and_targets(world):
 
 
 def test_multipage_pdf_image_and_failures(world):
+    if not shutil.which('tesseract'):
+        pytest.skip('requires optional Tesseract OCR system dependency (kor+eng)')
     conn, web, bot, tmp = world
     for _ in range(3):
         run(bot)

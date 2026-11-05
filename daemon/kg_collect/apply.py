@@ -55,7 +55,7 @@ def apply_affiliation(conn, now: str | None = None, tier_of=lambda host: 'press'
     now = now or utcnow()
     out = {'checked': 0, 'confirmed': 0, 'changes': 0, 'skipped_unmapped': 0, 'skipped_ambiguous_move': 0, 'already_recorded': 0}
     rows = conn.execute("""SELECT e.*, tc.name_ko chef_name, tr.name_ko rest_name FROM extraction e JOIN target tc ON tc.target_id=e.resolved_chef_target
-                           JOIN target tr ON tr.target_id=e.resolved_restaurant_target WHERE e.label='employment_claim' AND e.epistemic IN ('claim','fact') AND e.ambiguity IS NULL
+                           JOIN target tr ON tr.target_id=e.resolved_restaurant_target WHERE e.label='employment_claim' AND e.epistemic IN ('claim','fact') AND asserted_by<>'ai_inference' AND pending_only=0 AND extractor NOT LIKE '%deepseek%' AND extractor NOT LIKE '%model:%' AND extractor NOT LIKE '%ai:%' AND e.ambiguity IS NULL
                            ORDER BY COALESCE(e.published_at,''), e.created_at""").fetchall()
     for e in rows:
         out['checked'] += 1
@@ -98,7 +98,7 @@ def apply_status(conn, now: str | None = None, tier_of=lambda host: 'press') -> 
     now = now or utcnow()
     out = {'events': 0, 'skipped': 0, 'history': 0}
     for e in conn.execute("""SELECT e.*, tr.name_ko rest_name FROM extraction e JOIN target tr ON tr.target_id=e.resolved_restaurant_target
-                             WHERE e.label IN ('opening','closure','relocation','rename') AND e.epistemic IN ('claim','fact') AND e.ambiguity IS NULL""").fetchall():
+                             WHERE e.label IN ('opening','closure','relocation','rename') AND e.epistemic IN ('claim','fact') AND asserted_by<>'ai_inference' AND pending_only=0 AND extractor NOT LIKE '%deepseek%' AND extractor NOT LIKE '%model:%' AND extractor NOT LIKE '%ai:%' AND e.ambiguity IS NULL""").fetchall():
         branch = service_branch(conn, e['rest_name'])
         if not branch:
             out['skipped'] += 1

@@ -3,6 +3,7 @@ New people/places become `candidate` targets (discovered), promoted only with >=
 import json
 import re
 
+from kg_ai import pending
 from kg_daemon.db import utcnow
 
 from .review import reject_reason
@@ -65,6 +66,8 @@ def resolve_restaurant(conn, gaz: Gazetteer, name: str | None, allow_new: bool, 
 def resolve_extractions(conn, recs: list[dict], gaz: Gazetteer, doc_url: str, via: str) -> None:
     """Mutates recs: resolved_chef_target / resolved_restaurant_target / resolved_org_target / resolve_note."""
     for r in recs:
+        if pending(r):
+            continue
         notes = []
         allow_new = r['label'] in ('career', 'employment_claim', 'opening') and r['epistemic'] in ('claim', 'fact') and not r.get('ambiguity') or \
             (r['label'] in ('career', 'employment_claim') and r.get('ambiguity') == 'multiple_chefs_in_sentence')
@@ -82,7 +85,7 @@ def promote_candidates(conn) -> int:
     n = 0
     for t in conn.execute("SELECT target_id FROM target WHERE status='candidate'").fetchall():
         tid = t['target_id']
-        rows = conn.execute("""SELECT DISTINCT host, epistemic FROM extraction WHERE epistemic IN ('claim','fact')
+        rows = conn.execute("""SELECT DISTINCT host, epistemic FROM extraction WHERE epistemic IN ('claim','fact') AND asserted_by<>'ai_inference' AND pending_only=0 AND extractor NOT LIKE '%deepseek%' AND extractor NOT LIKE '%model:%' AND extractor NOT LIKE '%ai:%'
                                AND (resolved_chef_target=? OR resolved_restaurant_target=? OR resolved_org_target=?)""", (tid, tid, tid)).fetchall()
         hosts = {r['host'] for r in rows}
         if len(hosts) >= 2 or any(r['epistemic'] == 'fact' for r in rows):

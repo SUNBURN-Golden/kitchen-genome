@@ -17,6 +17,7 @@ def main(argv=None) -> int:
     sm.add_argument('--seed', default=os.path.join(ROOT, 'data', 'seed.json'))
     sm.add_argument('--dry-run', action='store_true')
     rn = sub.add_parser('run')
+    rn.add_argument('--deepseek', action='store_true')
     rn.add_argument('--no-resume', action='store_true')
     rn.add_argument('--cost-cap', type=float)
     rn.add_argument('--collect-db', help='live collector DB (kg_collect extraction table); default: --db itself')
@@ -35,9 +36,10 @@ def main(argv=None) -> int:
     elif a.cmd == 'run':
         from .runner import Daemon
         from .stages import HANDLERS
-        cfg = {'cost_cap_units': a.cost_cap} if a.cost_cap else {}
+        cfg = {'cost_cap_units': a.cost_cap} if a.cost_cap is not None else {}
         raw_dir = os.path.join(os.path.dirname(os.path.abspath(a.db)), 'raw')
         env = {'raw_dir': raw_dir, 'collect_db': a.collect_db or (a.db if a.db != ':memory:' else None)}
+        env['deepseek'] = a.deepseek
         if a.today:
             env['today'] = a.today
         rep = Daemon(conn, HANDLERS, cfg, env=env).run(resume=not a.no_resume)

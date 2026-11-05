@@ -7,31 +7,51 @@ import json, os, re, sys, time, datetime as dt, urllib.request, urllib.parse, ur
 from email.utils import parsedate_to_datetime
 H = os.path.dirname(os.path.abspath(__file__)); ROOT = os.path.dirname(H)
 C = json.load(open(os.path.join(H, 'config.json'), encoding='utf-8'))
-UA = C['user_agent']; _robots = {}; _last = [0.0]
+UA = C['user_agent']
 
 def host(u): return urllib.parse.urlparse(u).netloc.lower().removeprefix('www.')
 def banned(u): return any(b in host(u) for b in C['banned_hosts'])
 def allowed(u):
-    if banned(u): return False
-    p = urllib.parse.urlparse(u); base = f'{p.scheme}://{p.netloc}'
-    if base not in _robots:
-        rp = urllib.robotparser.RobotFileParser(base + '/robots.txt')
-        try: rp.read()
-        except Exception: rp = None
-        _robots[base] = rp
-    rp = _robots[base]
-    return True if rp is None else rp.can_fetch(UA, u)
+    if banned(u):
+        return False
+    return network().robots_info(u)['allowed']
+
+_net = None
+_limits = None
+
+def network():
+    global _net, _limits
+    if _net is None:
+        sys.path.insert(0, os.path.join(ROOT, 'daemon'))
+        from kg_collect.net import PoliteNet
+        from kg_collect.limits import Limits
+        from kg_daemon.db import connect, migrate
+        db_path = os.environ.get('KG_SERVICE_DB') or os.path.join(ROOT, 'data_store', 'kg_service.db')
+        if not os.path.isfile(db_path):
+            db_path = os.path.join(H, 'out', 'web_limits.sqlite')
+        conn = connect(db_path)
+        # Local runtime schema only. The collector CLI uses this same migration set.
+        migrate(conn)
+        _net, _limits = PoliteNet(conn=conn, timeout=20), Limits(conn)
+    return _net
+
 
 def get(u, timeout=20):
-    if not allowed(u): return None, 'robots'
-    w = C['delay_sec'] - (time.time() - _last[0])
-    if w > 0: time.sleep(w)
-    _last[0] = time.time()
+    from_net = network()
+    if not _limits.admit(u):
+        return None, 'daily_cap'
+    _limits.conn.commit()
+    from kg_collect.limits import DailyLimit
     try:
-        r = urllib.request.urlopen(urllib.request.Request(u, headers={'User-Agent': UA}), timeout=timeout)
-        return r.read().decode('utf-8', 'replace'), r.status
-    except urllib.error.HTTPError as e: return None, e.code
-    except Exception as e: return None, type(e).__name__
+        response = from_net.get(u)
+    except DailyLimit:
+        return None, 'daily_cap'
+    if response.status != 200 or response.error:
+        return None, response.error or response.status
+    from kg_collect.net import looks_like_challenge
+    if looks_like_challenge(response):
+        return None, 'domain_paused'
+    return response.text(), response.status
 
 def rss_items(xml):
     try: root = ET.fromstring(xml)
@@ -75,6 +95,8 @@ def main(day=None):
         stats['queries'] += 1
         if body is None: stats['robots_blocked' if st == 'robots' else 'errors'] += 1; continue
         for it in rss_items(body)[:C['max_items_per_query']]:
+            # Feed items become findings, not fetch jobs; do not spend the dispatch-time
+            # candidate budget on links that will never be requested.
             stats['items'] += 1
             if not mentions(r, it['text']): continue
             for k in classify(it['text']): add(r, k, it)

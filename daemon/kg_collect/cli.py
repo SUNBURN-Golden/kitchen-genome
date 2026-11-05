@@ -17,6 +17,8 @@ def main(argv=None) -> int:
     sub.add_parser('init')
     c = sub.add_parser('cycle')
     c.add_argument('--units', type=float, default=60)
+    c.add_argument('--cost-cap', type=float)
+    c.add_argument('--deepseek', action='store_true')
     c.add_argument('--no-resume', action='store_true')
     c.add_argument('--no-browser', action='store_true')
     sub.add_parser('status')
@@ -41,8 +43,8 @@ def main(argv=None) -> int:
                 browser = playwright_browser()
             except Exception:  # noqa: BLE001
                 browser = None
-        bot = cycle.Bot(conn, data_dir=data_dir, units=a.units, browser=browser)
-        rep = cycle.run_cycle(bot, resume=not a.no_resume)
+        bot = cycle.Bot(conn, data_dir=data_dir, units=a.units, browser=browser, deepseek=a.deepseek)
+        rep = cycle.run_cycle(bot, resume=not a.no_resume, cost_cap=a.cost_cap)
         print(json.dumps(rep, ensure_ascii=False, indent=1))
         return 0 if rep['status'] in ('succeeded', 'locked', 'paused_cost_cap') else 1
     if a.cmd == 'status':

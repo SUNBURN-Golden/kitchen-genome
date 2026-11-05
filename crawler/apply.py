@@ -33,6 +33,9 @@ def main():
     groups = {}
     ignored = set(C.get('ignored_urls', ()))
     for f in F:
+        if (f.get('pending_only') or f.get('asserted_by') == 'ai_inference' or f.get('epistemic') == 'inference'
+                or f.get('collector_account') == 'kitchen.genome'
+                or any(x in (f.get('extractor') or '').lower() for x in ('deepseek', 'model:', 'ai:'))): continue
         if f.get('id') not in R or f.get('url') in ignored: continue
         key = (f['id'], f['kind'], f.get('new_name') or '', f.get('field') or '', json.dumps(f.get('value'), ensure_ascii=False))
         groups.setdefault(key, []).append(f)

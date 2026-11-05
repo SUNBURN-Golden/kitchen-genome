@@ -15,6 +15,7 @@ from . import EXTRACTOR_VERSION, apply as apply_mod, booking, discover, evaluate
 from .fetch import Doc, Fetcher, parse_feed
 from .htmlx import parse_html
 from . import net as net_mod
+from .limits import DailyLimit
 from .net import PoliteNet, host_of
 from .pipeline import check_extractor_health, fetch_regression_alert, official_hosts, process_doc, reconcile_host_yield_alerts
 from .rawstore import RawStore
@@ -22,19 +23,21 @@ from .resolve import promote_candidates
 from .targets import Gazetteer, load_seed_targets
 
 STAGES = ('plan', 'fetch', 'extract', 'evaluate', 'gaps', 'apply', 'quality')
-UNIT_COSTS = {'http': 1.0, 'ocr_page': 2.0, 'browser': 4.0}
+UNIT_COSTS = {'http': 1.0, 'ocr_page': 2.0, 'browser': 4.0, 'llm_tokens_k': 0.5}
 
 
 class Bot:
     """Collaborators. Everything the network touches is injectable (tests use a fixture server / fake clock)."""
 
-    def __init__(self, conn, data_dir=None, net=None, browser=None, seeds=None, model_hook=None, today=None, ocr=True, units=60, registry_path=None, seeds_path=None):
+    def __init__(self, conn, data_dir=None, net=None, browser=None, seeds=None, model_hook=None, today=None, ocr=True, units=60, registry_path=None, seeds_path=None, deepseek=False):
         self.conn = conn
         self.data_dir = data_dir or os.path.join(ROOT, 'data_store')
         self.raw = RawStore(os.path.join(self.data_dir, 'raw'))
-        self.net = net or PoliteNet()
+        self.net = net or PoliteNet(conn=conn)
         self.browser = browser
         self.seeds = seeds or discover.load_seeds(seeds_path or discover.SEEDS_PATH)
+        self.deepseek = deepseek
+        self.ai = None
         self.model_hook = model_hook
         self.today = today or dt.date.today()
         self.ocr = ocr
@@ -83,6 +86,11 @@ def _tier_of(conn):
 def stage_plan(ctx):
     bot: Bot = ctx.env['bot']
     conn, seeds = bot.conn, bot.seeds
+    if bot.deepseek and bot.ai is None:
+        from .deepseek import Adapters
+        bot.ai = Adapters.for_meter(ctx.cost)
+    if bot.ai:
+        bot.ai.client.budget.meter = ctx.cost
     caps = {**seeds['caps']}
     now_dt = dt.datetime.now(dt.timezone.utc)
     new = {'directory_feed': 0, 'keyword': 0, 'entity_status': 0, 'official_roots': 0, 'gap': 0}
@@ -105,9 +113,20 @@ def stage_plan(ctx):
         g['relevance'] = 0.7
         g['url'] = discover.search_url(seeds, g['query'])
         new['gap'] += discover.enqueue(conn, **g, caps=caps)
+    if bot.ai:
+        new['deepseek_gap'] = 0
+        for j in bot.ai.plan(conn):
+            j['url'] = discover.search_url(seeds, j['query'])
+            new['deepseek_gap'] += discover.enqueue(conn, **j, caps=caps)
     conn.commit()
     requeued = scheduler.requeue_due(conn, now_dt)
-    pl = scheduler.plan(conn, bot.units, now_dt)
+    model_allowance = 0
+    if bot.ai and bot.ai.client.status == 'enabled':
+        budget = bot.ai.client.budget
+        daily_used = conn.execute('SELECT COALESCE(SUM(units),0) FROM ai_request WHERE day=?', (budget.day(),)).fetchone()[0]
+        model_allowance = max(0, budget.daily_cap - daily_used)
+    available_units = min(bot.units, max(0, ctx.cost.cap - ctx.cost.used - model_allowance)) if bot.ai and bot.ai.client.status == 'enabled' else bot.units
+    pl = scheduler.plan(conn, available_units, now_dt)
     chosen = [jid for p in ('discovery', 'backfill', 'refresh') for jid in pl['chosen'][p]]
     pri = {r['job_id']: r['priority'] for r in conn.execute('SELECT job_id, priority FROM crawl_job')}
     chosen.sort(key=lambda j: -pri.get(j, 0))
@@ -167,7 +186,7 @@ def stage_fetch(ctx):
         conn.execute('INSERT INTO budget_ledger(cycle_id,pool,kind,units,job_id,at) VALUES (?,?,?,?,?,?)', (ctx.run_id, state['pool'], kind, UNIT_COSTS.get(kind, 1.0) * units, state['job'], utcnow()))
         conn.commit()
 
-    fetcher = Fetcher(conn, bot.net, bot.raw, charge=charge, browser=bot.browser, ocr=bot.ocr)
+    fetcher = Fetcher(conn, bot.net, bot.raw, charge=charge, browser=None if bot.net.conn is not None else bot.browser, ocr=bot.ocr)
     gaz = bot.gaz()
     caps = bot.seeds['caps']
     stats = {'jobs_run': 0, 'ok_docs': 0, 'failed_docs': 0, 'blocked': 0, 'children_queued': 0, 'chain': {'subpages': 0, 'sns_leads': 0, 'booking_leads': 0, 'attachments': 0}, 'deferred_trial': 0}
@@ -176,6 +195,10 @@ def stage_fetch(ctx):
             continue
         job = conn.execute('SELECT * FROM crawl_job WHERE job_id=?', (jid,)).fetchone()
         if job is None or job['state'] != 'queued':
+            continue
+        if job['depth'] > min(2, caps.get('max_depth', 2)):
+            _finish_job(conn, jid, 'dropped', 'owner_depth_cap')
+            conn.commit()
             continue
         state['pool'], state['job'] = plan['pool_of'][jid], jid
         host = host_of(job['url'] or '')
@@ -193,7 +216,11 @@ def stage_fetch(ctx):
             continue
         allow_browser = True if bot.job_hint_dirs.get(job['url'], {}).get('browser') else None
         max_pages = caps['pagination_max_pages'] if job['path'] in ('directory',) else 1
-        docs = fetcher.fetch(job['url'], job_id=jid, allow_browser=allow_browser, max_pages=max_pages)
+        try:
+            docs = fetcher.fetch(job['url'], job_id=jid, allow_browser=allow_browser, max_pages=max_pages)
+        except DailyLimit:
+            stats['deferred_daily_cap'] = True
+            break
         stats['jobs_run'] += 1
         oks = [d for d in docs if d.ok]
         probe = (job['query'] or '').startswith('probe:')
@@ -306,6 +333,10 @@ def stage_extract(ctx):
     bot: Bot = ctx.env['bot']
     conn = bot.conn
     gaz = bot.gaz()
+    if bot.deepseek:
+        from .deepseek import Adapters
+        bot.ai = bot.ai or Adapters.for_meter(ctx.cost)
+        bot.ai.client.budget.meter = ctx.cost
     tier_of = _tier_of(conn)
     rows = conn.execute("""SELECT * FROM fetch_record WHERE outcome='ok' AND (extracted_at IS NULL OR extractor_version<>?) ORDER BY fetched_at, rowid""", (EXTRACTOR_VERSION,)).fetchall()
     stats = {'docs': 0, 'new_extractions': 0, 'labels': {}, 'alerts': []}
@@ -316,7 +347,7 @@ def stage_extract(ctx):
         if job and job['target_id']:
             t = conn.execute('SELECT * FROM target WHERE target_id=?', (job['target_id'],)).fetchone()
             jctx = {t['kind']: {'name_ko': t['name_ko'], 'target_id': t['target_id']}} if t and t['kind'] in ('chef', 'restaurant') else None
-        r = process_doc(conn, doc, gaz, tier=tier_of(doc.host), ctx=jctx, via=f['url'], model_hook=bot.model_hook)
+        r = process_doc(conn, doc, gaz, tier=tier_of(doc.host), ctx=jctx, via=f['url'], model_hook=bot.model_hook, model_adapter=bot.ai)
         n_all = conn.execute('SELECT COUNT(*) FROM extraction WHERE fetch_id=?', (f['fetch_id'],)).fetchone()[0]
         for a in check_extractor_health(conn, doc, n_all, bot.raw, gaz=gaz):
             stats['alerts'].append(a)
@@ -430,9 +461,16 @@ HANDLERS = {k: _logged(v) for k, v in _H.items()}
 
 
 def run_cycle(bot: Bot, resume: bool = True, cost_cap: float | None = None, trigger: str = 'manual') -> dict:
-    cfg = {'lock_name': 'kg-collect', 'daemon_name': 'kg-collect', 'cost_cap_units': cost_cap or bot.units * 1.3, 'unit_costs': UNIT_COSTS, 'max_attempts': 2, 'backoff_base_sec': 0.0, 'backoff_max_sec': 0.0}
+    cfg = {'lock_name': 'kg-collect', 'daemon_name': 'kg-collect', 'cost_cap_units': (bot.units * 1.3 if cost_cap is None else cost_cap), 'unit_costs': UNIT_COSTS, 'max_attempts': 2, 'backoff_base_sec': 0.0, 'backoff_max_sec': 0.0}
     d = runner.Daemon(bot.conn, HANDLERS, cfg, env={'bot': bot}, stages=STAGES, sleep=lambda s: None)
     rep = d.run(trigger=trigger, resume=resume)
+    rep['ai'] = bot.ai.client.status if bot.ai else 'disabled'
+    if bot.ai:
+        rep['ai_stats'] = dict(bot.ai.stats)
+    if bot.ai and not bot.ai.client.key:
+        rep['ai_reason'] = 'missing_key'
+    elif bot.ai and bot.ai.client.stopped:
+        rep['ai_reason'] = bot.ai.client.stopped
     if rep.get('run_id'):
         rep['outputs'] = {r['stage']: json.loads(r['output_json']) for r in bot.conn.execute('SELECT stage, output_json FROM stage_checkpoint WHERE run_id=? AND output_json IS NOT NULL', (rep['run_id'],))}
     return rep

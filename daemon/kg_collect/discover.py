@@ -64,7 +64,7 @@ def enqueue(conn, *, path, pool, url=None, query=None, target_id=None, gap_id=No
     """Idempotent. Returns True if a NEW job row was created. Enforces depth cap, relevance floor, queue cap (discovery is never starved by backfill: separate caps)."""
     caps = caps or {}
     if state == 'queued':
-        if depth > caps.get('max_depth', 2):
+        if depth > min(2, caps.get('max_depth', 2)):
             return False
         if relevance < caps.get('relevance_floor', 0.30):
             return False
@@ -74,6 +74,9 @@ def enqueue(conn, *, path, pool, url=None, query=None, target_id=None, gap_id=No
             cap = caps.get('max_queued_per_pool', {}).get(pool, 400)
             if conn.execute("SELECT COUNT(*) FROM crawl_job WHERE pool=? AND state='queued'", (pool,)).fetchone()[0] >= cap:
                 return False
+    # Candidate-URL budget is spent when a request is actually dispatched (PoliteNet.get), not
+    # when a URL is enumerated or queued: a feed-heavy day must not exhaust the quota with links
+    # that are never fetched.
     jid = job_id(path, url or query or '')
     cur = conn.execute("""INSERT OR IGNORE INTO crawl_job(job_id,path,pool,url,query,target_id,gap_id,depth,parent_job_id,relevance,state,last_error,created_at,finished_at)
                           VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?)""",
