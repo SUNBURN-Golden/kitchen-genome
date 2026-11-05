@@ -34,9 +34,10 @@ manager. Never pass their values as CLI arguments or enable shell tracing:
 `DEEPSEEK_MODEL` defaults to the owner-ordered `deepseek-chat`. An operator can set
 `DEEPSEEK_MODEL=deepseek-flash` explicitly. As of 2026-11-05 the
 [official quick start](https://api-docs.deepseek.com/) lists Flash and V4 Pro;
-there is no silent substitution if the default is unavailable. Requests use
-non-thinking JSON output, 1,024 maximum output tokens and a 30-second timeout.
-The client rejects redirects and disables proxy inheritance. It has no retries.
+there is no silent substitution if the default is unavailable. Requests use JSON
+output (no vendor reasoning parameter), a 2,048-token default output limit
+(4,096 for gap planning and web extraction) and a 30-second timeout. The client
+rejects redirects and disables proxy inheritance. It has no retries.
 The API's [usage contract](https://api-docs.deepseek.com/api/create-chat-completion/)
 supplies input/output/total counts; cached input is recorded without counting it twice.
 
@@ -85,11 +86,15 @@ metadata and must change when the extraction contract changes.
 ## Limits and stop behavior
 
 Web admission is limited to 500 distinct candidate URLs/day and 200 attempted
-requests/day, including robots and pagination. Both web entry points share durable
-KST-day counters and a dispatch lock. Depth never exceeds two. Every domain waits
-at least five seconds; a longer robots delay persists across processes. Robots
-403/429/503 and challenge responses stop content dispatch. Domain pauses persist in
-`web_host_guard` until an operator reviews and clears the specific pause.
+content requests/day, including pagination. Candidate URLs are counted when a
+request is actually dispatched, not when a feed item is enumerated or a job is
+queued, so unfetched links do not consume the quota. robots.txt lookups have a
+separate auxiliary counter (200/day) and do not consume content slots. Both web
+entry points share durable KST-day counters and a dispatch lock. Depth never
+exceeds two. Every domain waits at least five seconds; a longer robots delay
+persists across processes. Robots 403/429/503 and challenge responses stop content
+dispatch. Domain pauses persist in `web_host_guard` until an operator reviews and
+clears the specific pause.
 
 Automatic redirects are declined, preserving the request/robots boundary. Live
 browser fallback is disabled because its subrequests are not instrumented by this
@@ -106,11 +111,14 @@ eligible; no model-supplied handles or follower harvesting are accepted. Private
 profiles are skipped. No media, stories, comments or DMs are collected.
 
 A checkpoint/challenge/429/access denial stops immediately and writes
-`crawler/out/ig_kg_blocked.flag`. Unknown transport outcomes stop too. Partial
-findings have already been committed to the private inbox. The account lock,
-quotas and dispatch time survive restarts. A process killed during a request
-leaves a same-day stop marker. A blocked flag survives midnight. After human
-account inspection, clearing the flag still does not allow a same-day retry.
+`crawler/out/ig_kg_blocked.flag`. A transient transport failure (DNS/TLS/socket
+reset/timeout) stops the current run without writing the flag or pinning
+`stopped_day`, so a same-day rerun may retry; it still never retries in-process or
+swaps identity. Partial findings have already been committed to the private inbox.
+The account lock, quotas and dispatch time survive restarts. A process killed
+during a request leaves a same-day stop marker. A blocked flag survives midnight.
+After human account inspection, clearing the flag still does not allow a same-day
+retry for an access-control stop.
 Neither this collector nor the pipeline falls back to `agamajung`, a proxy or a
 new account. The legacy session and `ig_blocked.flag` remain untouched.
 
@@ -137,9 +145,11 @@ KG Instagram outputs are `crawler/out/ig_kg/YYYYMMDD.json`, outside the legacy
 `ig-*.json` importer glob. Output is a private view of the same pending inbox.
 Privacy filtering happens before model submission and excerpt persistence. Excerpts
 are purged after 30 days from review payloads, output snapshots and IG model-result
-caches when the collector is invoked (even outside the network window). Keep the
-collector scheduled daily for retention cleanup; offline backups require their own
-retention policy. Audit identifiers and budget reservations remain.
+caches when the collector is invoked (even outside the network window). Purged
+cache rows are marked `expired`: a resurfacing caption loses only that cached
+answer, it does not disable model calls for the rest of the run. Keep the collector
+scheduled daily for retention cleanup; offline backups require their own retention
+policy. Audit identifiers and budget reservations remain.
 
 No review row auto-publishes. Human acceptance must record a separate evidence and
 decision trail; do not rewrite model provenance into a source assertion. The legacy
@@ -156,10 +166,16 @@ stops. It never force-pushes, merges or deploys. Private review growth alone doe
 not create a PR. Squash merge is a later human action.
 
 Each IG invocation prints one `IG_OK`, `IG_SKIPPED`, `IG_BLOCKED` or `IG_FAILED`
-line with `account=kitchen.genome`. The shell prints `COLLECT=...`, a daemon exit
-summary, and one final `RESULT=NO_CHANGE|PR_CREATED|FAILED|SKIPPED`. Independent
-collection failure remains visible without blocking deterministic build work.
-Timeout handling marks the IG account stopped before another run can dispatch.
+line with `account=kitchen.genome`. The shell prints `COLLECT=...` (including an
+`ai_docs=considered/filtered/called/findings` funnel) and a daemon exit summary,
+then one final `RESULT=NO_CHANGE|PR_CREATED|FAILED|SKIPPED`. Independent collection
+failure remains visible without blocking deterministic build work. Timeout handling
+marks the IG account stopped before another run can dispatch.
+
+The pipeline is intentionally PR-only: it never merges or deploys. Anything that
+consumes these summary lines (cron wrapper, notification) must accept the
+`PR_CREATED|NO_CHANGE` vocabulary; squash merge and deploy are separate human
+actions performed later.
 
 Disable with `KG_DEEPSEEK=0` and `KG_IG=0`; preserve inboxes, daily counters,
 reservations, sessions and block flags. Do not enable the legacy account as a

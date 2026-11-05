@@ -44,7 +44,8 @@ def test_measured_usage_cache_and_zero_cap(conn):
     assert (r['prompt_tokens'], r['completion_tokens'], r['cache_tokens']) == (100, 20, 40)
     client.call('test', 'JSON', {'source': 'text'}, lambda o: o)
     assert len(calls) == 1 and calls[0][0]['model'] == 'deepseek-chat'
-    assert calls[0][0]['max_tokens'] == 1024 and calls[0][1] == 'synthetic-key'
+    assert calls[0][0]['max_tokens'] == 2048 and calls[0][1] == 'synthetic-key'
+    assert 'thinking' not in calls[0][0]
     c2 = Client(Budget(meter(conn, 0)), key='dummy', transport=lambda *a: pytest.fail('paid request at zero cap'))
     with pytest.raises(CostCapExceeded): c2.call('zero', 'JSON', {}, lambda o: o)
 
@@ -117,6 +118,22 @@ def test_usage_above_bound_is_recorded_in_full(conn):
     client = Client(Budget(meter(conn)), key='dummy', transport=lambda *a: response(usage={'prompt_tokens': 100000, 'completion_tokens': 0, 'total_tokens': 100000}))
     with pytest.raises(CostCapExceeded): client.call('task', 'JSON', {}, lambda o: o)
     assert client.budget.meter.used == 50
+
+
+def test_task_specific_output_limit_and_purged_cache_does_not_disable_run(conn):
+    seen = []
+    def transport(payload, key):
+        seen.append(json.loads(payload)); return response({'ok': True})
+    client = Client(Budget(meter(conn)), key='dummy', transport=transport)
+    assert client.call('planner', 'JSON', {'n': 1}, lambda o: o, max_tokens=4096) == {'ok': True}
+    assert seen[0]['max_tokens'] == 4096
+    # Retention purges cached IG results; a repeat must not stop the model for the whole run.
+    conn.execute("UPDATE ai_request SET state='expired', result_json=NULL"); conn.commit()
+    with pytest.raises(DeepSeekError, match='cached_result_purged'):
+        client.call('planner', 'JSON', {'n': 1}, lambda o: o, max_tokens=4096)
+    assert client.stopped is None and client.status == 'enabled'
+    assert client.call('planner', 'JSON', {'n': 2}, lambda o: o) == {'ok': True}
+    assert len(seen) == 2
 
 
 def test_default_http_endpoint_auth_timeout_and_sanitized_exception(monkeypatch):

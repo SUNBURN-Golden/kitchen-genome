@@ -1,9 +1,18 @@
 """Bounded gap planning and difficult extraction. The model controls no persistence fields."""
 import json
+import os
 import re
+import sys
+
 from kg_ai.budget import Budget
 from kg_ai.deepseek import Client, DeepSeekError
-from kg_daemon.db import stable_id
+from kg_daemon.db import ROOT, stable_id
+
+_CRAWLER = os.path.join(ROOT, 'crawler')
+if _CRAWLER not in sys.path:
+    sys.path.insert(0, _CRAWLER)
+from privacy_filter import sanitize_before_store  # noqa: E402
+
 from . import gaps
 
 LABELS = {'career', 'employment_claim', 'opening', 'closure', 'relocation', 'rename', 'menu', 'collab', 'mentorship_claim'}
@@ -18,10 +27,12 @@ EXTRACT_INSTRUCTION = ('Extract explicitly supported culinary facts; return {"fi
 class Adapters:
     def __init__(self, client):
         self.client = client
+        # Observable extraction funnel: a production no-op must not hide behind ai=enabled.
+        self.stats = {'considered': 0, 'skipped_filter': 0, 'skipped_no_targets': 0,
+                      'skipped_not_needed': 0, 'called': 0, 'failed': 0, 'findings': 0}
 
     @classmethod
     def for_meter(cls, meter):
-        import os
         return cls(Client(Budget(meter, daily_cap=os.environ.get('KG_AI_DAILY_COST_CAP', '20'))))
 
     def plan(self, conn):
@@ -32,7 +43,10 @@ class Adapters:
         data = []
         for j in jobs:
             target = conn.execute('SELECT name_ko,name_en FROM target WHERE target_id=?', (j['target_id'],)).fetchone()
-            history = [r[0] for r in conn.execute('SELECT query FROM crawl_job WHERE gap_id=? AND query IS NOT NULL ORDER BY rowid DESC LIMIT 3', (j['gap_id'],))]
+            # Only non-yielding attempts are historical failures; successful gap queries are not failed input.
+            history = [r[0] for r in conn.execute(
+                "SELECT query FROM crawl_job WHERE gap_id=? AND query IS NOT NULL AND NOT (state='done' AND last_error IS NULL) ORDER BY rowid DESC LIMIT 3",
+                (j['gap_id'],))]
             data.append({'gap_id': j['gap_id'], 'target_id': j['target_id'], 'name': dict(target), 'field': j['field'],
                          'attempts': j['attempts'], 'failed_queries': history, 'allowed_sources': ['official', 'press', 'specialist_blog']})
 
@@ -57,33 +71,34 @@ class Adapters:
                     seen.add((row['gap_id'], q))
             return out
         try:
-            return self.client.call('gap-plan-1', 'Return JSON {"queries":[{"gap_id":"known ID","target_id":"known ID","query":"search terms","reason":"short reason"}]}. At most 3 per gap. Seek independent permitted sources; never bypass blocked access.', data, validate)
+            return self.client.call('gap-plan-1', 'Return JSON {"queries":[{"gap_id":"known ID","target_id":"known ID","query":"search terms","reason":"short reason"}]}. At most 3 per gap. Seek independent permitted sources; never bypass blocked access.', data, validate, max_tokens=4096)
         except DeepSeekError:
             return []
 
     def extract(self, doc, recs, gaz, context=None):
         if self.client.status != 'enabled':
             return []
-        text = doc.text[:12000]
-        # Use the same privacy filter as the crawler; offsets refer to the filtered input.
-        from kg_daemon.db import ROOT
-        import sys, os
-        sys.path.insert(0, os.path.join(ROOT, 'crawler'))
-        from privacy_filter import sanitize_before_store
-        clean, _ = sanitize_before_store(text)
-        # Preserve original evidence offsets: with redaction, skip rather than store a misleading locator.
-        if clean != text.strip() or not clean:
+        self.stats['considered'] += 1
+        # Send the same filtered text we validate offsets against. Every real page contains
+        # newlines/tabs that sanitize_before_store collapses, so comparing the sanitized text to
+        # the raw text dropped nearly all production documents before the model was called.
+        text, _ = sanitize_before_store(doc.text[:12000])
+        if not text:
+            self.stats['skipped_filter'] += 1
             return []
         mentions = gaz.find(text)
         options = {m['target_id'] for m in mentions if m.get('target_id')}
         if context:
             options.update(v['target_id'] for v in context.values() if isinstance(v, dict) and v.get('target_id'))
         if not options:
+            self.stats['skipped_no_targets'] += 1
             return []
         if not recs and not gaz.conn.execute("SELECT 1 FROM gap WHERE state='open' AND target_id IN (%s) LIMIT 1" % ','.join('?' * len(options)), tuple(options)).fetchone():
+            self.stats['skipped_not_needed'] += 1
             return []
         from .extract import needs_model
         if recs and not any(needs_model(r) for r in recs):
+            self.stats['skipped_not_needed'] += 1
             return []
         targets = list({m['target_id']: {k: m.get(k) for k in ('target_id', 'kind', 'name_ko', 'name_en')} for m in mentions if m.get('target_id')}.values())
 
@@ -109,11 +124,13 @@ class Adapters:
                     raise ValueError()
                 out.append(r)
             return out
+        self.stats['called'] += 1
         try:
             rows = self.client.call('web-extract-1', EXTRACT_INSTRUCTION,
                                     {'url': doc.url, 'published_at': doc.published_at, 'text': text, 'known_targets': targets,
-                                     'rule_ambiguities': [r.get('ambiguity') for r in recs]}, validate)
+                                     'rule_ambiguities': [r.get('ambiguity') for r in recs]}, validate, max_tokens=4096)
         except DeepSeekError:
+            self.stats['failed'] += 1
             return []
         result = []
         for row in rows:
@@ -126,4 +143,5 @@ class Adapters:
                 matches = [m for m in gaz.lookup(r.get(field + '_text') or '') if m.get('kind') == kind]
                 r['resolved_' + field + '_target'] = matches[0]['target_id'] if len(matches) == 1 else None
             result.append(r)
+        self.stats['findings'] += len(result)
         return result

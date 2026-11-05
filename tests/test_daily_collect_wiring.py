@@ -12,10 +12,11 @@ SH = ROOT / 'scripts/daily_pipeline.sh'
 def test_daily_pipeline_syntax_and_pr_only_boundary():
     subprocess.run(['bash','-n',str(SH)],check=True)
     text=SH.read_text()
-    assert text.index('-m kg_collect') < text.index('python3 crawler/apply.py') < text.index('git add -u --')
+    assert text.index('-m kg_collect') < text.index('python3 crawler/apply.py') < text.index('git add -A --')
     assert 'crawler/instagram_kg.py' in text and 'crawler/instagram.py' not in text
     assert 'gh pr merge' not in text and '--force' not in text and './deploy.sh' not in text
-    assert 'git add -A' not in text and 'git branch -D' not in text
+    assert 'git add -A -- data/seed.json crawler/pending.json crawler/applied.json web' in text
+    assert 'git branch -D' not in text
 
 
 def test_daily_pipeline_falls_back_when_clone_path_missing(tmp_path):

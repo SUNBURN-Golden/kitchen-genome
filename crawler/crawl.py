@@ -95,8 +95,8 @@ def main(day=None):
         stats['queries'] += 1
         if body is None: stats['robots_blocked' if st == 'robots' else 'errors'] += 1; continue
         for it in rss_items(body)[:C['max_items_per_query']]:
-            if not _limits.admit(it['url']): break
-            _limits.conn.commit()
+            # Feed items become findings, not fetch jobs; do not spend the dispatch-time
+            # candidate budget on links that will never be requested.
             stats['items'] += 1
             if not mentions(r, it['text']): continue
             for k in classify(it['text']): add(r, k, it)
@@ -105,8 +105,6 @@ def main(day=None):
         body, st = get(fu)
         if body is None: stats['robots_blocked' if st == 'robots' else 'errors'] += 1; continue
         for it in rss_items(body):
-            if not _limits.admit(it['url']): break
-            _limits.conn.commit()
             stats['items'] += 1
             for r in rs:
                 if mentions(r, it['text']):

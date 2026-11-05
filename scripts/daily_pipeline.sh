@@ -38,7 +38,7 @@ if [ "${KG_COLLECT:-1}" = 1 ] && [ -f "$KG_DB" ]; then
   PYTHONPATH=daemon timeout "${KG_COLLECT_TIMEOUT:-1500}" python3 -m kg_collect --db "$KG_DB" cycle \
     --units "${KG_COLLECT_UNITS:-60}" --cost-cap "${KG_COLLECT_COST_CAP:-78}" --no-browser "${AI_ARGS[@]}" >"$COLLECT_JSON" 2>/dev/null || COLLECT_RC=$?
   if [ "$COLLECT_RC" = 0 ]; then
-    COLLECT_OUT=$(python3 -c 'import json,sys; d=json.load(open(sys.argv[1])); print("COLLECT="+d["status"], "run="+str(d.get("run_id")), "ai="+d.get("ai","disabled"), "reason="+d.get("ai_reason","none"), "cost="+str(d.get("cost_used")))' "$COLLECT_JSON") || COLLECT_OUT='COLLECT=failed reason=invalid_summary'
+    COLLECT_OUT=$(python3 -c 'import json,sys; d=json.load(open(sys.argv[1])); s=d.get("ai_stats") or {}; print("COLLECT="+d["status"], "run="+str(d.get("run_id")), "ai="+d.get("ai","disabled"), "reason="+d.get("ai_reason","none"), "cost="+str(d.get("cost_used")), "ai_docs=%s/%s/%s/%s" % (s.get("considered",0), s.get("skipped_filter",0), s.get("called",0), s.get("findings",0)))' "$COLLECT_JSON") || COLLECT_OUT='COLLECT=failed reason=invalid_summary'
   else
     COLLECT_OUT="COLLECT=failed reason=exit_$COLLECT_RC"
   fi
@@ -86,8 +86,8 @@ grep -q '^const SHOW_VERDICTS=false;' web/app.js
 grep -q '^const SHOW_NEWSLETTER=false;' web/app.js
 if grep -rqi 'noindex' web; then echo 'GUARD FAIL: noindex found'; exit 3; fi
 STAGE=pr
-# Stage only tracked publication artifacts; private inbox/session/runtime output never enters git.
-git add -u -- data/seed.json crawler/pending.json crawler/applied.json web
+# Stage only publication artifacts (new files included); private inbox/session/runtime output never enters git.
+git add -A -- data/seed.json crawler/pending.json crawler/applied.json web
 if git diff --cached --quiet; then
   FINAL=1; echo "RESULT=NO_CHANGE review_pending=$REVIEW_PENDING collect=$COLLECT_STATE ig=$IG_STATE"; exit 0
 fi

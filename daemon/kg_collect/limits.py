@@ -10,9 +10,10 @@ class DailyLimit(Exception):
 
 
 class Limits:
-    def __init__(self, conn, day=kst_day, candidates=500, fetches=200):
+    def __init__(self, conn, day=kst_day, candidates=500, fetches=200, robots=200):
         self.conn, self.day = conn, day
         self.candidates, self.fetches = min(500, candidates), min(200, fetches)
+        self.robots = min(200, robots)
 
     def admit(self, url):
         c, day = self.conn, self.day()
@@ -32,15 +33,20 @@ class Limits:
             c.rollback()
             raise
 
-    def dispatch(self):
+    def dispatch(self, *, robots=False):
         c, day = self.conn, self.day()
         c.commit()
         try:
             c.execute('BEGIN IMMEDIATE')
             c.execute('INSERT OR IGNORE INTO web_daily_fetch(day) VALUES (?)', (day,))
-            cur = c.execute('UPDATE web_daily_fetch SET attempts=attempts+1 WHERE day=? AND attempts<?', (day, self.fetches))
+            if robots:
+                cur = c.execute('UPDATE web_daily_fetch SET robots=robots+1 WHERE day=? AND robots<?', (day, self.robots))
+                cap = 'web_daily_robots_cap'
+            else:
+                cur = c.execute('UPDATE web_daily_fetch SET attempts=attempts+1 WHERE day=? AND attempts<?', (day, self.fetches))
+                cap = 'web_daily_fetch_cap'
             if not cur.rowcount:
-                raise DailyLimit('web_daily_fetch_cap')
+                raise DailyLimit(cap)
             c.commit()
         except Exception:
             c.rollback()

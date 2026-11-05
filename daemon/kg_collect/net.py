@@ -123,7 +123,7 @@ class PoliteNet:
         self.paused_hosts: dict = {}     # host -> reason (blocked this process; persisted by the caller in domain_profile)
         self.request_count = 0
 
-    def _dispatch(self, url, headers, timeout):
+    def _dispatch(self, url, headers, timeout, *, robots=False):
         from .limits import Limits
         limits = Limits(self.conn) if self.conn is not None else None
         h = host_of(url)
@@ -145,7 +145,7 @@ class PoliteNet:
                     wait = delay - (self.clock() - row['last_dispatch'])
                     if wait > 0:
                         self.sleep(wait)
-                limits.dispatch()
+                limits.dispatch(robots=robots)
                 c.execute('INSERT INTO web_host_guard(host,last_dispatch) VALUES (?,?) ON CONFLICT(host) DO UPDATE SET last_dispatch=excluded.last_dispatch', (h, self.clock()))
                 c.commit()
             r = self.transport(url, headers, timeout)
@@ -162,7 +162,7 @@ class PoliteNet:
         base = f'{p.scheme}://{p.netloc}'
         if base not in self._robots:
             self._wait(p.netloc)
-            r = self._dispatch(base + '/robots.txt', {'User-Agent': UA}, self.timeout)
+            r = self._dispatch(base + '/robots.txt', {'User-Agent': UA}, self.timeout, robots=True)
             self.request_count += 1
             rp = urllib.robotparser.RobotFileParser()
             if r.status == 200 and r.ctype in ('text/plain', ''):

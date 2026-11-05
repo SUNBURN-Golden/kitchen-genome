@@ -78,7 +78,7 @@ def test_checkpoint_ends_all_activity_and_keeps_partial_results(world, fail):
     conn, clock, calls, opts = world
     class FollowClient:
         status = 'enabled'; last_meta = {'model': 'fixture'}; stopped = None
-        def call(self, task, instruction, data, validate):
+        def call(self, task, instruction, data, validate, **kwargs):
             if task == 'ig-plan-1': return validate({'handles': [x['handle'] for x in data['handles']][:25]})
             return validate({'findings': [], 'follow': 'follow'})
     rc, line = ig.collect(conn, handles(2), lambda g: Backend(g, calls, fail=fail), client=FollowClient(), follow=True, **opts)
@@ -91,6 +91,25 @@ def test_checkpoint_ends_all_activity_and_keeps_partial_results(world, fail):
     clock.time += dt.timedelta(days=1)
     ig.collect(conn, handles(), lambda g: Backend(g,calls), **opts)
     assert len(calls) == old  # persistent flag survives midnight
+
+
+def test_transient_transport_failure_does_not_block_the_day(world):
+    conn, clock, calls, opts = world
+    class TransientBackend(Backend):
+        def request(self, kind):
+            def send():
+                self.calls.append((kind, self.guard.now().timestamp()))
+                if kind == 'profile':
+                    raise TimeoutError('synthetic network reset')
+            self.guard.dispatch(send)
+    rc, line = ig.collect(conn, handles(2), lambda g: TransientBackend(g, calls), **opts)
+    assert rc == 1 and line.startswith('IG_FAILED account=kitchen.genome') and 'reason=transport_unknown' in line
+    assert not opts['flag'].exists()
+    assert conn.execute('SELECT stopped_day FROM ig_account_state WHERE account=?', (ig.LOGIN,)).fetchone()[0] is None
+    # A transient failure is not an access-control signal, so the same day may retry.
+    n = len(calls)
+    rc2, line2 = ig.collect(conn, handles(2), lambda g: Backend(g, calls), **opts)
+    assert rc2 == 0 and line2.startswith('IG_OK') and len(calls) > n
 
 
 def test_same_day_stop_persists_when_human_removes_flag(world):
@@ -114,7 +133,7 @@ def test_follows_require_opt_in_and_cap_is_durable(world):
     conn, clock, calls, opts = world
     class Model:
         status = 'enabled'; last_meta = {}; stopped = None
-        def call(self, task, instruction, data, validate):
+        def call(self, task, instruction, data, validate, **kwargs):
             if task == 'ig-plan-1': return validate({'handles': [x['handle'] for x in data['handles']][:25]})
             return validate({'findings': [], 'follow': 'follow'})
     ig.collect(conn, handles(12), lambda g: Backend(g,calls,count=0), client=Model(), **opts)
@@ -207,7 +226,8 @@ def test_retention_purges_review_output_and_model_cache(world):
     payload=json.loads(conn.execute("SELECT payload_json FROM review_queue WHERE subject_type='ig_kg' LIMIT 1").fetchone()[0])
     assert 'excerpt' not in payload and payload['review_id']
     assert not (opts['out']/'20260901.json').exists()
-    assert conn.execute('SELECT result_json FROM ai_request').fetchone()[0] is None
+    row = conn.execute('SELECT state,result_json FROM ai_request').fetchone()
+    assert (row['state'], row['result_json']) == ('expired', None)
 
 
 def test_missing_backend_dependency_skips_without_account_block(world):

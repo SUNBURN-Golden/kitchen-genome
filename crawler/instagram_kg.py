@@ -35,6 +35,11 @@ class Stop(Exception):
     pass
 
 
+class TransientStop(Stop):
+    """A network/transport failure, not an access-control signal: stop this run, keep the day open."""
+    pass
+
+
 class Skip(Exception):
     pass
 
@@ -116,8 +121,18 @@ class Guard:
             return response
         except Skip:
             raise
+        except TransientStop:
+            raise
+        except Stop as exc:
+            code = str(exc)
+            self.block(code)
+            raise Stop(code) from None
         except Exception as exc:
-            code = str(exc) if isinstance(exc, Stop) else reason(exc)
+            code = reason(exc)
+            if code == 'transport_unknown':
+                # No access-control signal was seen. Stop this run without writing the block
+                # flag or pinning stopped_day: one flaky network moment must not cost the day.
+                raise TransientStop(code) from None
             self.block(code)
             raise Stop(code) from None
 
@@ -217,10 +232,13 @@ def model_call(client, task, instruction, data, validate, default):
     if client is None or client.status != 'enabled':
         return default
     try:
-        return client.call(task, instruction, data, validate)
-    except (DeepSeekError, CostCapExceeded):
-        if client:
-            client.stopped = client.stopped or 'cost_cap'
+        return client.call(task, instruction, data, validate, max_tokens=2048)
+    except CostCapExceeded:
+        client.stopped = client.stopped or 'cost_cap'
+        return default
+    except DeepSeekError:
+        # Real failures already set client.stopped; a purged cache entry or one bad task
+        # must not disable model calls for the rest of the run.
         return default
 
 
@@ -287,7 +305,9 @@ def purge(conn, out, now):
         if payload.get('collection_day', payload.get('collected_at', '')[:10]) <= cutoff:
             payload.pop('excerpt', None)
             conn.execute('UPDATE review_queue SET payload_json=? WHERE review_id=?', (json.dumps(payload), row['review_id']))
-    conn.execute("UPDATE ai_request SET result_json=NULL WHERE task='ig-extract-1' AND day<=?", (cutoff,))
+    # Mark purged cache entries explicitly. They stay in the audit/accounting trail, but a
+    # repeat caption must not be mistaken for an unknown prior attempt that disables the run.
+    conn.execute("UPDATE ai_request SET result_json=NULL, state='expired' WHERE task='ig-extract-1' AND day<=? AND state='done'", (cutoff,))
     for path in Path(out).glob('*.json'):
         if path.stem <= cutoff.replace('-', ''):
             path.unlink()
@@ -355,10 +375,13 @@ def collect(conn, handles, backend_factory=LoaderBackend, *, client=None, flag=F
         line, rc = f'IG_OK account={LOGIN} handles={checked} findings={len(findings)} follows={followed} ai={ai()} pending_only=1', 0
         if follow and not backend.follow_available:
             line += ' reason=follows_disabled_backend_unavailable'
+    except TransientStop as exc:
+        guard.finish()
+        line, rc = f'IG_FAILED account={LOGIN} reason={exc} ai={ai()}', 1
     except ImportError:
         if guard.requests:
-            guard.block('transport_unknown')
-            line, rc = f'IG_BLOCKED account={LOGIN} reason=transport_unknown ai={ai()}', 2
+            guard.finish()
+            line, rc = f'IG_FAILED account={LOGIN} reason=transport_unknown ai={ai()}', 1
         else:
             line, rc = f'IG_SKIPPED account={LOGIN} reason=dependency_unavailable ai={ai()}', 0
     except Skip as exc:
@@ -367,8 +390,12 @@ def collect(conn, handles, backend_factory=LoaderBackend, *, client=None, flag=F
         line, rc = f'IG_SKIPPED account={LOGIN} reason={exc} ai={ai()}', 0
     except Exception as exc:
         code = str(exc) if isinstance(exc, Stop) else reason(exc)
-        guard.block(code)
-        line, rc = f'IG_BLOCKED account={LOGIN} reason={code} flag=crawler/out/ig_kg_blocked.flag ai={ai()}', 2
+        if not isinstance(exc, Stop) and code == 'transport_unknown':
+            guard.finish()
+            line, rc = f'IG_FAILED account={LOGIN} reason={code} ai={ai()}', 1
+        else:
+            guard.block(code)
+            line, rc = f'IG_BLOCKED account={LOGIN} reason={code} flag=crawler/out/ig_kg_blocked.flag ai={ai()}', 2
     finally:
         # Rebuild from the private review inbox so reruns never overwrite earlier partial findings.
         findings = [json.loads(r[0]) for r in conn.execute("SELECT payload_json FROM review_queue WHERE subject_type='ig_kg'")]

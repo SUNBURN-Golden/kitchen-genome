@@ -171,3 +171,26 @@ existing CHECK constraints; `extraction` label CHECK matches the validator's lab
 3. On first live enablement: one manual operator run to confirm the API accepts the payload
    (F8), watching `ai=` / `ai_reason=` in the `COLLECT=` line.
 4. Optional: F2 admission point, F6/F7 hardening, F10 test hygiene.
+
+## Review-fix disposition (2026-11-05)
+
+All findings were reworked in the same branch. `F4` is not a code defect: it is the owner's
+explicit branch → PR → squash-merge-later decision, so it is documented rather than reverted.
+
+| Finding | Status | Change |
+|---|---|---|
+| F1 | **Fixed** | `Adapters.extract` now runs `sanitize_before_store` first, then sends that exact sanitized text to the model and validates every quote, span, field name, and date against it. Added `ai_stats` (`considered / skipped_filter / skipped_no_targets / skipped_not_needed / called / failed / findings`) to the `COLLECT=` line. |
+| F2 | **Fixed** | Candidate admission moved out of `discover.enqueue` / feed enumeration into actual dispatch (`PoliteNet.get` → `Limits.admit`). Unfetched candidates no longer spend the 500/day candidate budget. |
+| F3 | **Fixed** | Robots fetches now use a separate durable counter on `web_daily_fetch.robots` (migration `0007_aux_robots_counter.sql`, `Limits.dispatch(robots=True)`), with their own 200/day ceiling. They no longer consume the 200/day content-dispatch budget. |
+| F4 | **Accepted (owner decision)** | Daily pipeline remains PR-only. Runbook documents that the external consumer must accept `PR_CREATED|NO_CHANGE`; squash merge and deploy are later human steps. Not silently auto-merging. |
+| F5 | **Fixed** | Added `TransientStop`: transport/network failures stop the run with `IG_FAILED` but leave `ig_account_state.stopped_day` and the block flag unset, so a retry is possible the same day. Checkpoint/challenge/429/session failures still write the flag and pin the day. |
+| F6 | **Fixed** | Purge marks old `ai_request` rows `state='expired'`; the client raises `cached_result_purged` without setting `stopped`, and IG `model_call` no longer disables the client for an ordinary `DeepSeekError`. A purged cache entry no longer silences the model for the rest of the run. |
+| F7 | **Fixed** | Per-task output limits: 2048 tokens by default, 4096 for gap planning and web extraction; the budget reservation bound uses the same value. Tests pin the payload. |
+| F8 | **Fixed** | Removed the vendor-specific `thinking` parameter entirely, eliminating the 400-risk. No live call was made; first live enablement should still watch `ai=` / `ai_reason=`. |
+| F9 | **Fixed** | `failed_queries` SQL now selects only rows that did not finish cleanly (`NOT (state='done' AND last_error IS NULL)`), so successful queries are not fed back as failures. |
+| F10 | **Fixed** | `tests/test_collector_v2.py` patches `worker.VAULT_PATH`, `worker.SUMMARY_PATH`, and `worker.DB_PATH` into `tmp_path`; the full suite no longer mutates tracked `crawler/vault.json` / `crawler/inbox_summary.json`. |
+| F11 | **Fixed** | Pipeline uses `git add -A -- <explicit pathspecs>`, so newly created artifacts under those paths are staged; the test asserts the flag. |
+| F12 | **Fixed** | Hoisted `pending`, `DailyLimit`, and privacy-filter imports to module scope; removed loop/call-time `sys.path` mutation. |
+
+Verification after the fix: `python3 -m pytest tests/ -q` → **231 passed, 1 skipped**; no live
+Instagram or DeepSeek traffic, no secrets printed, and no tracked test fixtures modified.

@@ -74,10 +74,9 @@ def enqueue(conn, *, path, pool, url=None, query=None, target_id=None, gap_id=No
             cap = caps.get('max_queued_per_pool', {}).get(pool, 400)
             if conn.execute("SELECT COUNT(*) FROM crawl_job WHERE pool=? AND state='queued'", (pool,)).fetchone()[0] >= cap:
                 return False
-    if state == 'queued' and url:
-        from .limits import Limits
-        if not Limits(conn).admit(url):
-            return False
+    # Candidate-URL budget is spent when a request is actually dispatched (PoliteNet.get), not
+    # when a URL is enumerated or queued: a feed-heavy day must not exhaust the quota with links
+    # that are never fetched.
     jid = job_id(path, url or query or '')
     cur = conn.execute("""INSERT OR IGNORE INTO crawl_job(job_id,path,pool,url,query,target_id,gap_id,depth,parent_job_id,relevance,state,last_error,created_at,finished_at)
                           VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?)""",

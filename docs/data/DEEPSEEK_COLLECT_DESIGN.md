@@ -166,8 +166,9 @@ request bodies, response bodies, or raw exception text.
   a hardcoded model catalog, alias map, or fallback: if the configured model is
   rejected, return `model_unavailable`, retain pending work, and leave the
   override to the operator.
-- Request non-thinking, non-streamed JSON output
-  (`stream=false`, `response_format={"type":"json_object"}`, `temperature=0`).
+- Request non-streamed JSON output (`stream=false`,
+  `response_format={"type":"json_object"}`). Send no vendor-specific reasoning
+  parameter: the default `deepseek-chat` does not use one.
   If a configured model rejects JSON mode, fail closed as `model_unavailable`;
   never parse free text as a substitute.
 - Use the standard library. Build an opener with an empty `ProxyHandler` so
@@ -219,7 +220,8 @@ assigning the remaining budget to fetch work.
 calls use a durable reservation lifecycle:
 
 1. **Reserve.** In a `BEGIN IMMEDIATE` transaction, compute a conservative upper
-   bound from prompt characters plus message overhead plus `max_tokens`.
+   bound from the UTF-8 request payload plus framing allowance plus the task's
+   `max_tokens` (2,048 by default; 4,096 for gap planning and web extraction).
    Persist a reservation against both the run and the KST day before sending
    HTTP. If no safe bound is available, reject the request without sending it.
 2. **Settle.** On a valid response, settle once with actual usage and release
@@ -307,12 +309,13 @@ alternate access to blocked content.
 enforce them and `kg_collect` enforces only per-pool queue caps. Implement the
 shared counter in `daemon/kg_ai/daily_guard.py` and use it from both paths:
 
-- Count each **distinct admitted candidate URL** once against
-  `web_candidates` before it enters a work queue.
+- Count each **distinct dispatched candidate URL** once against
+  `web_candidates` when it is actually requested (not when a feed item is
+  enumerated or a job is queued, so unfetched links do not spend the quota).
 - Count each attempted content request against `web_fetches`: initial fetch,
   pagination, redirects, probes, search endpoints, and browser requests.
-  robots.txt lookups are tracked as auxiliary requests per host and bounded
-  separately.
+  robots.txt lookups use a separate auxiliary daily counter and never consume
+  content slots.
 - Refuse to admit or dispatch when the counter is exhausted; defer the work to
   the next KST day. Never reset counters on restart or resume.
 - Persist `domain_profile` pauses across processes. Re-check the pause and the

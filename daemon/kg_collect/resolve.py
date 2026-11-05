@@ -3,6 +3,7 @@ New people/places become `candidate` targets (discovered), promoted only with >=
 import json
 import re
 
+from kg_ai import pending
 from kg_daemon.db import utcnow
 
 from .review import reject_reason
@@ -65,7 +66,6 @@ def resolve_restaurant(conn, gaz: Gazetteer, name: str | None, allow_new: bool, 
 def resolve_extractions(conn, recs: list[dict], gaz: Gazetteer, doc_url: str, via: str) -> None:
     """Mutates recs: resolved_chef_target / resolved_restaurant_target / resolved_org_target / resolve_note."""
     for r in recs:
-        from kg_ai import pending
         if pending(r):
             continue
         notes = []

@@ -15,6 +15,7 @@ from . import EXTRACTOR_VERSION, apply as apply_mod, booking, discover, evaluate
 from .fetch import Doc, Fetcher, parse_feed
 from .htmlx import parse_html
 from . import net as net_mod
+from .limits import DailyLimit
 from .net import PoliteNet, host_of
 from .pipeline import check_extractor_health, fetch_regression_alert, official_hosts, process_doc, reconcile_host_yield_alerts
 from .rawstore import RawStore
@@ -215,7 +216,6 @@ def stage_fetch(ctx):
             continue
         allow_browser = True if bot.job_hint_dirs.get(job['url'], {}).get('browser') else None
         max_pages = caps['pagination_max_pages'] if job['path'] in ('directory',) else 1
-        from .limits import DailyLimit
         try:
             docs = fetcher.fetch(job['url'], job_id=jid, allow_browser=allow_browser, max_pages=max_pages)
         except DailyLimit:
@@ -465,6 +465,8 @@ def run_cycle(bot: Bot, resume: bool = True, cost_cap: float | None = None, trig
     d = runner.Daemon(bot.conn, HANDLERS, cfg, env={'bot': bot}, stages=STAGES, sleep=lambda s: None)
     rep = d.run(trigger=trigger, resume=resume)
     rep['ai'] = bot.ai.client.status if bot.ai else 'disabled'
+    if bot.ai:
+        rep['ai_stats'] = dict(bot.ai.stats)
     if bot.ai and not bot.ai.client.key:
         rep['ai_reason'] = 'missing_key'
     elif bot.ai and bot.ai.client.stopped:

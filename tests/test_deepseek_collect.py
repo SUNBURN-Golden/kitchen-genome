@@ -149,6 +149,69 @@ def test_kg_and_model_findings_cannot_corroborate_seed_changes(tmp_path, monkeyp
     assert summary['applied']==[] and summary['pending_count']==1
 
 
+def test_whitespace_pii_document_is_sent_and_offsets_use_filtered_text(world):
+    """Real pages have newlines/tabs; sanitizing must not be mistaken for a failed redaction skip."""
+    c = world
+    raw = '달빛정원의\n운영에\t대한  중요한 소식입니다. 문의 me@example.test'
+    clean = '달빛정원의 운영에 대한 중요한 소식입니다. 문의 [REDACTED_EMAIL]'
+    quote = '달빛정원의 운영에 대한 중요한 소식입니다.'
+    seen = []
+
+    def transport(payload, key):
+        data = json.loads(json.loads(payload)['messages'][1]['content'])
+        seen.append(data)
+        assert data['text'] == clean and 'me@example.test' not in data['text']
+        return response({'findings': [finding(quote)]})
+
+    a = Adapters(Client(Budget(meter(c)), key='dummy', transport=transport))
+    r = process_doc(c, doc(raw), Gazetteer(c), tier='official', model_adapter=a)
+    assert r['new'] == 1 and seen
+    assert a.stats['considered'] == 1 and a.stats['skipped_filter'] == 0
+    assert a.stats['called'] == 1 and a.stats['findings'] == 1
+    row = c.execute("SELECT quote,span_start,span_end FROM extraction WHERE extractor='deepseek:web'").fetchone()
+    assert (row['quote'], row['span_start'], row['span_end']) == (quote, 0, len(quote))
+
+
+def test_queue_enumeration_does_not_spend_candidate_budget(world):
+    c = world
+    assert discover.enqueue(c, path='feed', pool='discovery', url='https://never-fetched.test/a', relevance=.9, caps={})
+    assert c.execute('SELECT COUNT(*) FROM web_daily_url').fetchone()[0] == 0
+    assert Limits(c, day=lambda: '2026-11-05').admit('https://actually-fetched.test/a')
+    assert c.execute('SELECT COUNT(*) FROM web_daily_url').fetchone()[0] == 1
+
+
+def test_robots_dispatches_use_a_separate_daily_counter(world):
+    c = world
+    day = '2026-11-05'
+    limits = Limits(c, day=lambda: day, fetches=1, robots=1)
+    limits.dispatch(robots=True)
+    limits.dispatch()                      # a robots lookup does not consume the content slot
+    with pytest.raises(DailyLimit):
+        limits.dispatch(robots=True)
+    with pytest.raises(DailyLimit):
+        limits.dispatch()
+
+
+def test_planner_history_lists_only_non_yielding_queries(world):
+    c = world
+    gap = gaps.gap_jobs(c, limit=1)[0]
+    c.execute('UPDATE gap SET attempts=-1 WHERE gap_id=?', (gap['gap_id'],))
+    now = db.utcnow()
+    c.execute("INSERT INTO crawl_job(job_id,path,pool,query,gap_id,state,last_error,created_at) VALUES ('jg','reverse_gap','backfill','good query',?,'done',NULL,?)", (gap['gap_id'], now))
+    c.execute("INSERT INTO crawl_job(job_id,path,pool,query,gap_id,state,last_error,created_at) VALUES ('jb','reverse_gap','backfill','bad query',?,'failed','no_result',?)", (gap['gap_id'], now))
+    c.commit()
+    seen = {}
+
+    def transport(payload, key):
+        for row in json.loads(json.loads(payload)['messages'][1]['content']):
+            if row['gap_id'] == gap['gap_id']:
+                seen.update(row)
+        return response({'queries': []})
+
+    assert Adapters(Client(Budget(meter(c)), key='dummy', transport=transport)).plan(c) == []
+    assert seen['failed_queries'] == ['bad query']
+
+
 def test_candidate_admission_is_atomic_between_process_connections(tmp_path):
     import concurrent.futures
     path=str(tmp_path/'state.db'); c=db.connect(path); db.migrate(c); c.close()
