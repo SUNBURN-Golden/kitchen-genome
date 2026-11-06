@@ -55,6 +55,25 @@ class UxAdsLabelsTests(unittest.TestCase):
         self.assertIn(ROOT / "web/index.html", checked)
         self.assertIn(ROOT / "web/login/index.html", checked)
 
+    def test_english_navigation_keeps_existing_labels_and_routes(self):
+        pages = sorted((ROOT / "web/en").rglob("*.html"))
+        self.assertTrue(pages)
+        for path in pages:
+            with self.subTest(page=path.relative_to(ROOT)):
+                html = path.read_text(encoding="utf-8")
+                nav = re.search(r"<nav\b[^>]*>(.*?)</nav>", html, re.S)
+                self.assertIsNotNone(nav)
+                self.assertIn('<a href="/en/directory/">Directory</a>', nav[1])
+                self.assertIn('<a href="/#/">Lineage map</a>', nav[1])
+                self.assertNotIn("DNA", nav[1])
+
+    def test_public_pages_have_no_empty_ad_slots(self):
+        for path in sorted((ROOT / "web").rglob("*.html")):
+            with self.subTest(page=path.relative_to(ROOT)):
+                html = path.read_text(encoding="utf-8").lower()
+                for removed in ("sponsor", "광고 자리", "유료 소개"):
+                    self.assertNotIn(removed, html)
+
     def test_generator_source_uses_approved_labels(self):
         source = read("scripts/build_pages.py")
         for required in (
@@ -73,9 +92,11 @@ class UxAdsLabelsTests(unittest.TestCase):
         self.assertNotIn("인터랙티브 계보도 보기", source)
 
     def test_generated_pages_have_approved_ctas_and_metadata(self):
+        seed = json.loads(read("data/seed.json"))
         kitchens = sorted((ROOT / "web/k").glob("*/index.html"))
-        self.assertTrue(kitchens)
-        self.assertTrue(list((ROOT / "web/r").glob("*/index.html")))
+        self.assertEqual({path.parent.name for path in kitchens}, {k["id"] for k in seed["kitchens"]})
+        restaurants = sorted((ROOT / "web/r").glob("*/index.html"))
+        self.assertEqual({path.parent.name for path in restaurants}, {r["id"] for r in seed["restaurants"]})
         for path in kitchens:
             with self.subTest(page=path.relative_to(ROOT)):
                 html = path.read_text(encoding="utf-8")
