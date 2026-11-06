@@ -83,8 +83,6 @@ svg text{font-family:var(--font)}
 .rows .why{grid-column:2/4;font-size:var(--f-s);color:var(--ink-2)}
 .rows a{color:var(--ink);font-weight:600;text-decoration:none;min-height:var(--tap);display:inline-flex;align-items:center}
 .why a{color:var(--accent);font-weight:400;min-height:auto;display:inline;text-decoration:underline}
-.sponsor{border:1px dashed var(--line);border-radius:var(--r);padding:var(--s2) var(--s3);margin:var(--s4) 0;color:var(--ink-2);font-size:var(--f-s)}
-.sponsor b{display:block;font-size:12px;letter-spacing:.04em;color:var(--ink-2)}
 .note{background:var(--accent-soft);border-radius:var(--r);padding:var(--s2) var(--s3);margin:var(--s2) 0}
 input,select,textarea{width:100%;min-height:var(--tap);padding:var(--s1) var(--s2);margin:var(--s1) 0;border:1px solid var(--line);border-radius:var(--r);background:var(--bg);color:var(--ink);font:var(--f-m) var(--font)}
 .filters{display:grid;grid-template-columns:repeat(auto-fit,minmax(200px,1fr));gap:var(--s1)}
