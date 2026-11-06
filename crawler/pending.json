@@ -7,22 +7,16 @@
   "field": null,
   "value": null,
   "reliable_hosts": [
-   "enewstoday.co.kr",
-   "foodbank.co.kr",
-   "nanumy.co.kr",
-   "nbntv.co.kr",
-   "news.nate.com"
+   "dailian.co.kr",
+   "fnnews.com",
+   "sportsseoul.com"
   ],
   "sources": [
-   "https://www.enewstoday.co.kr/news/articleView.html?idxno=2476673",
-   "https://www.foodbank.co.kr/news/articleView.html?idxno=68603",
-   "https://www.nanumy.co.kr/news/articleView.html?idxno=4010357",
-   "https://www.nbntv.co.kr/news/articleView.html?idxno=4025627",
-   "https://news.nate.com/view/20261005n09125"
+   "https://www.dailian.co.kr/news/view/1697202/%ED%95%9C%EC%8B%9D-10%EC%BD%94%EC%8A%A4-%EC%B0%A8-%ED%95%9C-%EC%9E%94%EC%9D%98-%EC%97%AC%EC%9A%B4CJ%EC%A0%9C-2026",
+   "https://www.fnnews.com/news/202610020911031031",
+   "https://www.sportsseoul.com/news/read/1639420"
   ],
   "dates": [
-   "2026-10-02",
-   "2026-10-02",
    "2026-10-02",
    "2026-10-02",
    "2026-10-05"
@@ -38,34 +32,25 @@
   "field": null,
   "value": null,
   "reliable_hosts": [
-   "cjnews.cj.net",
-   "consumuch.com",
-   "enewstoday.co.kr",
-   "foodbank.co.kr",
-   "khan.co.kr",
-   "nanumy.co.kr",
-   "nbntv.co.kr",
-   "news.nate.com",
-   "ttlnews.com",
-   "womentimes.co.kr"
+   "dailian.co.kr",
+   "etnews.com",
+   "fnnews.com",
+   "fntimes.com",
+   "msn.com",
+   "news1.kr",
+   "sportsseoul.com"
   ],
   "sources": [
-   "https://cjnews.cj.net/cj%ec%a0%9c%ec%9d%bc%ec%a0%9c%eb%8b%b9-%ed%80%b4%ec%a7%84%ec%bc%80%ec%9d%b4-10%ec%9b%94-7%ec%9d%bc-10%eb%b2%88%ec%a7%b8-%ed%8c%9d%ec%97%85-%eb%b9%8c%eb%a1%b1belong-%ec%98%a4/",
-   "https://www.consumuch.com/news/articleView.html?idxno=79171",
-   "https://www.enewstoday.co.kr/news/articleView.html?idxno=2476673",
-   "https://www.foodbank.co.kr/news/articleView.html?idxno=68603",
-   "https://www.khan.co.kr/article/202610021459001",
-   "https://www.nanumy.co.kr/news/articleView.html?idxno=4010357",
-   "https://www.nbntv.co.kr/news/articleView.html?idxno=4025627",
-   "https://www.ttlnews.com/news/articleView.html?idxno=3148831",
-   "https://www.womentimes.co.kr/news/articleView.html?idxno=106760",
-   "https://news.nate.com/view/20261005n09125"
+   "https://www.msn.com/ko-kr/entertainment/games/cj%EC%A0%9C%EC%9D%BC%EC%A0%9C%EB%8B%B9-%ED%80%B4%EC%A7%84%EC%BC%80%EC%9D%B4-%EC%97%B4%EB%B2%88%EC%A7%B8-%ED%8C%9D%EC%97%85-%EC%8B%A0%EC%9A%A9%EC%9A%B0-%EC%85%B0%ED%94%84-%EB%B9%8C%EB%A1%B1-%EC%98%A4%ED%94%88/ar-AA2dnOd1",
+   "https://www.dailian.co.kr/news/view/1697202/%ED%95%9C%EC%8B%9D-10%EC%BD%94%EC%8A%A4-%EC%B0%A8-%ED%95%9C-%EC%9E%94%EC%9D%98-%EC%97%AC%EC%9A%B4CJ%EC%A0%9C-2026",
+   "https://www.etnews.com/20261002000016",
+   "https://www.fnnews.com/news/202610020850451747",
+   "https://www.fntimes.com/html/view.php?ud=202610021101401066923defd0cc_18",
+   "https://www.news1.kr/industry/distribution/6308432",
+   "https://www.sportsseoul.com/news/read/1639420"
   ],
   "dates": [
    "2026-10-01",
-   "2026-10-02",
-   "2026-10-02",
-   "2026-10-02",
    "2026-10-02",
    "2026-10-02",
    "2026-10-02",
@@ -75,25 +60,6 @@
   ],
   "note": null,
   "first_seen": "2026-10-24"
- },
- {
-  "id": "belong",
-  "name": "빌롱",
-  "kind": "rename",
-  "new_name": null,
-  "field": null,
-  "value": null,
-  "reliable_hosts": [
-   "womentimes.co.kr"
-  ],
-  "sources": [
-   "https://www.womentimes.co.kr/news/articleView.html?idxno=106760"
-  ],
-  "dates": [
-   "2026-10-02"
-  ],
-  "note": null,
-  "first_seen": "2026-11-01"
  },
  {
   "id": "finz",
@@ -168,7 +134,7 @@
    "https://odrenyc.com/homepage"
   ],
   "dates": [
-   "2026-11-05"
+   "2026-11-07"
   ],
   "note": null,
   "first_seen": "2026-10-24"
