@@ -221,6 +221,12 @@ def coref_short_forms(sent: str, known_spans, doc_chefs: list) -> list[dict]:
 APPOINT = re.compile(r'(?:총괄|헤드|수석|오너|수)?\s?(?:셰프|쉐프|주방장)(?:로|에)\s?[‘\'"“]?([가-힣A-Za-z][가-힣A-Za-z\s·.\-]{1,24}?)\s?(?:\([^)]{2,40}\))?[’\'"”]?(?:를|을)\s?(?:신임\s?|새\s?)?(?:선임|영입|임명|발탁|맞이|모셨|모시|영입했|내정)')
 # '한식당 ‘세옥(SEOK)’이 문을 열었다' / '레스토랑, ‘SEOK’이 ...': venue-type noun + quoted name
 QUOTED_VENUE = re.compile(r'(?:한식당|양식당|일식당|중식당|레스토랑|식당|다이닝|비스트로|오마카세|바|카페|베이커리|펍|\d\s?스타)[,\s]*[‘\'“"]([^’\'”"]{2,30})[’\'”"]')
+QUOTED_NAME = re.compile(r'[‘\'“"]([^’\'”"]{2,30})[’\'”"]')
+# A chef must also be identified in the sentence; hotel/product launches alone are not collaborations.
+PRODUCT_LAUNCH = re.compile(r'(?:(?:셰프|쉐프)\s?컬렉션|브랜드|제품|상품).{0,40}출시|(?:셰프|쉐프)(?:와|가).{0,40}출시')
+# Only the framed venue object opens, not an event held by a restaurant mentioned elsewhere.
+VENUE_OBJECT_OPEN = re.compile(r'(?:팝업|레스토랑|식당|다이닝)\s*(?:[‘\'“"]([^’\'”"]{2,30})[’\'”"]|([가-힣A-Za-z0-9·&\-]{2,24}?))[을를]\s?(?:연다|열고)')
+BARE_SUBJECT_VENUE = re.compile(r'(?:^|\s)(?:레스토랑|식당|다이닝)\s+([가-힣A-Za-z][가-힣A-Za-z0-9·&\-]{1,23}?)(?:이|가|은|는)\s')
 
 
 # a quoted name directly in front of the opening verb ('X 셰프 ‘R’ 오픈', '‘R’ 7일 오픈') names the venue even without a venue noun
@@ -359,6 +365,13 @@ def extract_text(text: str, *, gaz, host: str, published_at: str | None = None, 
             if 'coref' not in c and c['surface'] not in doc_chefs:
                 doc_chefs.append(c['surface'] if c in new_chefs else (c.get('name_ko') or c['surface']))
         hits = {k: p.search(sent) for k, p in PATTERNS.items()}
+        if chefs or new_chefs:
+            hits['collab'] = hits['collab'] or PRODUCT_LAUNCH.search(sent)
+        object_open = VENUE_OBJECT_OPEN.search(sent)
+        object_venue = clean_venue(object_open.group(1) or object_open.group(2)) if object_open else None
+        if object_venue and re.search(r'디너|만찬|행사|이벤트|갈라', object_venue):
+            object_open = object_venue = None
+        hits['opening'] = hits['opening'] or object_open
         ar = AT_RISK.search(sent) or COND_CLOSE.search(sent)
         if ar and hits['closure'] and ar.start() <= hits['closure'].start() <= ar.end():
             hits['closure'] = None                    # 'closure crisis' / 'closes if sales fail' is a risk or a rule, not a closure
@@ -423,9 +436,13 @@ def extract_text(text: str, *, gaz, host: str, published_at: str | None = None, 
                 continue
         # ── collab / co-working first: they veto employment readings ──
         is_collab = bool(hits['collab'])
-        if is_collab and (chef_names or rests):
+        scv = BARE_SUBJECT_VENUE.search(sent) if is_collab and not rests else None
+        if is_collab and (chef_names or rests or scv):
             qcv = None if rests else QUOTED_VENUE.search(sent)      # 'X 2스타 레스토랑 ‘R’의 Y 셰프와 협업': an unregistered quoted venue is still the partner restaurant
-            mk('collab', chef=chef_names[0] if chef_names else None, rest=(side[1]['surface'] if side else (rests[0]['surface'] if rests else (clean_venue(qcv.group(1)) if qcv else None))), anchor=hits['collab'].start(),
+            if not rests and not qcv:
+                qcv = next((m for m in QUOTED_NAME.finditer(sent) if any(m.end() <= c['start'] and SIDE_GAP.match(sent[m.end():c['start']]) for c in chefs + new_chefs)), None)
+            collab_rest = rests[0]['surface'] if rests else (clean_venue(qcv.group(1)) if qcv else (clean_venue(scv.group(1)) if scv else None))
+            mk('collab', chef=chef_names[0] if chef_names else None, rest=collab_rest, anchor=hits['collab'].start(),
                extra={'collab_kind': 'guest_event'})
         if hits['co_worker'] and not hits['mentor'] and (chef_names or rests):
             mk('collab', chef=chef_names[0] if chef_names else None, rest=rests[0]['surface'] if rests else None, anchor=hits['co_worker'].start(),
@@ -521,10 +538,12 @@ def extract_text(text: str, *, gaz, host: str, published_at: str | None = None, 
         # ── status events about a restaurant ──
         status_rests = [r for r in rests if r['surface'] != career_org]
         qv = (QUOTED_VENUE.search(sent) or QUOTED_OPEN.search(sent)) if hits['opening'] else None
-        new_venue = clean_venue(qv.group(1)) if qv else None
+        new_venue = object_venue or (clean_venue(qv.group(1)) if qv else None)
         if new_venue and any(norm_key(new_venue) == norm_key(r['surface']) for r in rests):
             new_venue = None
-        if new_venue:
+        if object_venue:
+            subject_rest = object_venue
+        elif new_venue:
             subject_rest = new_venue                  # a quoted, never-seen venue opened: it becomes a candidate target downstream
         elif status_rests:
             subject_rest = status_rests[0]['surface']

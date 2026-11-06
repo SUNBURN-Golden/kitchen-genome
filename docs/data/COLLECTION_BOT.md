@@ -110,3 +110,24 @@ collab 단서는 같은 헤드라인 절(—, …, | 로 구분) 안에서만 op
 
 v4 남은 오류(다음 개선 후보, 튜닝 금지 → 다음 held-out으로 검증): 'R 엄태철 셰프와 ○○ 출시' 같은 협업 키워드 없는 제품 협업(병기 employment_claim로 오분류),
 '팝업 레스토랑 ‘R’을 연다'('연다' 미지원).
+
+## Phase 6 (2026-11-06): rules/1.6 — 제품 협업·팝업 opening
+
+셰프가 명시된 문장의 셰프컬렉션·브랜드/제품 출시를 collab으로 추출하고 병기 employment_claim을 억제한다.
+미등록 인접 인용 식당명과 `식당 NAME가` 행사 주어도 collab에 연결한다. 팝업/레스토랑/식당/다이닝의 매장 목적어가
+`을/를 연다` 또는 `을/를 열고`이면 opening이며, 디너/만찬/행사/이벤트/갈라는 제외한다. 기존 갈라 디너 collab은 유지한다.
+
+합성 문장만으로 구현·검증한 뒤, 기존 라벨을 변경하지 않은 held-out v5(15문장, 정답 12항목)에 아래 명령을 실행했다.
+동일 DB/명령으로 변경 전·후를 실측했으며, 요청서의 대략적인 baseline 대신 실제 실행 수치를 기록한다. 개별 오류를 보고 추가 튜닝하지 않았다.
+
+```sh
+PYTHONPATH=daemon python3 -m kg_collect --db data_store/kg_service.db gold data_store/gold/gold_heldout_v5.json --registry
+```
+
+| 평가셋 (--registry) | rules/1.5 (before) | rules/1.6 (after) |
+|---|---|---|
+| held-out v5 | P 0.818 / R 0.750 / F1 0.783 | **P 0.857 / R 1.000 / F1 0.923** |
+| TP / FP / FN | 9 / 2 / 3 | 12 / 2 / 0 |
+| 인식상태 정확도 | 1.000 | 1.000 |
+
+검증: 요청된 rules/1.5·1.6 + collect_extraction 59개 통과; rules/1.3·1.4 포함 72개 통과.
