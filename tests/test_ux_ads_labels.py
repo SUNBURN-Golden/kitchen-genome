@@ -24,14 +24,16 @@ class UxAdsLabelsTests(unittest.TestCase):
             "const SHOW_VERDICTS=false;",
             "[빈 자리] 준태님 한 줄 평 (작성 전)",
             "준태님 한 줄 평 자리(작성 예정)",
-            '<a class="btn p" href="#lineage">계보 보기</a>',
+            '<a class="btn p" href="#lineage">셰프 DNA 계보도 보기</a>',
         ):
             self.assertIn(retained, app)
 
     def test_spa_headings(self):
         app = read("web/app.js")
         self.assertIn("<h1>식당 목록</h1>", app)
-        self.assertIn('<h2>셰프 계보도 <span class="mono">LINEAGE MAP</span></h2>', app)
+        self.assertIn('<h2>셰프 DNA 계보도 <span class="mono">LINEAGE MAP</span></h2>', app)
+        self.assertIn('<h2 style="margin-top:0">셰프 DNA 계보</h2>', app)
+        self.assertIn("'계보 출처'", app)
         self.assertNotIn("디렉토리", app)
 
     def test_korean_navigation_in_all_pages(self):
@@ -45,7 +47,7 @@ class UxAdsLabelsTests(unittest.TestCase):
                 nav = re.search(r"<nav\b[^>]*>(.*?)</nav>", html, re.S)
                 self.assertIsNotNone(nav)
                 home, directory = ("#/", "#/dir") if path == ROOT / "web/index.html" else ("/", "/directory/")
-                self.assertIn(f'<a href="{home}">계보도</a>', nav[1])
+                self.assertIn(f'<a href="{home}">셰프 DNA 계보도</a>', nav[1])
                 self.assertIn(f'<a href="{directory}">식당 목록</a>', nav[1])
                 self.assertNotIn(">계보</a>", nav[1])
                 self.assertNotIn("디렉토리", nav[1])
@@ -56,12 +58,13 @@ class UxAdsLabelsTests(unittest.TestCase):
     def test_generator_source_uses_approved_labels(self):
         source = read("scripts/build_pages.py")
         for required in (
-            '<a href="/">계보도</a>',
+            '<a href="/">셰프 DNA 계보도</a>',
             '<a href="/directory/">식당 목록</a>',
             "<h1>식당 목록</h1>",
             "전체 식당 목록",
             "식당 목록 (필터)",
-            "셰프 계보도 보기",
+            "셰프 DNA 계보도 보기",
+            "계보 출처",
             "키친 게놈 식당 목록",
             "셰프 계보 식당 목록 | 키친 게놈",
         ):
@@ -77,7 +80,7 @@ class UxAdsLabelsTests(unittest.TestCase):
             with self.subTest(page=path.relative_to(ROOT)):
                 html = path.read_text(encoding="utf-8")
                 kitchen_id = path.parent.name
-                self.assertIn(f'href="/#/k/{kitchen_id}">셰프 계보도 보기</a>', html)
+                self.assertIn(f'href="/#/k/{kitchen_id}">셰프 DNA 계보도 보기</a>', html)
                 self.assertIn('href="/directory/">전체 식당 목록</a>', html)
                 self.assertNotIn("인터랙티브 계보도 보기", html)
                 self.assertNotIn("디렉토리", html)

@@ -61,8 +61,8 @@ function verdict(){if(!SHOW_VERDICTS)return news();const L=alumni.filter(a=>a.ci
  <a class="muted" href="#/gap" style="display:inline-flex;min-height:var(--tap);align-items:center">과대평가 vs 저평가 전체 보기</a></section>${news()}`}
 function home(sel){const counts=kitchens.map(k=>[k,alumni.filter(a=>a.kitchen===k.id).length]).sort((a,b)=>b[1]-a[1]);sel=sel||counts[0][0].id;
  return `${verdict()}<h1>그 셰프, 어느 주방에서 왔을까요?</h1><p class="lead">서울 최고 주방을 거친 셰프들이 어디서 자기 가게를 열었는지 출처와 함께 정리했어요.</p>
- <div class="cta"><a class="btn p" href="#lineage">계보 보기</a></div>
- <section id="lineage"><h2>셰프 계보도 <span class="mono">LINEAGE MAP</span></h2>${legend}${vfilter()}
+ <div class="cta"><a class="btn p" href="#lineage">셰프 DNA 계보도 보기</a></div>
+ <section id="lineage"><h2>셰프 DNA 계보도 <span class="mono">LINEAGE MAP</span></h2>${legend}${vfilter()}
  <div class="chips tk" role="tablist">${counts.map(([k,n])=>`<button class="chip ${k.id===sel?'on':''}" role="tab" aria-selected="${k.id===sel}" onclick="location.hash='#/k/${k.id}'">${esc(k.name)} ${n}</button>`).join('')}</div>${tree(sel)}</section>
  <p class="muted">원조 주방 ${kitchens.length}곳 · 계보 식당 ${alumni.length}곳(출처 확인 ${alumni.filter(ver).length}, 미검증 ${alumni.filter(a=>!ver(a)).length}) · 비교용 레스토랑 ${restaurants.length-alumni.length}곳 · 확인일 2026-10-20</p>`}
 function dir(){const ks=[...new Set(alumni.map(a=>a.kitchen))];return `<h1>식당 목록</h1><div class="filters"><select id="fk" aria-label="원조 주방"><option value="">원조 주방 전체</option>${ks.map(k=>`<option value="${k}">${K[k].name}</option>`).join('')}</select>
@@ -80,7 +80,7 @@ function gapPage(){const L=restaurants.filter(r=>r.city==='서울').map(r=>({r,g
 function rpage(id){const r=restaurants.find(x=>x.id===id);if(!r)return '<h1>찾는 식당이 없어요</h1>';const g=gap(r);
  return `<h1>${esc(r.name)} ${badge(r)}</h1><p class="lead">${esc(r.chef)}${r.area?' · '+esc(r.area):''}${r.cuisine?' · '+esc(r.cuisine):''}${r.city?' · '+esc(r.city):''}</p>
  <div class="note muted">준태님 한 줄 평 자리(작성 예정)</div>
- ${r.type==='alumni'?`<section class="card"><h2 style="margin-top:0">계보</h2><p>${esc(K[r.kitchen].name)} ${esc(r.role)} → ${esc(r.name)} (${esc(r.opened)})</p><p class="muted">${link(r.lineage_src,'계보 출처')} · 확인일 ${r.checked}${r.note?' · '+esc(r.note):''}</p></section>`:''}
+ ${r.type==='alumni'?`<section class="card"><h2 style="margin-top:0">셰프 DNA 계보</h2><p>${esc(K[r.kitchen].name)} ${esc(r.role)} → ${esc(r.name)} (${esc(r.opened)})</p><p class="muted">${link(r.lineage_src,'계보 출처')} · 확인일 ${r.checked}${r.note?' · '+esc(r.note):''}</p></section>`:''}
  <section class="card"><h2 style="margin-top:0">평판</h2><dl><dt>미쉐린</dt><dd>${esc(r.michelin)} · ${link(r.michelin_src)}</dd><dt>블루리본</dt><dd>${esc(r.bluer)}</dd>
  <dt>Reddit</dt><dd>${(r.reddit_threads||[]).length?r.reddit_threads.map((u,i)=>link(u,'스레드 '+(i+1))).join(' · '):'없음'}</dd>
  <dt>언론</dt><dd>${(r.press||[]).length?r.press.map((u,i)=>link(u,'기사 '+(i+1))).join(' · '):'없음'}</dd>
