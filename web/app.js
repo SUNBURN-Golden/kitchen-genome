@@ -19,7 +19,6 @@ function gap(r){const e=expertN(r),b=buzzN(r);if(e==null||b==null)return {e,b,g:
 const vk=g=>g>TH?'under':g<-TH?'over':'even';const VT={under:'저평가',over:'과대평가',even:'균형'};
 const badge=r=>ver(r)?'<span class="tag v">출처 확인</span>':r.lineage_status==='unverified'?'<span class="tag">미검증</span>':r.lineage_status==='conflict'?'<span class="tag">출처 상충</span>':r.lineage_status==='related'?'<span class="tag">관련 이력</span>':'';
 const link=(u,t)=>u?`<a href="${u}" target="_blank" rel="noopener">${t||'출처'}</a>`:'<span>출처 없음</span>';
-const sponsor=t=>`<aside class="sponsor" aria-label="Sponsored"><b>Sponsored</b>${t||'광고 자리예요. 순위와 점수에는 영향을 주지 않아요.'}</aside>`;
 const news=()=>!SHOW_NEWSLETTER?"":`<section class="card" id="news"><h2 style="margin-top:0">뉴스레터</h2><p class="muted">새로 문 연 계보 식당과 셰프 이동 소식을 한 주에 한 번 보내 드려요. 지금은 준비 중이에요.</p><div class="news"><input type="email" placeholder="이메일 주소" aria-label="이메일 주소" disabled><button class="btn p" disabled>구독하기</button></div></section>`;
 const cut=(t,n)=>{t=(t??'').toString();return t.length>n?t.slice(0,n-1)+'…':t};
 const legend=`<div class="legend"><span><i></i>출처 확인</span><span><i class="d"></i>미검증</span></div>`;
@@ -62,19 +61,18 @@ function verdict(){if(!SHOW_VERDICTS)return news();const L=alumni.filter(a=>a.ci
  <a class="muted" href="#/gap" style="display:inline-flex;min-height:var(--tap);align-items:center">과대평가 vs 저평가 전체 보기</a></section>${news()}`}
 function home(sel){const counts=kitchens.map(k=>[k,alumni.filter(a=>a.kitchen===k.id).length]).sort((a,b)=>b[1]-a[1]);sel=sel||counts[0][0].id;
  return `${verdict()}<h1>그 셰프, 어느 주방에서 왔을까요?</h1><p class="lead">서울 최고 주방을 거친 셰프들이 어디서 자기 가게를 열었는지 출처와 함께 정리했어요.</p>
- <div class="cta"><a class="btn p" href="#lineage">계보 보기</a></div>
- <section id="lineage"><h2>계보도 <span class="mono">LINEAGE MAP</span></h2>${legend}${vfilter()}
+ <div class="cta"><a class="btn p" href="#lineage">셰프 DNA 계보도 보기</a></div>
+ <section id="lineage"><h2>셰프 DNA 계보도 <span class="mono">LINEAGE MAP</span></h2>${legend}${vfilter()}
  <div class="chips tk" role="tablist">${counts.map(([k,n])=>`<button class="chip ${k.id===sel?'on':''}" role="tab" aria-selected="${k.id===sel}" onclick="location.hash='#/k/${k.id}'">${esc(k.name)} ${n}</button>`).join('')}</div>${tree(sel)}</section>
- <p class="muted">원조 주방 ${kitchens.length}곳 · 계보 식당 ${alumni.length}곳(출처 확인 ${alumni.filter(ver).length}, 미검증 ${alumni.filter(a=>!ver(a)).length}) · 비교용 레스토랑 ${restaurants.length-alumni.length}곳 · 확인일 2026-10-20</p>
- ${sponsor()}`}
-function dir(){const ks=[...new Set(alumni.map(a=>a.kitchen))];return `<h1>디렉토리</h1><div class="filters"><select id="fk" aria-label="원조 주방"><option value="">원조 주방 전체</option>${ks.map(k=>`<option value="${k}">${K[k].name}</option>`).join('')}</select>
+ <p class="muted">원조 주방 ${kitchens.length}곳 · 계보 식당 ${alumni.length}곳(출처 확인 ${alumni.filter(ver).length}, 미검증 ${alumni.filter(a=>!ver(a)).length}) · 비교용 레스토랑 ${restaurants.length-alumni.length}곳 · 확인일 2026-10-20</p>`}
+function dir(){const ks=[...new Set(alumni.map(a=>a.kitchen))];return `<h1>식당 목록</h1><div class="filters"><select id="fk" aria-label="원조 주방"><option value="">원조 주방 전체</option>${ks.map(k=>`<option value="${k}">${K[k].name}</option>`).join('')}</select>
  <select id="fc" aria-label="도시"><option value="">도시 전체</option><option>서울</option><option>뉴욕</option></select><select id="ft" aria-label="유형"><option value="">유형 전체</option><option value="alumni">계보 식당</option><option value="established">비교용 레스토랑</option></select><select id="fv" aria-label="검증"><option value="">검증 전체</option><option value="verified">출처 확인</option><option value="unverified">미검증</option></select></div><div id="list"></div>`}
 function renderList(){const f={k:$('#fk').value,c:$('#fc').value,t:$('#ft').value,v:$('#fv').value};
  const L=restaurants.filter(r=>(!f.k||r.kitchen===f.k)&&(!f.c||r.city===f.c)&&(!f.t||r.type===f.t)&&(!f.v||r.lineage_status===f.v));
  $('#list').innerHTML=`<p class="muted">${L.length}곳</p><ul class="rows">`+L.map(r=>`<li><span class="n"></span><a href="#/r/${r.id}">${esc(r.name)}</a><span>${badge(r)}</span><span class="why">${esc(r.chef)}${r.kitchen?' · '+esc(K[r.kitchen].name)+' '+esc(r.role):''}${r.area?' · '+esc(r.area):''} · ${esc(r.michelin)}</span></li>`).join('')+'</ul>'}
 function risingPage(){const L=alumni.filter(a=>a.city==='서울').map(a=>({a,s:rising(a)})).sort((x,y)=>y.s.t-x.s.t);
  return `<p class="draft" role="note">비공개 초안이에요. 데이터를 모으는 중이라 순위가 바뀔 수 있어요.</p><h1>다음에 뜰 집</h1><p class="lead">출신 주방의 별 수와 직책, 오픈 연도, 아직 별이 없는지를 더한 초안 점수예요. 가격은 수집 전이라 0점이고, 미검증 계보는 절반만 반영해요. 서울만 넣었어요.</p>
- <ol class="rows">${L.map((x,i)=>`<li><span class="n">${i+1}</span><a href="#/r/${x.a.id}">${esc(x.a.name)}</a><span class="sc">${x.s.t}점</span><span class="why">출신 ${x.s.ped} + 최근성 ${x.s.rec} + 별 없음 ${x.s.noStar} + 가격 ${x.s.price}${ver(x.a)?'':' × 0.5(미검증)'} · ${esc(K[x.a.kitchen].name)} ${esc(x.a.role)} · ${link(x.a.lineage_src,'계보 출처')}</span></li>`).join('')}</ol>${SHOW_VERDICTS?'<p><a class="btn g" href="#/gap">과대평가 vs 저평가 보기</a></p>':''}${sponsor()}`}
+ <ol class="rows">${L.map((x,i)=>`<li><span class="n">${i+1}</span><a href="#/r/${x.a.id}">${esc(x.a.name)}</a><span class="sc">${x.s.t}점</span><span class="why">출신 ${x.s.ped} + 최근성 ${x.s.rec} + 별 없음 ${x.s.noStar} + 가격 ${x.s.price}${ver(x.a)?'':' × 0.5(미검증)'} · ${esc(K[x.a.kitchen].name)} ${esc(x.a.role)} · ${link(x.a.lineage_src,'계보 출처')}</span></li>`).join('')}</ol>${SHOW_VERDICTS?'<p><a class="btn g" href="#/gap">과대평가 vs 저평가 보기</a></p>':''}`}
 function gapPage(){const L=restaurants.filter(r=>r.city==='서울').map(r=>({r,g:gap(r)})).filter(x=>x.g.g!=null).sort((a,b)=>b.g.g-a.g.g);
  return `<p class="draft" role="note">비공개 초안이에요. 데이터를 모으는 중이라 순위가 바뀔 수 있어요.</p><h1>과대평가 vs 저평가</h1><p class="lead">미쉐린 등급 점수에서 화제성(Reddit 스레드와 기사 수, 직접 모은 표본)을 뺐어요. 플러스면 저평가(평가에 비해 덜 알려짐), 마이너스면 과대평가(평가보다 화제가 큼)로 봐요. 표본이 작아서 참고로만 봐 주세요.</p>
  <div class="note muted">준태님 코멘트 자리 · 이번 달 요약(작성 예정)</div>
@@ -82,15 +80,14 @@ function gapPage(){const L=restaurants.filter(r=>r.city==='서울').map(r=>({r,g
 function rpage(id){const r=restaurants.find(x=>x.id===id);if(!r)return '<h1>찾는 식당이 없어요</h1>';const g=gap(r);
  return `<h1>${esc(r.name)} ${badge(r)}</h1><p class="lead">${esc(r.chef)}${r.area?' · '+esc(r.area):''}${r.cuisine?' · '+esc(r.cuisine):''}${r.city?' · '+esc(r.city):''}</p>
  <div class="note muted">준태님 한 줄 평 자리(작성 예정)</div>
- ${r.type==='alumni'?`<section class="card"><h2 style="margin-top:0">계보</h2><p>${esc(K[r.kitchen].name)} ${esc(r.role)} → ${esc(r.name)} (${esc(r.opened)})</p><p class="muted">${link(r.lineage_src,'계보 출처')} · 확인일 ${r.checked}${r.note?' · '+esc(r.note):''}</p></section>`:''}
+ ${r.type==='alumni'?`<section class="card"><h2 style="margin-top:0">셰프 DNA 계보</h2><p>${esc(K[r.kitchen].name)} ${esc(r.role)} → ${esc(r.name)} (${esc(r.opened)})</p><p class="muted">${link(r.lineage_src,'계보 출처')} · 확인일 ${r.checked}${r.note?' · '+esc(r.note):''}</p></section>`:''}
  <section class="card"><h2 style="margin-top:0">평판</h2><dl><dt>미쉐린</dt><dd>${esc(r.michelin)} · ${link(r.michelin_src)}</dd><dt>블루리본</dt><dd>${esc(r.bluer)}</dd>
  <dt>Reddit</dt><dd>${(r.reddit_threads||[]).length?r.reddit_threads.map((u,i)=>link(u,'스레드 '+(i+1))).join(' · '):'없음'}</dd>
  <dt>언론</dt><dd>${(r.press||[]).length?r.press.map((u,i)=>link(u,'기사 '+(i+1))).join(' · '):'없음'}</dd>
  <dt>가격</dt><dd>${esc(r.price||'미수집')} ${r.price_src?link(r.price_src):''}</dd>${SHOW_VERDICTS?`<dt>차이 점수</dt><dd>${g.g==null?'판정 대기':(g.g>0?'+':'')+g.g} (초안)</dd>`:''}</dl></section>
- ${r.url?`<p><a class="btn g" href="${r.url}" target="_blank" rel="noopener">공식 채널</a></p>`:''}${sponsor()}`}
+ ${r.url?`<p><a class="btn g" href="${r.url}" target="_blank" rel="noopener">공식 채널</a></p>`:''}`}
 function submit(){return `<h1>제보하기</h1><p class="lead">어느 주방에서 어떤 일을 하셨는지 알려 주세요. 출처를 확인한 뒤 반영해요. 지금은 저장되지 않아요.</p><div class="card">
- <input placeholder="가게 이름" disabled><input placeholder="셰프 이름" disabled><input placeholder="거쳐 간 주방과 직책 (예: 밍글스 수셰프 2019–2022)" disabled><input placeholder="확인할 수 있는 링크" disabled><textarea rows="3" placeholder="남길 말" disabled></textarea><button class="btn p" disabled>보내기</button></div>
- <p class="muted">유료 소개는 순위·점수와 따로 운영하고 Sponsored로 표시해요.</p>`}
+ <input placeholder="가게 이름" disabled><input placeholder="셰프 이름" disabled><input placeholder="거쳐 간 주방과 직책 (예: 밍글스 수셰프 2019–2022)" disabled><input placeholder="확인할 수 있는 링크" disabled><textarea rows="3" placeholder="남길 말" disabled></textarea><button class="btn p" disabled>보내기</button></div>`}
 function route(){const h=location.hash||'#/';if(h==='#/gap'&&!SHOW_VERDICTS){location.replace('#/');return}if(h==='#lineage'||h==='#news')return;let m;
  document.querySelectorAll('nav a').forEach(a=>a.classList.toggle('on',a.getAttribute('href')===h||(h.startsWith('#/k/')&&a.getAttribute('href')==='#/')));
  const app=$('#app');if(m=h.match(/^#\/k\/(.+)/)){app.innerHTML=home(m[1]);bindTree()}else if(h==='#/dir'){app.innerHTML=dir();['#fk','#fc','#ft','#fv'].forEach(s=>$(s).onchange=renderList);renderList()}
