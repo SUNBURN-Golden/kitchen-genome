@@ -240,12 +240,22 @@ def same_clause(sent: str, a: int, b: int) -> bool:
     return not CLAUSE_BREAK.search(sent[lo:hi])
 
 
+# Type nouns / event nouns that look like venue slots but are never a restaurant name.
+VENUE_NAME_STOP = {
+    '레스토랑', '식당', '다이닝', '팝업', '호텔', '키친', '비스트로', '오마카세', '바', '카페', '베이커리', '펍',
+    '출범', '오픈', '개점', '개업', '론칭', '리뉴얼', '확장', '이전', '폐업', '휴업', '협업', '콜라보',
+    '메뉴', '코스', '디너', '런치', '만찬', '행사', '이벤트', '갈라', '후속', '신규', '기존',
+}
+
+
 def clean_venue(nm: str) -> str | None:
     nm = re.sub(r'\s*\([^)]*\)\s*$', '', nm).strip()
     if not 2 <= len(nm) <= 24 or nm.isdigit():
         return None
-    hangul = re.sub(r'\([^)]*\)', '', nm)
-    return hangul.strip() or None
+    hangul = re.sub(r'\([^)]*\)', '', nm).strip()
+    if not hangul or hangul in VENUE_NAME_STOP:
+        return None
+    return hangul
 
 
 def norm_key(x: str) -> str:
@@ -369,6 +379,8 @@ def extract_text(text: str, *, gaz, host: str, published_at: str | None = None, 
             hits['collab'] = hits['collab'] or PRODUCT_LAUNCH.search(sent)
         object_open = VENUE_OBJECT_OPEN.search(sent)
         object_venue = clean_venue(object_open.group(1) or object_open.group(2)) if object_open else None
+        if object_open and not object_venue:
+            object_open = None                  # bare type/event noun ('팝업 레스토랑을 연다', '디너를 연다') is not a venue opening
         if object_venue and re.search(r'디너|만찬|행사|이벤트|갈라', object_venue):
             object_open = object_venue = None
         hits['opening'] = hits['opening'] or object_open
@@ -437,13 +449,15 @@ def extract_text(text: str, *, gaz, host: str, published_at: str | None = None, 
         # ── collab / co-working first: they veto employment readings ──
         is_collab = bool(hits['collab'])
         scv = BARE_SUBJECT_VENUE.search(sent) if is_collab and not rests else None
-        if is_collab and (chef_names or rests or scv):
+        if is_collab:
             qcv = None if rests else QUOTED_VENUE.search(sent)      # 'X 2스타 레스토랑 ‘R’의 Y 셰프와 협업': an unregistered quoted venue is still the partner restaurant
             if not rests and not qcv:
                 qcv = next((m for m in QUOTED_NAME.finditer(sent) if any(m.end() <= c['start'] and SIDE_GAP.match(sent[m.end():c['start']]) for c in chefs + new_chefs)), None)
             collab_rest = rests[0]['surface'] if rests else (clean_venue(qcv.group(1)) if qcv else (clean_venue(scv.group(1)) if scv else None))
-            mk('collab', chef=chef_names[0] if chef_names else None, rest=collab_rest, anchor=hits['collab'].start(),
-               extra={'collab_kind': 'guest_event'})
+            # Need a chef and/or a real venue name; '레스토랑 출범이' / bare type nouns are not partners.
+            if chef_names or collab_rest:
+                mk('collab', chef=chef_names[0] if chef_names else None, rest=collab_rest, anchor=hits['collab'].start(),
+                   extra={'collab_kind': 'guest_event'})
         if hits['co_worker'] and not hits['mentor'] and (chef_names or rests):
             mk('collab', chef=chef_names[0] if chef_names else None, rest=rests[0]['surface'] if rests else None, anchor=hits['co_worker'].start(),
                extra={'collab_kind': 'co_worker'}, ambiguity=None)
