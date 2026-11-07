@@ -126,15 +126,23 @@ sources:
     tier: social_lead
     role: required_candidate_discovery
     collect_permission: allowed_with_limits
+    access_mode: "saved session of kitchen.genome only; never agamajung; no fresh login"
     collectible_fields: [caption_excerpt_40, post_url, post_date]
     refresh_cadence: "06:45-08:00 KST; <=25 handles/day, >=8s every request, <=6 captions, <=10 follows"
     retention_days: 30
     quote_max_chars: 40
     pause_flag: crawler/out/ig_kg_blocked.flag
-    pause_on: [checkpoint, challenge, http_429, login_failed, invalid_session]
+    also_pause_flags: ["crawler/out/ig_blocked.flag"]
+    pause_on: [checkpoint, challenge, http_429, login_failed, invalid_session, missing_session]
     block_evasion: forbidden
     trust_ceiling: unverified
-    unsupported_scope: ["private/personal accounts, media, stories, DMs, comments, full captions", "publication: all findings pending-only"]
+    unsupported_scope:
+      - "any account other than kitchen.genome, including agamajung — NOT implemented"
+      - "fresh login, challenge bypass, proxy, or account switching — NOT implemented"
+      - "any request while crawler/out/ig_blocked.flag or crawler/out/ig_kg_blocked.flag exists"
+      - "requests outside 06:45-08:00 Asia/Seoul, or without a saved session file"
+      - "private/personal accounts, media, stories, DMs, comments, full captions"
+      - "publication: all findings pending-only"
     adapter: instagram_kg_review_only
 
   michelin_manual:

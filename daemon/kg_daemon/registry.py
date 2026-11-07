@@ -70,19 +70,30 @@ def validate_registry(reg: dict) -> None:
         raise RegistryError('; '.join(errs))
 
 
+def _pause_flags(source: dict) -> list:
+    flags = []
+    if source.get('pause_flag'):
+        flags.append(source['pause_flag'])
+    for extra in source.get('also_pause_flags') or []:
+        if extra not in flags:
+            flags.append(extra)
+    return flags
+
+
 def pause_state(source_id: str, source: dict, root: str = ROOT) -> dict | None:
-    """Return {'reason':..., 'since':...} if the source is paused by a human-clearable flag, else None."""
-    flag = source.get('pause_flag')
-    if not flag:
-        return None
-    p = flag if os.path.isabs(flag) else os.path.join(root, flag)
-    if not os.path.exists(p):
-        return None
-    try:
-        data = json.load(open(p, encoding='utf-8'))
-    except Exception:
-        data = {}
-    return {'reason': data.get('reason', 'flag present'), 'since': data.get('at'), 'flag': flag}
+    """Return {'reason':..., 'since':...} if any human-clearable flag for this source exists."""
+    for flag in _pause_flags(source):
+        p = flag if os.path.isabs(flag) else os.path.join(root, flag)
+        if not os.path.exists(p):
+            continue
+        try:
+            data = json.load(open(p, encoding='utf-8'))
+        except Exception:
+            data = {}
+        if not isinstance(data, dict):
+            data = {}
+        return {'reason': data.get('reason', 'flag present'), 'since': data.get('at'), 'flag': flag}
+    return None
 
 
 def sync_registry(conn, reg: dict, now: str | None = None) -> int:

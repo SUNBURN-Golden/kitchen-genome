@@ -28,35 +28,69 @@ manager. Never pass their values as CLI arguments or enable shell tracing:
 - `DEEPSEEK_API_KEY`: shared DeepSeek client; absent key disables AI explicitly.
 - `KITCHENGENOME_IG_PASSWORD`: used only for the dedicated initial login.
 - Session: `/home/box/.secrets/kg_ig_kitchen_genome.session`, mode 0600.
-- Login: exactly `kitchen.genome`. The authenticated saved session is checked
-  against that username. A different/invalid identity stops, without relogin.
+  A missing file skips before any network call. The collector does not
+  password-login and does not create a session.
+- Login identity: exactly `kitchen.genome`. The saved session is checked
+  against that username. A different or invalid identity stops, without relogin.
 
 `DEEPSEEK_MODEL` defaults to the owner-ordered `deepseek-chat`. An operator can set
-`DEEPSEEK_MODEL=deepseek-flash` explicitly. As of 2026-11-05 the
-[official quick start](https://api-docs.deepseek.com/) lists Flash and V4 Pro;
-there is no silent substitution if the default is unavailable. Requests use JSON
-output (no vendor reasoning parameter), a 2,048-token default output limit
-(4,096 for gap planning and web extraction) and a 30-second timeout. The client
-rejects redirects and disables proxy inheritance. It has no retries.
-The API's [usage contract](https://api-docs.deepseek.com/api/create-chat-completion/)
-supplies input/output/total counts; cached input is recorded without counting it twice.
+`DEEPSEEK_MODEL=deepseek-flash` or `deepseek-v4-pro` explicitly. There is no silent
+substitution if the default is unavailable. The current
+[chat completions contract](https://api-docs.deepseek.com/api/create-chat-completion/)
+enables thinking when `thinking` is omitted, and
+[JSON mode](https://api-docs.deepseek.com/guides/json_mode) replaces an unrecognized
+completion with spaces while `finish_reason` stays `stop` and token usage is still
+billed. A cycle can therefore report `succeeded` while `ai=paused` and
+`ai_reason=json_blank` (previously collapsed into `invalid_task_json`). Requests
+send `thinking.type=disabled` and `temperature=0`, use JSON output, a 2,048-token
+default output limit (4,096 for gap planning and web extraction), and a 30-second
+timeout. The client rejects redirects and disables proxy inheritance. Blank content
+and one schema rejection are retried once; truncation, auth, rate limit, and
+transport failures are not. A second blank or invalid task pauses that run.
+Schema version is `json-2`.
+The API's usage contract supplies input/output/total counts; cached input is recorded
+without counting it twice. `reasoning_content` is never accepted as the task result.
 
 ## Run bounded collection
 
 The following commands make live calls **only when an operator runs them**.
 They were not run during BUILD or in CI:
 
+Stable production entrypoint, after this change is on main:
+
 ```bash
-PYTHONPATH=daemon python3 -m kg_collect --db data_store/kg_service.db cycle --units 60 --cost-cap 78 --no-browser --deepseek
-PYTHONPATH=daemon python3 crawler/instagram_kg.py --db data_store/kg_service.db --cost-cap 20 --deepseek
-PYTHONPATH=daemon python3 -m kg_daemon --db data_store/kg_service.db run --cost-cap 20 --deepseek
+bash scripts/daily_pipeline.sh /tmp/kg
+```
+
+That script checks out and fast-forwards main, so it must not be pointed at an
+unmerged branch. Before merge, or for a bounded web-only check that does not
+touch git, publish, or the legacy Instagram account:
+
+```bash
+KG_IG=0 KG_COLLECT_UNITS=2 KG_COLLECT_COST_CAP=23 \
+  bash scripts/collect_daily.sh /workspace/kitchen-genome
+```
+
+`collect_daily.sh` is also what the daily script calls for collection. It always
+passes `--no-browser`. `KG_DEEPSEEK` defaults to `1`. Web collection runs when
+Instagram is skipped. Direct equivalents:
+
+```bash
+PYTHONPATH=daemon python3 -m kg_collect --db "$KG_SERVICE_DB" cycle --units 60 --cost-cap 78 --no-browser --deepseek
+PYTHONPATH=daemon python3 crawler/instagram_kg.py --db "$KG_SERVICE_DB" --cost-cap 20 --deepseek
+PYTHONPATH=daemon python3 -m kg_daemon --db "$KG_SERVICE_DB" run --cost-cap 20 --deepseek
 ```
 
 The collector refreshes deterministic gaps, adds validated query suggestions,
 then uses the existing scheduler and fetcher. Model extraction runs only for
 ambiguous rule output or relevant documents with open gaps and no usable rules.
-It verifies exact quote offsets and never substitutes fetch time for event time.
-Missing/invalid model output leaves deterministic collection available.
+A quote must be an exact substring of the sanitized text. A unique quote may have
+its offsets repaired; an ambiguous or missing quote is rejected. Dates and names
+must still occur in that text. Omitted nulls and extra keys are ignored, and none
+of those keys can set publication fields. Missing or invalid model output leaves
+deterministic collection available and does not publish facts. `COLLECT=succeeded`
+is not AI success: read `ai=`, `reason=`, and
+`ai_docs=considered/filtered/called/failed/findings`.
 
 Default pipeline controls:
 
@@ -71,17 +105,19 @@ Default pipeline controls:
 | `KG_IG_COST_CAP` | `20` | IG run internal cost cap |
 | `KG_DAEMON_COST_CAP` | `20` | Local-document daemon cap |
 | `KG_IG_FOLLOW` | `0` | Optional follow gate; read backend cannot follow |
-| `KG_SERVICE_DB` | repo `data_store/kg_service.db` | Shared private service state |
+| `KG_SERVICE_DB` | `$KG_HOME/data_store/kg_service.db` (`KG_HOME` defaults to `/workspace/kitchen-genome`) | Shared private service state |
 
 Cost units are internal, not dollar prices: 0.5 units per 1,000 total model tokens.
 The client reserves UTF-8 request bytes plus framing allowance plus maximum output
 against both run and day before HTTP. Successful responses settle to actual usage.
 Malformed task JSON with valid usage is charged, without partial results. Unknown
 usage, timeout and process loss keep the reservation. New runs cannot erase it.
-A deterministic request key reuses validated results; failed/unknown attempts do
-not replay. Investigate unknown attempts manually; do not delete accounting rows
-or alter task versions to retry them. Model/prompt/schema versions belong in audit
-metadata and must change when the extraction contract changes.
+A deterministic request key reuses a validated result, including one produced by
+the single allowed retry. A previously rejected task is not replayed and does not
+pause later documents. Unknown attempts still pause the run. Investigate those
+manually; do not delete accounting rows or alter task versions to retry them.
+Model/prompt/schema versions belong in audit metadata and must change when the
+extraction contract changes.
 
 ## Limits and stop behavior
 
@@ -120,7 +156,11 @@ during a request leaves a same-day stop marker. A blocked flag survives midnight
 After human account inspection, clearing the flag still does not allow a same-day
 retry for an access-control stop.
 Neither this collector nor the pipeline falls back to `agamajung`, a proxy or a
-new account. The legacy session and `ig_blocked.flag` remain untouched.
+new account. `crawler/out/ig_blocked.flag` skips Kitchen Genome Instagram before
+any request, same as `crawler/out/ig_kg_blocked.flag`. Neither flag is deleted.
+The legacy session file is not read. Outside 06:45–08:00 Asia/Seoul, or without
+the saved `kitchen.genome` session, Instagram skips before network. Web collection
+still runs.
 
 Following is optional and disabled by default. DeepSeek's validated recommendation
 cannot enable it. The bundled read backend reports
@@ -166,8 +206,8 @@ stops. It never force-pushes, merges or deploys. Private review growth alone doe
 not create a PR. Squash merge is a later human action.
 
 Each IG invocation prints one `IG_OK`, `IG_SKIPPED`, `IG_BLOCKED` or `IG_FAILED`
-line with `account=kitchen.genome`. The shell prints `COLLECT=...` (including an
-`ai_docs=considered/filtered/called/findings` funnel) and a daemon exit summary,
+line with `account=kitchen.genome`. The shell prints `COLLECT=...` (including
+`ai_docs=considered/filtered/called/failed/findings`) and a daemon exit summary,
 then one final `RESULT=NO_CHANGE|PR_CREATED|FAILED|SKIPPED`. Independent collection
 failure remains visible without blocking deterministic build work. Timeout handling
 marks the IG account stopped before another run can dispatch.
@@ -175,7 +215,11 @@ marks the IG account stopped before another run can dispatch.
 The pipeline is intentionally PR-only: it never merges or deploys. Anything that
 consumes these summary lines (cron wrapper, notification) must accept the
 `PR_CREATED|NO_CHANGE` vocabulary; squash merge and deploy are separate human
-actions performed later.
+actions performed later. The cron command stays `bash scripts/daily_pipeline.sh`.
+After this lands on main it no longer runs the legacy Instagram entrypoint.
+Build guards (`SHOW_VERDICTS`, `SHOW_NEWSLETTER`, no `noindex`) and
+`scripts/build_deploy.py` still run. No second cron is required. Do not point
+the cron job at a feature branch: the script checks out main.
 
 Disable with `KG_DEEPSEEK=0` and `KG_IG=0`; preserve inboxes, daily counters,
 reservations, sessions and block flags. Do not enable the legacy account as a

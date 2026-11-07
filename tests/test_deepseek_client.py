@@ -45,7 +45,8 @@ def test_measured_usage_cache_and_zero_cap(conn):
     client.call('test', 'JSON', {'source': 'text'}, lambda o: o)
     assert len(calls) == 1 and calls[0][0]['model'] == 'deepseek-chat'
     assert calls[0][0]['max_tokens'] == 2048 and calls[0][1] == 'synthetic-key'
-    assert 'thinking' not in calls[0][0]
+    assert calls[0][0]['thinking'] == {'type': 'disabled'} and calls[0][0]['temperature'] == 0
+    assert 'reasoning_effort' not in calls[0][0] and calls[0][0]['response_format'] == {'type': 'json_object'}
     c2 = Client(Budget(meter(conn, 0)), key='dummy', transport=lambda *a: pytest.fail('paid request at zero cap'))
     with pytest.raises(CostCapExceeded): c2.call('zero', 'JSON', {}, lambda o: o)
 
@@ -81,9 +82,11 @@ def test_invalid_response_keeps_reservation(conn, raw):
 
 
 def test_invalid_schema_and_truncation_charge_actual_without_partial_cache(conn):
-    client = Client(Budget(meter(conn)), key='dummy', transport=lambda *a: response(finish='length'))
-    with pytest.raises(DeepSeekError, match='invalid_task_json'): client.call('task', 'JSON', {}, lambda o: o)
+    calls = []
+    client = Client(Budget(meter(conn)), key='dummy', transport=lambda *a: calls.append(1) or response(finish='length'))
+    with pytest.raises(DeepSeekError, match='truncated_json'): client.call('task', 'JSON', {}, lambda o: o)
     row = conn.execute('SELECT * FROM ai_request').fetchone()
+    assert len(calls) == 1
     assert row['state'] == 'failed' and row['result_json'] is None and row['units'] == pytest.approx(.06)
 
 
@@ -159,3 +162,74 @@ def test_default_http_endpoint_auth_timeout_and_sanitized_exception(monkeypatch)
     monkeypatch.setattr(urllib.request,'build_opener',lambda *handlers:Lost())
     with pytest.raises(DeepSeekError,match='^transport_unknown$'):
         http_transport(b'{}','fixture-token')
+
+
+SMOKE_USAGE = {'prompt_tokens': 8323, 'completion_tokens': 635, 'total_tokens': 8958, 'prompt_cache_hit_tokens': 0}
+
+
+def envelope(content, usage=None, finish='stop', reasoning='{"ok": true} do not treat this as the task'):
+    return 200, json.dumps({'usage': usage or {'prompt_tokens': 10, 'completion_tokens': 2, 'total_tokens': 12, 'prompt_cache_hit_tokens': 0},
+                            'choices': [{'finish_reason': finish, 'message': {'role': 'assistant', 'content': content, 'reasoning_content': reasoning}}]}).encode()
+
+
+def test_json_mode_blank_retries_once_then_pauses_without_using_reasoning(conn):
+    """The observed smoke: HTTP 200, real usage, finish_reason stop, content replaced by spaces."""
+    calls = []
+    def transport(payload, key):
+        body = json.loads(payload)
+        calls.append(body)
+        assert body['thinking'] == {'type': 'disabled'}
+        assert 'do not treat this as the task' not in payload.decode()
+        return envelope('   ', SMOKE_USAGE)
+    client = Client(Budget(meter(conn)), key='dummy', transport=transport)
+    # Prompt-sized input keeps the 8,958-token smoke usage inside the byte reservation.
+    with pytest.raises(DeepSeekError, match='^json_blank$'):
+        client.call('web-extract-1', 'JSON', {'text': 'source ' * 800}, lambda o: o)
+    assert len(calls) == 2 and client.stopped == 'json_blank' and client.status == 'paused'
+    assert 'json_blank' in calls[1]['messages'][0]['content']
+    rows = conn.execute('SELECT state,error,result_json,prompt_tokens,completion_tokens FROM ai_request ORDER BY rowid').fetchall()
+    assert len(rows) == 2
+    assert all(r['state'] == 'failed' and r['error'] == 'json_blank' and r['result_json'] is None for r in rows)
+    assert (rows[0]['prompt_tokens'], rows[0]['completion_tokens']) == (8323, 635)
+    later = Client(Budget(meter(conn)), key='dummy', transport=lambda *a: pytest.fail('rejected task replayed'))
+    with pytest.raises(DeepSeekError, match='^task_previously_rejected$'):
+        later.call('web-extract-1', 'JSON', {'text': 'source ' * 800}, lambda o: o)
+    assert later.stopped is None and later.status == 'enabled'
+
+
+def test_blank_then_valid_json_is_cached_and_reasoning_is_ignored(conn):
+    calls = []
+    def transport(payload, key):
+        calls.append(json.loads(payload))
+        if len(calls) == 1:
+            return envelope(' \n\t ')
+        return envelope('```json\n{"ok": true}\n```', reasoning='not the answer')
+    client = Client(Budget(meter(conn)), key='dummy', transport=transport)
+    assert client.call('task', 'JSON', {'n': 1}, lambda o: o) == {'ok': True}
+    assert client.stopped is None and len(calls) == 2
+    assert 'not the answer' not in json.dumps(calls[1])
+    again = Client(Budget(meter(conn)), key='dummy', transport=lambda *a: pytest.fail('validated retry replayed'))
+    assert again.call('task', 'JSON', {'n': 1}, lambda o: o) == {'ok': True}
+    assert again.stopped is None
+
+
+def test_schema_rejection_retries_once_and_double_encoded_json_is_accepted(conn):
+    calls = []
+    def transport(payload, key):
+        calls.append(1)
+        if len(calls) == 1:
+            return response({'nope': True})
+        return envelope(json.dumps(json.dumps({'ok': True})))
+    def validate(obj):
+        if obj.get('ok') is not True:
+            raise ValueError('schema')
+        return obj
+    client = Client(Budget(meter(conn)), key='dummy', transport=transport)
+    assert client.call('task', 'JSON', {'n': 2}, validate) == {'ok': True}
+    assert len(calls) == 2 and client.stopped is None
+    bad = Client(Budget(meter(conn)), key='dummy', transport=lambda *a: response({'nope': True}))
+    with pytest.raises(DeepSeekError, match='^invalid_task_json$'):
+        bad.call('task', 'JSON', {'n': 3}, validate)
+    assert bad.stopped == 'invalid_task_json'
+    # One rejected sample from the recovered call, then both samples of the unrecovered call.
+    assert conn.execute("SELECT COUNT(*) FROM ai_request WHERE state='failed' AND error='invalid_task_json'").fetchone()[0] == 3

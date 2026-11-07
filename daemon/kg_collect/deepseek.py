@@ -3,6 +3,7 @@ import json
 import os
 import re
 import sys
+import unicodedata
 
 from kg_ai.budget import Budget
 from kg_ai.deepseek import Client, DeepSeekError
@@ -17,11 +18,75 @@ from . import gaps
 
 LABELS = {'career', 'employment_claim', 'opening', 'closure', 'relocation', 'rename', 'menu', 'collab', 'mentorship_claim'}
 FIELDS = {'label', 'chef_text', 'restaurant_text', 'org_text', 'role_text', 'date_text', 'quote', 'span_start', 'span_end', 'ambiguity'}
-EXTRACT_INSTRUCTION = ('Extract explicitly supported culinary facts; return {"findings":[]} if unsupported. Each finding has exactly: '
+NULLABLE = {'chef_text', 'restaurant_text', 'org_text', 'role_text', 'date_text', 'ambiguity'}
+EXTRACT_INSTRUCTION = ('Extract explicitly supported culinary facts; return {"findings":[]} if unsupported. Each finding uses: '
                        'label (career|employment_claim|opening|closure|relocation|rename|menu|collab|mentorship_claim), '
                        'chef_text, restaurant_text, org_text, role_text, date_text (nullable ISO date verbatim in text), '
-                       'quote (exact source substring <=200 characters), span_start, span_end (Unicode offsets), ambiguity (nullable). '
-                       'Unknown fields/dates stay null. Shared employment never implies mentorship. No inferred employer or fetch date.')
+                       'quote (exact source substring <=200 characters), span_start, span_end (Unicode offsets into the supplied text), ambiguity (nullable). '
+                       'Unknown fields/dates stay null and may be omitted. Extra keys are ignored. '
+                       'Shared employment never implies mentorship. No inferred employer or fetch date.')
+
+
+def _as_int(value):
+    if type(value) is bool or value is None:
+        raise ValueError()
+    if type(value) is int:
+        return value
+    if type(value) is float and value.is_integer():
+        return int(value)
+    if isinstance(value, str) and re.fullmatch(r'-?\d+', value.strip()):
+        return int(value.strip())
+    raise ValueError()
+
+
+def normalize_finding(raw, text):
+    """Keep a finding only when its quote is an exact source substring.
+
+    Omitted nulls, extra keys, and a wrong offset are structural. A quote that
+    is not in the source, an ambiguous quote with no exact offset, or a field
+    that is not in the text is rejected. The model cannot set persistence fields.
+    """
+    if not isinstance(raw, dict) or raw.get('label') not in LABELS:
+        raise ValueError()
+    quote = raw.get('quote')
+    if not isinstance(quote, str) or not quote or len(quote) > 200 or quote not in text:
+        raise ValueError()
+    starts = []
+    pos = 0
+    while len(starts) <= 8:
+        found = text.find(quote, pos)
+        if found < 0:
+            break
+        starts.append(found)
+        pos = found + 1
+    try:
+        start, end = _as_int(raw.get('span_start')), _as_int(raw.get('span_end'))
+    except ValueError:
+        start = end = None
+    if start is not None and 0 <= start < end <= len(text) and text[start:end] == quote:
+        span = (start, end)
+    elif len(starts) == 1:
+        span = (starts[0], starts[0] + len(quote))
+    else:
+        raise ValueError()
+    out = {key: None for key in NULLABLE}
+    out.update({'label': raw['label'], 'quote': quote, 'span_start': span[0], 'span_end': span[1]})
+    for key in NULLABLE:
+        if key not in raw or raw[key] is None:
+            continue
+        if not isinstance(raw[key], str) or len(raw[key]) > 120:
+            raise ValueError()
+        out[key] = raw[key]
+    for key in ('chef_text', 'restaurant_text', 'org_text', 'role_text'):
+        if out[key] is not None and out[key].casefold() not in text.casefold():
+            raise ValueError()
+    if out['date_text'] is not None and (not re.fullmatch(r'\d{4}(?:-\d{2}(?:-\d{2})?)?', out['date_text']) or out['date_text'] not in text):
+        raise ValueError()
+    if out['label'] == 'mentorship_claim' and not re.search(r'사사|스승|mentor|제자', quote, re.I):
+        raise ValueError()
+    if set(out) != FIELDS:
+        raise ValueError()
+    return out
 
 
 class Adapters:
@@ -51,11 +116,11 @@ class Adapters:
                          'attempts': j['attempts'], 'failed_queries': history, 'allowed_sources': ['official', 'press', 'specialist_blog']})
 
         def validate(obj):
-            if set(obj) != {'queries'} or not isinstance(obj['queries'], list) or len(obj['queries']) > 60:
+            if not isinstance(obj, dict) or not isinstance(obj.get('queries'), list) or len(obj['queries']) > 60:
                 raise ValueError()
             out, counts, seen = [], {}, set()
             for row in obj['queries']:
-                if set(row) != {'gap_id', 'target_id', 'query', 'reason'}:
+                if not isinstance(row, dict) or any(k not in row for k in ('gap_id', 'target_id', 'query', 'reason')):
                     raise ValueError()
                 g = allowed[row['gap_id']]
                 q = row['query']
@@ -83,6 +148,7 @@ class Adapters:
         # newlines/tabs that sanitize_before_store collapses, so comparing the sanitized text to
         # the raw text dropped nearly all production documents before the model was called.
         text, _ = sanitize_before_store(doc.text[:12000])
+        text = unicodedata.normalize('NFC', text or '')
         if not text:
             self.stats['skipped_filter'] += 1
             return []
@@ -103,27 +169,9 @@ class Adapters:
         targets = list({m['target_id']: {k: m.get(k) for k in ('target_id', 'kind', 'name_ko', 'name_en')} for m in mentions if m.get('target_id')}.values())
 
         def validate(obj):
-            if set(obj) != {'findings'} or not isinstance(obj['findings'], list) or len(obj['findings']) > 8:
+            if not isinstance(obj, dict) or not isinstance(obj.get('findings'), list) or len(obj['findings']) > 8:
                 raise ValueError()
-            out = []
-            for r in obj['findings']:
-                if set(r) != FIELDS or r['label'] not in LABELS:
-                    raise ValueError()
-                a, b, quote = r['span_start'], r['span_end'], r['quote']
-                if type(a) is not int or type(b) is not int or not 0 <= a < b <= len(text) or not isinstance(quote, str) or len(quote) > 200 or text[a:b] != quote:
-                    raise ValueError()
-                for k in FIELDS - {'span_start', 'span_end', 'quote', 'label'}:
-                    if r[k] is not None and (not isinstance(r[k], str) or len(r[k]) > 120):
-                        raise ValueError()
-                for k in ('chef_text', 'restaurant_text', 'org_text', 'role_text'):
-                    if r[k] is not None and r[k].casefold() not in text.casefold():
-                        raise ValueError()
-                if r['date_text'] is not None and (not re.fullmatch(r'\d{4}(?:-\d{2}(?:-\d{2})?)?', r['date_text']) or r['date_text'] not in text):
-                    raise ValueError()
-                if r['label'] == 'mentorship_claim' and not re.search(r'사사|스승|mentor|제자', quote, re.I):
-                    raise ValueError()
-                out.append(r)
-            return out
+            return [normalize_finding(row, text) for row in obj['findings']]
         self.stats['called'] += 1
         try:
             rows = self.client.call('web-extract-1', EXTRACT_INSTRUCTION,

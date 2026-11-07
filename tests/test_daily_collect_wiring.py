@@ -10,12 +10,17 @@ SH = ROOT / 'scripts/daily_pipeline.sh'
 
 
 def test_daily_pipeline_syntax_and_pr_only_boundary():
+    collect = ROOT / 'scripts/collect_daily.sh'
     subprocess.run(['bash','-n',str(SH)],check=True)
-    text=SH.read_text()
-    assert text.index('-m kg_collect') < text.index('python3 crawler/apply.py') < text.index('git add -A --')
-    assert 'crawler/instagram_kg.py' in text and 'crawler/instagram.py' not in text
+    subprocess.run(['bash','-n',str(collect)],check=True)
+    daily, text = SH.read_text(), SH.read_text() + '\n' + collect.read_text()
+    assert daily.index('collect_daily.sh') < daily.index('python3 crawler/apply.py') < daily.index('git add -A --')
+    assert collect.read_text().index('-m kg_collect') < collect.read_text().index('crawler/instagram_kg.py')
+    assert 's.get("failed",0)' in collect.read_text()
+    assert 'instagram_kg.py' in text and 'instagram.py' not in text
+    assert 'git checkout' not in collect.read_text() and 'git pull' not in collect.read_text()
     assert 'gh pr merge' not in text and '--force' not in text and './deploy.sh' not in text
-    assert 'git add -A -- data/seed.json crawler/pending.json crawler/applied.json web' in text
+    assert 'git add -A -- data/seed.json crawler/pending.json crawler/applied.json web' in daily
     assert 'git branch -D' not in text
 
 
@@ -74,7 +79,8 @@ elif 'scripts/build_deploy.py' in args and os.environ.get('TEST_BUILD_FAIL'): sy
         assert 'synthetic-password' not in p.stdout+p.stderr+commands
         assert p.stdout.count('RESULT=')==1
         assert 'gh pr merge' not in commands and 'git push -q -u origin main' not in commands
-        assert './deploy.sh' not in commands
+        assert './deploy.sh' not in commands and 'instagram.py' not in commands
+        assert 'kg_collect' in commands
         return p,commands
     return run
 
@@ -91,6 +97,35 @@ def test_pipeline_pr_stops_before_merge_or_deploy(pipeline):
     p,commands=pipeline(TEST_CHANGE='1')
     assert p.returncode==0 and 'RESULT=PR_CREATED pr=https://example.test/pr/1' in p.stdout
     assert 'gh pr create' in commands and 'git push -q -u origin crawl/' in commands
+
+
+def test_collect_daily_runs_web_without_git_or_legacy_instagram(tmp_path):
+    repo = tmp_path / 'repo'
+    (repo / 'data_store').mkdir(parents=True)
+    db = repo / 'data_store' / 'state.db'
+    db.touch()
+    bindir = tmp_path / 'bin'
+    bindir.mkdir()
+    log = tmp_path / 'commands'
+    common = textwrap.dedent(f'''\
+        #!{sys.executable}
+        import os, pathlib, sys
+        tool=pathlib.Path(sys.argv[0]).name; args=sys.argv[1:]
+        with open(os.environ['TEST_LOG'],'a') as f: f.write(tool+' '+' '.join(args)+'\\n')
+    ''')
+    (bindir / 'timeout').write_text(common + 'import subprocess,sys\nwhile args and args[0].startswith("--"): args.pop(0)\nargs.pop(0)\nsys.exit(subprocess.call(args))\n')
+    (bindir / 'python3').write_text(common + 'import json,subprocess,sys\nif args and args[0]=="-c": raise SystemExit(subprocess.call([sys.executable]+args))\nif "kg_collect" in args:\n print(json.dumps({"status":"succeeded","run_id":"fixture","ai":"paused","ai_reason":"json_blank","cost_used":1,"ai_stats":{"considered":1,"skipped_filter":0,"called":1,"failed":1,"findings":0}}))\nelif "instagram_kg.py" in args: raise SystemExit("instagram was invoked")\n')
+    (bindir / 'git').write_text(common + 'raise SystemExit("git invoked")\n')
+    for path in bindir.iterdir():
+        path.chmod(0o755)
+    env = dict(os.environ, PATH=str(bindir)+':'+os.environ['PATH'], TEST_LOG=str(log), KG_SERVICE_DB=str(db), KG_IG='0', KG_DEEPSEEK='1')
+    script = ROOT / 'scripts/collect_daily.sh'
+    p = subprocess.run(['bash', str(script), str(repo)], env=env, capture_output=True, text=True)
+    commands = log.read_text()
+    assert p.returncode == 0, p.stderr
+    assert 'COLLECT=succeeded' in p.stdout and 'ai=paused' in p.stdout and 'reason=json_blank' in p.stdout
+    assert 'ai_docs=1/0/1/1/0' in p.stdout and 'IG_SKIPPED' in p.stdout
+    assert '--deepseek' in commands and '--no-browser' in commands and 'instagram' not in commands and 'git ' not in commands
 
 
 def test_build_failure_emits_one_failure_result(pipeline):

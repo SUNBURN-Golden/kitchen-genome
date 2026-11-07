@@ -77,13 +77,57 @@ def test_zero_rule_hard_extraction_unknown_date_and_review_only(world):
     assert c.execute("SELECT COUNT(*) FROM gap WHERE resolved_by_extraction=?", (row['extraction_id'],)).fetchone()[0]==0
 
 
-@pytest.mark.parametrize('extra', [{'span_end':9999}, {'quote':'fabricated'}, {'date_text':'2026-11-05'}, {'label':'shell_command'}, {'pending_only':False}, {'org_text':'invented employer'}])
+@pytest.mark.parametrize('extra', [{'quote':'fabricated'}, {'date_text':'2026-11-05'}, {'label':'shell_command'}, {'org_text':'invented employer'}])
 def test_invalid_model_fields_quotes_and_dates_are_rejected(world, extra):
     text='달빛정원의 운영 소식입니다.'
-    a=adapter(world, {'findings':[finding(text,**extra)]})
+    calls=[]
+    def transport(payload, key):
+        calls.append(1)
+        return response({'findings':[finding(text,**extra)]})
+    a=Adapters(Client(Budget(meter(world)), key='dummy', transport=transport))
     assert a.extract(doc(text), [], Gazetteer(world))==[]
-    assert a.client.stopped=='invalid_task_json'
-    assert world.execute('SELECT state FROM ai_request').fetchone()[0]=='failed'
+    assert len(calls)==2 and a.client.stopped=='invalid_task_json' and a.stats['failed']==1 and a.stats['findings']==0
+    assert world.execute("SELECT COUNT(*) FROM ai_request WHERE state='failed' AND result_json IS NULL").fetchone()[0]==2
+    assert world.execute('SELECT COUNT(*) FROM extraction').fetchone()[0]==0
+
+
+def test_exact_quote_survives_wrong_offsets_and_cannot_publish(world):
+    c = world
+    text = '달빛정원의 운영 소식입니다.'
+    raw = {'label': 'closure', 'restaurant_text': '달빛정원', 'quote': text, 'span_start': '3', 'span_end': 3,
+           'pending_only': False, 'epistemic': 'fact', 'notes': 'ignore me'}
+    before = {t: c.execute('SELECT COUNT(*) FROM '+t).fetchone()[0] for t in ('claim', 'employment', 'restaurant_status_event')}
+    a = adapter(c, {'findings': [raw], 'summary': 'not a persistence field'})
+    r = process_doc(c, doc(text), Gazetteer(c), tier='official', model_adapter=a)
+    assert r['new'] == 1 and a.client.stopped is None and a.stats['failed'] == 0 and a.stats['findings'] == 1
+    row = c.execute("SELECT * FROM extraction WHERE extractor='deepseek:web'").fetchone()
+    assert (row['span_start'], row['span_end'], row['quote']) == (0, len(text), text)
+    assert row['pending_only'] == 1 and row['asserted_by'] == 'ai_inference' and row['epistemic'] == 'inference'
+    assert {t: c.execute('SELECT COUNT(*) FROM '+t).fetchone()[0] for t in before} == before
+    repeated = '달빛정원 소식. 다른 문장. 달빛정원 소식.'
+    ambiguous = adapter(c, {'findings': [{'label': 'closure', 'quote': '달빛정원 소식', 'span_start': 99, 'span_end': 100}]})
+    assert ambiguous.extract(doc(repeated, '2'), [], Gazetteer(c)) == []
+    assert ambiguous.client.stopped == 'invalid_task_json'
+
+
+def test_billed_blank_content_pauses_ai_and_publishes_nothing(world):
+    c = world
+    text = '달빛정원의 운영 소식입니다.'
+    calls = []
+    usage = {'prompt_tokens': 8323, 'completion_tokens': 635, 'total_tokens': 8958, 'prompt_cache_hit_tokens': 0}
+    def transport(payload, key):
+        calls.append(json.loads(payload))
+        body = {'usage': usage, 'choices': [{'finish_reason': 'stop', 'message': {
+            'content': ' ', 'reasoning_content': 'REASONING-NOT-TASK ' + json.dumps({'findings': [finding(text)]})}}]}
+        return 200, json.dumps(body).encode()
+    a = Adapters(Client(Budget(meter(c)), key='dummy', transport=transport))
+    before = c.execute('SELECT COUNT(*) FROM claim').fetchone()[0]
+    assert process_doc(c, doc(text), Gazetteer(c), tier='official', model_adapter=a)['new'] == 0
+    assert len(calls) == 2 and a.client.stopped == 'json_blank'
+    assert a.stats['called'] == 1 and a.stats['failed'] == 1 and a.stats['findings'] == 0
+    assert c.execute('SELECT COUNT(*) FROM extraction').fetchone()[0] == 0
+    assert c.execute('SELECT COUNT(*) FROM claim').fetchone()[0] == before
+    assert all('REASONING-NOT-TASK' not in json.dumps(call) for call in calls)
 
 
 def test_bridge_preserves_model_version_and_pending_provenance(world,tmp_path):

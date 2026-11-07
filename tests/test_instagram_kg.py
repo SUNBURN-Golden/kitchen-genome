@@ -48,7 +48,10 @@ class Backend:
 def world(tmp_path):
     c = connect(str(tmp_path / 'state.db')); migrate(c)
     clock, calls = Clock(), []
-    opts = dict(flag=tmp_path/'ig_kg_blocked.flag', out=tmp_path/'ig_kg', session=tmp_path/'secrets/session', now=clock.now,
+    session = tmp_path / 'secrets' / 'session'
+    session.parent.mkdir()
+    session.write_text('synthetic-session')
+    opts = dict(flag=tmp_path/'ig_kg_blocked.flag', out=tmp_path/'ig_kg', session=session, now=clock.now,
                 sleep=clock.sleep, password='synthetic-password')
     return c, clock, calls, opts
 
@@ -143,15 +146,33 @@ def test_follows_require_opt_in_and_cap_is_durable(world):
     assert conn.execute('SELECT COUNT(*) FROM ig_follow_day').fetchone()[0] == 10
 
 
-def test_outside_window_and_legacy_flag_are_separate(world):
+def test_blocked_missing_session_and_window_skip_before_network(world):
     conn, clock, calls, opts = world
-    legacy = opts['flag'].parent / 'ig_blocked.flag'; legacy.write_text('legacy-paused')
+    legacy = opts['flag'].parent / 'ig_blocked.flag'
+    legacy.write_text('legacy-paused')
+
+    def boom(guard):
+        calls.append(('network', guard.now().timestamp()))
+        raise AssertionError('network before gate')
+
+    rc, line = ig.collect(conn, handles(), boom, **opts)
+    assert rc == 0 and 'blocked_flag' in line and calls == []
+    assert legacy.read_text() == 'legacy-paused' and not opts['flag'].exists()
+    legacy.unlink()
+    opts['session'].unlink()
+    rc, line = ig.collect(conn, handles(), boom, **opts)
+    assert rc == 0 and 'missing_session' in line and calls == []
+    opts['session'].write_text('synthetic-session')
+    clock.time = clock.time.replace(hour=6, minute=44)
+    assert 'outside_window' in ig.collect(conn, handles(), boom, **opts)[1] and calls == []
+    clock.time = clock.time.replace(hour=8, minute=0)
+    assert 'outside_window' in ig.collect(conn, handles(), boom, **opts)[1] and calls == []
     clock.time = clock.time.replace(hour=9, minute=30)
-    assert 'outside_window' in ig.collect(conn, handles(), lambda g: Backend(g,calls), **opts)[1]
-    assert calls == [] and legacy.read_text() == 'legacy-paused'
-    clock.time = clock.time.replace(hour=7)
-    ig.collect(conn, handles(), lambda g: Backend(g,calls), **opts)
-    assert calls
+    assert 'blackout' in ig.collect(conn, handles(), boom, **opts)[1] and calls == []
+    clock.time = clock.time.replace(hour=7, minute=0)
+    rc, line = ig.collect(conn, handles(), lambda g: Backend(g, calls), **opts)
+    assert rc == 0 and line.startswith('IG_OK') and calls
+    assert ig.LOGIN == 'kitchen.genome' and 'agamajung' not in Path(ig.__file__).read_text()
 
 
 def test_private_profile_no_captions(world):
@@ -202,19 +223,20 @@ def test_real_backend_guards_temporary_sessions_and_rejects_wrong_identity(world
         def __init__(self,ctx): pass
     class Loader:
         def __init__(self,**kwargs): assert kwargs['max_connection_attempts']==1
+        def load_session_from_file(self,username,path):
+            assert username=='kitchen.genome' and Path(path).is_file()
         def login(self,username,password):
-            assert username=='kitchen.genome' and password=='synthetic-password'
-            # New temporary Session() is covered by the transport patch too.
-            requests.Session().send(requests.Request('POST','https://www.instagram.com/accounts/login/').prepare())
+            raise AssertionError('password login is not allowed')
         def test_login(self):
             requests.Session().send(requests.Request('GET','https://www.instagram.com/accounts/current/').prepare())
             return 'wrong-account'
     monkeypatch.setitem(sys.modules,'instaloader',SimpleNamespace(Instaloader=Loader,RateController=RC))
+    before = opts['session'].read_text()
     rc,line=ig.collect(conn,handles(),ig.LoaderBackend,**opts)
     assert rc==2 and 'invalid_session_identity' in line
-    assert len(calls)==2 and calls[1][1]-calls[0][1]>=8
+    assert len(calls)==1 and 'accounts/login' not in calls[0][0]
     assert requests.sessions.Session.send is original
-    assert not opts['session'].exists()
+    assert opts['session'].read_text()==before
 
 
 def test_retention_purges_review_output_and_model_cache(world):

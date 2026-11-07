@@ -53,6 +53,11 @@ def in_window(now):
     return dt.time(6, 45) <= t < dt.time(8)
 
 
+def in_blackout(now):
+    t = now.astimezone(KST).time()
+    return any(start <= t < end for start, end in ((dt.time(9, 30), dt.time(10, 30)), (dt.time(20, 30), dt.time(21, 30))))
+
+
 def reason(exc):
     text = (type(exc).__name__ + ' ' + str(exc)).lower()
     for word, code in [('checkpoint', 'checkpoint'), ('challenge', 'challenge'), ('429', 'http_429'),
@@ -82,9 +87,16 @@ class Guard:
         self.active = False
 
     def check(self):
+        # The legacy flag gates every account. Do not delete it or switch identity to get around it.
+        legacy = Path(self.flag).parent / 'ig_blocked.flag'
+        if legacy.exists():
+            raise Skip('blocked_flag')
         if self.flag.exists():
             raise Stop('blocked_flag')
-        if not in_window(self.now()) or self.now().astimezone(KST).date().isoformat() != self.day:
+        now = self.now()
+        if in_blackout(now):
+            raise Skip('blackout')
+        if not in_window(now) or now.astimezone(KST).date().isoformat() != self.day:
             raise Skip('outside_window')
         row = self.conn.execute('SELECT * FROM ig_account_state WHERE account=?', (LOGIN,)).fetchone()
         if row and row['stopped_day'] == self.day and not self.active:
@@ -206,20 +218,13 @@ class LoaderBackend:
         self.requests.sessions.Session.send = self.original
 
     def login(self, session, password):
-        if Path(session).exists():
-            self.loader.load_session_from_file(LOGIN, str(session))
-        else:
-            self.loader.login(LOGIN, password)
+        # A saved kitchen.genome session is required. Never password-login and never use another account.
+        del password
+        if not Path(session).is_file():
+            raise Skip('missing_session')
+        self.loader.load_session_from_file(LOGIN, str(session))
         if self.loader.test_login() != LOGIN:
             raise Stop('invalid_session_identity')
-        if not Path(session).exists():
-            Path(session).parent.mkdir(parents=True, mode=0o700, exist_ok=True)
-            old = os.umask(0o077)
-            try:
-                self.loader.save_session_to_file(str(session))
-            finally:
-                os.umask(old)
-        os.chmod(session, 0o600)
 
     def profile(self, handle):
         return self.il.Profile.from_username(self.loader.context, handle)
@@ -265,13 +270,13 @@ def scan_text(conn, client, handle, target, url, date, text, day=None):
             start = max(0, text.index(word) - 12)
             findings.append({'kind': kind, 'excerpt': text[start:start+40], 'asserted_by': 'source', 'extractor': 'rule:ig_kg'})
     def validate(obj):
-        if set(obj) != {'findings', 'follow'} or obj['follow'] not in ('follow', 'skip', 'review') or not isinstance(obj['findings'], list) or len(obj['findings']) > 4:
+        if not isinstance(obj, dict) or obj.get('follow') not in ('follow', 'skip', 'review') or not isinstance(obj.get('findings'), list) or len(obj['findings']) > 4:
             raise ValueError()
         out = []
         for f in obj['findings']:
-            if set(f) != {'kind', 'excerpt'} or f['kind'] not in KW or not isinstance(f['excerpt'], str) or not 1 <= len(f['excerpt']) <= 40 or f['excerpt'] not in text:
+            if not isinstance(f, dict) or f.get('kind') not in KW or not isinstance(f.get('excerpt'), str) or not 1 <= len(f['excerpt']) <= 40 or f['excerpt'] not in text:
                 raise ValueError()
-            out.append(f)
+            out.append({'kind': f['kind'], 'excerpt': f['excerpt']})
         return {'findings': out, 'follow': obj['follow']}
     result = model_call(client, 'ig-extract-1', 'Return JSON {"findings":[{"kind":"closure|rename|chef_move|opening","excerpt":"exact substring <=40 Unicode characters"}],"follow":"follow|skip|review"}. Culinary facts only. Never infer unsupported events. Follow public restaurant/brand only.',
                         {'handle': handle, 'target_id': target, 'text': text, 'post_date': date}, validate, {'findings': [], 'follow': 'skip'})
@@ -322,8 +327,8 @@ def collect(conn, handles, backend_factory=LoaderBackend, *, client=None, flag=F
     purge(conn, out, now())
     try:
         guard.check()
-        if not Path(session).exists() and not password:
-            raise Skip('missing_password')
+        if not Path(session).is_file():
+            raise Skip('missing_session')
         # Only restaurant/brand seed records enter this allowlist. Never harvest profiles.
         handles = [r for r in handles if r.get('handle') != LOGIN and re.fullmatch(r'[A-Za-z0-9_.]{1,30}', r.get('handle', ''))]
         attempted = {r[0] for r in conn.execute('SELECT handle FROM ig_handle_day WHERE day=?', (guard.day,))}

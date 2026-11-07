@@ -584,8 +584,9 @@ session, or access denial ends **all** KG network activity immediately.
   that day.
 - Transport uncertainty also stops the current run conservatively and writes
   the crash/uncertainty marker.
-- A blocked KG flag has no effect on the legacy `agamajung` path, and the legacy
-  `ig_blocked.flag` has no effect on KG.
+- A blocked KG flag does not switch the run over to `agamajung`. The legacy
+  `ig_blocked.flag` also skips KG before any request, whichever account it was
+  written for. Neither flag is deleted to make the other account usable.
 - No proxy, account swap, challenge solving, or automatic same-day relogin.
 - No automated notifications to other accounts; emit one operator-visible
   `IG_BLOCKED` line with a sanitised reason.

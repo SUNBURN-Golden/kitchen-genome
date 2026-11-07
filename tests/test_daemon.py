@@ -225,6 +225,7 @@ def test_instagram_paused_by_flag_is_skipped_and_never_worked_around(world):
     assert rep['status'] == 'succeeded'
     out = json.loads(c.execute("SELECT output_json FROM stage_checkpoint WHERE stage='source_discovery'").fetchone()[0])
     assert 'instagram_public' in out['paused'] and 'instagram_public' not in out['active']
+    assert 'instagram_kitchen_genome' in out['paused'] and 'instagram_kitchen_genome' not in out['active']
     assert c.execute("SELECT COUNT(*) FROM document WHERE source_id='instagram_public'").fetchone()[0] == 0
     assert (root / 'crawler' / 'out' / 'ig_blocked.flag').exists()                   # the daemon never clears the flag
 

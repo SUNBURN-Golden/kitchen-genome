@@ -2,6 +2,7 @@
 # Daily deterministic + pending-only collection. Publishes a reviewable PR; never merges/deploys.
 set -euo pipefail
 REPO="${1:-/tmp/kg}"; KG_HOME="${KG_HOME:-/workspace/kitchen-genome}"
+SCRIPT_DIR=$(cd "$(dirname "$0")" && pwd)
 STAGE=resolve; COLLECT_STATE=skipped; IG_STATE=skipped; REVIEW_PENDING=unknown; FINAL=0
 finish() {
   local rc=$?
@@ -25,51 +26,25 @@ DAY=$(TZ=Asia/Seoul date +%Y%m%d); BR="crawl/$DAY-$(date +%H%M%S)-$$"
 git checkout -q main
 git pull -q --ff-only
 git checkout -q -b "$BR"
-KG_DB="${KG_SERVICE_DB:-$REPO/data_store/kg_service.db}"
-export KG_SERVICE_DB="$KG_DB"
+KG_DB="${KG_SERVICE_DB:-$KG_HOME/data_store/kg_service.db}"
+export KG_SERVICE_DB="$KG_DB" KG_HOME
 STAGE=crawl
 python3 crawler/crawl.py
-AI_ARGS=()
-[ "${KG_DEEPSEEK:-1}" != 1 ] || AI_ARGS=(--deepseek)
+# In-place collector. It does not checkout, and web collection does not wait on Instagram.
 STAGE=collect
-if [ "${KG_COLLECT:-1}" = 1 ] && [ -f "$KG_DB" ]; then
-  COLLECT_JSON=$(mktemp)
-  COLLECT_RC=0
-  PYTHONPATH=daemon timeout "${KG_COLLECT_TIMEOUT:-1500}" python3 -m kg_collect --db "$KG_DB" cycle \
-    --units "${KG_COLLECT_UNITS:-60}" --cost-cap "${KG_COLLECT_COST_CAP:-78}" --no-browser "${AI_ARGS[@]}" >"$COLLECT_JSON" 2>/dev/null || COLLECT_RC=$?
-  if [ "$COLLECT_RC" = 0 ]; then
-    COLLECT_OUT=$(python3 -c 'import json,sys; d=json.load(open(sys.argv[1])); s=d.get("ai_stats") or {}; print("COLLECT="+d["status"], "run="+str(d.get("run_id")), "ai="+d.get("ai","disabled"), "reason="+d.get("ai_reason","none"), "cost="+str(d.get("cost_used")), "ai_docs=%s/%s/%s/%s" % (s.get("considered",0), s.get("skipped_filter",0), s.get("called",0), s.get("findings",0)))' "$COLLECT_JSON") || COLLECT_OUT='COLLECT=failed reason=invalid_summary'
-  else
-    COLLECT_OUT="COLLECT=failed reason=exit_$COLLECT_RC"
-  fi
-  rm -f "$COLLECT_JSON"
-  # Machine registry edits ship separately through human-reviewed PRs.
-  git checkout -q -- sources 2>/dev/null || true
-else
-  COLLECT_OUT='COLLECT=skipped reason=disabled_or_missing_db ai=disabled'
-fi
-echo "$COLLECT_OUT"
+COLLECT_LOG=$(bash "$SCRIPT_DIR/collect_daily.sh" "$REPO" || true)
+printf '%s\n' "$COLLECT_LOG"
+COLLECT_OUT=$(printf '%s\n' "$COLLECT_LOG" | sed -n '/^COLLECT=/p' | tail -1)
+IG_OUT=$(printf '%s\n' "$COLLECT_LOG" | sed -n '/^IG_/p' | tail -1)
+[ -n "$COLLECT_OUT" ] || COLLECT_OUT='COLLECT=failed reason=missing_summary'
+[ -n "$IG_OUT" ] || IG_OUT='IG_FAILED account=kitchen.genome reason=missing_summary'
+# Machine registry edits ship separately through human-reviewed PRs.
+git checkout -q -- sources 2>/dev/null || true
 COLLECT_STATE=${COLLECT_OUT#COLLECT=}; COLLECT_STATE=${COLLECT_STATE%% *}
-STAGE=instagram
-if [ "${KG_IG:-1}" = 1 ] && [ -f "$KG_DB" ]; then
-  IG_RC=0
-  IG_OUT=$(PYTHONPATH=daemon timeout --kill-after=15 900 python3 crawler/instagram_kg.py --db "$KG_DB" \
-    --cost-cap "${KG_IG_COST_CAP:-20}" "${AI_ARGS[@]}" 2>/dev/null) || IG_RC=$?
-  if [ "$IG_RC" = 124 ] || [ "$IG_RC" = 137 ]; then
-    IG_OUT=$(PYTHONPATH=daemon python3 crawler/instagram_kg.py --db "$KG_DB" --mark-timeout 2>/dev/null) || true
-    IG_OUT="IG_FAILED account=kitchen.genome reason=timeout"
-  fi
-  IG_OUT=$(printf '%s\n' "$IG_OUT" | sed -n '/^IG_\(OK\|SKIPPED\|BLOCKED\|FAILED\) /p' | tail -1)
-  if [ -z "$IG_OUT" ]; then
-    IG_OUT="IG_FAILED account=kitchen.genome reason=exit_$IG_RC"
-    PYTHONPATH=daemon python3 crawler/instagram_kg.py --db "$KG_DB" --mark-timeout >/dev/null 2>&1 || true
-  fi
-else
-  IG_OUT='IG_SKIPPED account=kitchen.genome reason=disabled_or_missing_db'
-fi
-echo "$IG_OUT"
 IG_STATE=${IG_OUT%% *}; IG_STATE=${IG_STATE#IG_}
 STAGE=daemon
+AI_ARGS=()
+[ "${KG_DEEPSEEK:-1}" != 1 ] || AI_ARGS=(--deepseek)
 if [ "${KG_COLLECT:-1}" = 1 ] && [ -f "$KG_DB" ]; then
   DAEMON_RC=0
   PYTHONPATH=daemon timeout 600 python3 -m kg_daemon --db "$KG_DB" run --collect-db "$KG_DB" \
