@@ -67,6 +67,19 @@ def test_pause_flag_pauses_and_clearing_it_resumes(reg, tmp_path):
     assert pause_state('instagram_public', ig, str(tmp_path)) is None
 
 
+def test_legacy_block_flag_pauses_kitchen_genome_without_clearing_it(reg, tmp_path):
+    kg = reg['sources']['instagram_kitchen_genome']
+    assert kg['access_mode'].startswith('saved session of kitchen.genome')
+    assert 'crawler/out/ig_blocked.flag' in kg['also_pause_flags']
+    assert pause_state('instagram_kitchen_genome', kg, str(tmp_path)) is None
+    flag = tmp_path / 'crawler' / 'out' / 'ig_blocked.flag'
+    flag.parent.mkdir(parents=True)
+    flag.write_text('legacy-paused')
+    paused = pause_state('instagram_kitchen_genome', kg, str(tmp_path))
+    assert paused['flag'].endswith('ig_blocked.flag') and paused['reason'] == 'flag present'
+    assert flag.read_text() == 'legacy-paused'
+
+
 def test_sync_registry_enables_only_permitted_sources(reg):
     c = kgdb.connect(':memory:')
     kgdb.migrate(c)

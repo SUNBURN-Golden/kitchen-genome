@@ -9,6 +9,7 @@ import json
 import os
 import re
 import sqlite3
+from kg_ai import pending
 
 SEARCH_HOSTS = {'bing.com', 'www.bing.com', 'duckduckgo.com', 'html.duckduckgo.com', 'search.naver.com', 'google.com', 'www.google.com'}
 # a move/appointment verb next to a current-employment claim. Without one, an employment claim is NOT a move.
@@ -51,7 +52,7 @@ def collector_records(path, tier_to_source) -> dict:
         tgt[t['target_id']] = {'kind': t['kind'], 'name_ko': t['name_ko'], 'name_en': t['name_en'], 'seed_id': a.get('seed_id'), 'origin': a.get('origin_kitchen')}
     # only the CURRENT extractor's reading of each document: older rule versions' rows stay for audit but are not re-applied as new facts
     rows = c.execute("""SELECT e.*, f.url, f.fetched_at FROM extraction e JOIN fetch_record f ON f.fetch_id=e.fetch_id
-                        WHERE f.extractor_version IS NULL OR e.extractor_version=f.extractor_version ORDER BY e.rowid""").fetchall()
+                        WHERE f.extractor_version IS NULL OR e.extractor_version=f.extractor_version OR e.pending_only=1 OR e.extractor LIKE '%deepseek%' OR e.epistemic='inference' ORDER BY e.rowid""").fetchall()
     for e in rows:
         tier = tier_of(c, e['host'], official)
         sid = tier_to_source.get(tier, 'search_leads')
@@ -98,12 +99,12 @@ def candidates(body, today) -> list[tuple]:
     lab, amb, quote = x['label'], x.get('ambiguity'), x.get('quote')
     loc = {'span_start': x['span_start'], 'span_end': x['span_end'], 'extraction_id': x['extraction_id'], 'extractor': x['extractor'], 'extractor_version': x['extractor_version']}
     lead = x['epistemic'] in ('unverified', 'inference') or body['tier'] in ('search_lead', 'social_lead')
-    base = {'lead_only': lead, 'epistemic': x['epistemic'], 'ambiguity': amb}
+    base = {'pending_only': pending(x), 'asserted_by': 'ai_inference' if pending(x) else 'source', 'model_meta': x.get('model_meta_json'), 'lead_only': lead, 'epistemic': x['epistemic'], 'ambiguity': amb}
     rseed = rs and rs.get('seed_id')
     eff = effective_date(x)
     out = []
     if amb in ('negated_statement', 'planned_not_done', 'multiple_chefs_in_sentence', 'no_chef_in_sentence', 'mentor_or_mentee_unclear', 'subject_from_job_context'):
-        return [('ambiguous', {**base, 'label': lab}, loc, quote)]
+        return [('menu' if pending(x) else 'ambiguous', {**base, 'label': lab}, loc, quote)]
     if lab == 'employment_claim' and ch and rseed:
         p = {**base, 'chef_name': ch['name_ko'], 'origin_kitchen': None, 'target_id': rseed, 'role_text': x.get('role_text')}
         if MOVE_VERB.search(quote or ''):
@@ -123,4 +124,6 @@ def candidates(body, today) -> list[tuple]:
         out.append(('collab', {**base, 'target_id': rseed, 'title': (quote or '')[:120], 'chef_name': ch['name_ko'] if ch else None, 'effective_date': eff}, loc, quote))
     elif lab == 'mentorship_claim' and ch and not amb and x.get('org_text'):
         out.append(('mentorship', {**base, 'chef_name': ch['name_ko'], 'origin_kitchen': None, 'mentor_label': x['org_text'], 'assertion_text': quote}, loc, quote))
+    if pending(x) and not out:
+        out.append(('menu', {**base, 'label': lab}, loc, quote))
     return out

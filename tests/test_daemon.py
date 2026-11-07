@@ -225,6 +225,7 @@ def test_instagram_paused_by_flag_is_skipped_and_never_worked_around(world):
     assert rep['status'] == 'succeeded'
     out = json.loads(c.execute("SELECT output_json FROM stage_checkpoint WHERE stage='source_discovery'").fetchone()[0])
     assert 'instagram_public' in out['paused'] and 'instagram_public' not in out['active']
+    assert 'instagram_kitchen_genome' in out['paused'] and 'instagram_kitchen_genome' not in out['active']
     assert c.execute("SELECT COUNT(*) FROM document WHERE source_id='instagram_public'").fetchone()[0] == 0
     assert (root / 'crawler' / 'out' / 'ig_blocked.flag').exists()                   # the daemon never clears the flag
 
@@ -262,7 +263,8 @@ def test_ai_inference_candidates_are_never_materialised(world):
     assert ai and all(a['verification'] == 'ai_inference' and a['applied_claim_id'] is None for a in ai)
     assert onto.branch_state_asof(c, branch(c, '가상식당1'), '2026-10-27')['state'] != 'closed'
     assert c.execute("SELECT COUNT(*) FROM review_queue WHERE reason='ai_inference'").fetchone()[0] >= 1
-    assert c.execute("SELECT COUNT(*) FROM cost_ledger WHERE kind='llm_tokens_k'").fetchone()[0] >= 1
+    # An injected fixture hook makes no paid call; only the shared HTTP client charges measured usage.
+    assert c.execute("SELECT COUNT(*) FROM cost_ledger WHERE kind='llm_tokens_k'").fetchone()[0] == 0
 
 
 def test_modified_source_after_apply_queues_review_and_keeps_old_claim(world):

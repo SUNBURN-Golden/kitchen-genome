@@ -2,6 +2,7 @@
 
 Policy (docs/data/SOURCES.md): on 429/403/503/challenge the DOMAIN pauses. We never rotate identity, proxy, or account, never solve
 captchas, never use a headless browser to get past a block. A 200 that is a login wall, a challenge page or an empty shell is a FAILURE."""
+import contextlib
 import json
 import os
 import re
@@ -93,10 +94,15 @@ class Response:
         return self.body.decode('utf-8', 'replace')
 
 
+class NoRedirect(urllib.request.HTTPRedirectHandler):
+    def redirect_request(self, req, fp, code, msg, headers, newurl):
+        return None
+
+
 def default_transport(url, headers, timeout):
     req = urllib.request.Request(url, headers=headers)
     try:
-        with urllib.request.urlopen(req, timeout=timeout) as r:
+        with urllib.request.build_opener(NoRedirect()).open(req, timeout=timeout) as r:
             return Response(url, r.status, dict(r.headers), r.read(8_000_000), final_url=r.geturl())
     except urllib.error.HTTPError as e:
         return Response(url, e.code, dict(e.headers or {}), e.read(200_000) if e.fp else b'', final_url=url)
@@ -107,14 +113,48 @@ def default_transport(url, headers, timeout):
 class PoliteNet:
     """All network access of the bot goes through here (so tests can inject a transport and a fake clock)."""
 
-    def __init__(self, transport=default_transport, sleep=time.sleep, clock=time.time, min_delay=None, timeout=20, respect_robots=True):
+    def __init__(self, transport=default_transport, sleep=time.sleep, clock=time.time, min_delay=None, timeout=20, respect_robots=True, conn=None):
+        self.conn = conn
         self.transport, self.sleep, self.clock, self.timeout = transport, sleep, clock, timeout
-        self.min_delay = CFG['min_delay_sec'] if min_delay is None else min_delay
+        self.min_delay = max(5, CFG['min_delay_sec'] if min_delay is None else min_delay)
         self.respect_robots = respect_robots
         self._robots: dict = {}
         self._last: dict = {}
         self.paused_hosts: dict = {}     # host -> reason (blocked this process; persisted by the caller in domain_profile)
         self.request_count = 0
+
+    def _dispatch(self, url, headers, timeout, *, robots=False):
+        from .limits import Limits
+        limits = Limits(self.conn) if self.conn is not None else None
+        h = host_of(url)
+        with limits.network_lock() if limits else contextlib.nullcontext():
+            if limits:
+                c = self.conn
+                row = c.execute('SELECT * FROM web_host_guard WHERE host=?', (h,)).fetchone()
+                if row and row['paused']:
+                    self.paused_hosts[h] = row['paused']
+                    return Response(url, 0, {}, b'', error='domain_paused')
+                delay = self.min_delay
+                if row:
+                    delay = max(delay, row['delay_sec'])
+                p = urllib.parse.urlparse(url)
+                rp = self._robots.get(f'{p.scheme}://{p.netloc}')
+                if rp:
+                    delay = max(delay, rp.crawl_delay(UA) or rp.crawl_delay('*') or 0)
+                if row and row['last_dispatch'] is not None:
+                    wait = delay - (self.clock() - row['last_dispatch'])
+                    if wait > 0:
+                        self.sleep(wait)
+                limits.dispatch(robots=robots)
+                c.execute('INSERT INTO web_host_guard(host,last_dispatch) VALUES (?,?) ON CONFLICT(host) DO UPDATE SET last_dispatch=excluded.last_dispatch', (h, self.clock()))
+                c.commit()
+            r = self.transport(url, headers, timeout)
+            if r.status in (403, 429, 503) or (r.status == 200 and looks_like_challenge(r)):
+                self.paused_hosts[h] = f'blocked:{r.status}'
+                if limits:
+                    self.conn.execute('UPDATE web_host_guard SET paused=? WHERE host=?', (self.paused_hosts[h], h))
+                    self.conn.commit()
+            return r
 
     # ── robots ──
     def robots(self, url):
@@ -122,13 +162,16 @@ class PoliteNet:
         base = f'{p.scheme}://{p.netloc}'
         if base not in self._robots:
             self._wait(p.netloc)
-            r = self.transport(base + '/robots.txt', {'User-Agent': UA}, self.timeout)
+            r = self._dispatch(base + '/robots.txt', {'User-Agent': UA}, self.timeout, robots=True)
             self.request_count += 1
             rp = urllib.robotparser.RobotFileParser()
             if r.status == 200 and r.ctype in ('text/plain', ''):
                 rp.parse(r.text().splitlines())
                 self._robots[base] = rp
-            elif r.status in (401, 403):
+                if self.conn is not None:
+                    self.conn.execute('UPDATE web_host_guard SET delay_sec=? WHERE host=?', (max(self.min_delay, rp.crawl_delay(UA) or rp.crawl_delay('*') or 0), host_of(url)))
+                    self.conn.commit()
+            elif r.status in (401, 403, 429, 503) or host_of(url) in self.paused_hosts:
                 rp.disallow_all = True      # robots itself forbidden = treat as disallow
                 self._robots[base] = rp
             else:
@@ -155,6 +198,10 @@ class PoliteNet:
     def get(self, url, extra_headers=None) -> Response:
         url = to_uri(url)               # IRIs (e.g. ko.wikipedia.org/wiki/마스터셰프_코리아) must be ASCII on the wire AND for the robots check
         h = host_of(url)
+        if self.conn is not None:
+            from .limits import Limits, DailyLimit
+            if not Limits(self.conn).admit(url):
+                raise DailyLimit('web_daily_candidate_cap')
         if is_banned(url):
             return Response(url, 0, {}, b'', error='banned')
         if h in self.paused_hosts:
@@ -171,7 +218,7 @@ class PoliteNet:
             self.sleep(delay - (self.clock() - last))
         self._last[netloc] = self.clock()
         headers = {'User-Agent': UA, 'Accept-Language': 'ko,en;q=0.8', 'Accept': '*/*', **(extra_headers or {})}
-        r = self.transport(url, headers, self.timeout)
+        r = self._dispatch(url, headers, self.timeout)
         self.request_count += 1
         if r.status in (429, 403, 503) or (r.status == 200 and looks_like_challenge(r)):
             self.paused_hosts[h] = f'blocked:{r.status}'

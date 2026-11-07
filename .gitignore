@@ -16,3 +16,8 @@ raw_store/
 *.sqlite
 *.sqlite3
 kg_service.db
+
+# Dedicated account sessions and private task artifacts
+*.session
+*.session.*
+devpipe-runs/

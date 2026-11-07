@@ -5,6 +5,8 @@ import statistics
 
 from kg_daemon.db import stable_id, utcnow
 
+from kg_ai import pending
+from kg_daemon.claims import queue_review
 from . import EXTRACTOR_VERSION
 from .extract import extract_text, needs_model
 from .fetch import Doc
@@ -40,7 +42,7 @@ def mentions_of(gaz: Gazetteer, text: str) -> dict:
     return out
 
 
-def process_doc(conn, doc: Doc, gaz: Gazetteer, *, tier: str, ctx: dict | None = None, via: str = '', ocr_conf=None, model_hook=None, now=None) -> dict:
+def process_doc(conn, doc: Doc, gaz: Gazetteer, *, tier: str, ctx: dict | None = None, via: str = '', ocr_conf=None, model_hook=None, model_adapter=None, now=None) -> dict:
     """Returns {'new': n, 'total': n, 'labels': {...}, 'alerts': [...]}. Never raises on empty extraction (that is information)."""
     now = now or utcnow()
     texts = [(doc.text, doc.published_at)]
@@ -59,7 +61,9 @@ def process_doc(conn, doc: Doc, gaz: Gazetteer, *, tier: str, ctx: dict | None =
                 alt = model_hook(r)
                 if alt:
                     alt.update({'epistemic': 'inference', 'extractor': 'model:hook', 'extraction_id': r['extraction_id'] + '_m'})
-                    recs_all.append({**r, **alt})
+                    recs_all.append({**r, **alt, 'asserted_by': 'ai_inference', 'pending_only': True})
+    if model_adapter and not doc.items:
+        recs_all.extend(model_adapter.extract(doc, recs_all, gaz, ctx))
     new = 0
     labels: dict = {}
     for r in recs_all:
@@ -70,6 +74,12 @@ def process_doc(conn, doc: Doc, gaz: Gazetteer, *, tier: str, ctx: dict | None =
                             r.get('role_text'), r.get('date_iso') or r.get('date_text'), r.get('tenure_from'), r.get('tenure_to'), r['span_start'], r['span_end'], r['quote'],
                             r['extractor'], r['extractor_version'], r.get('ambiguity'), r.get('resolved_chef_target'), r.get('resolved_restaurant_target'), r.get('resolved_org_target'),
                             r.get('resolve_note'), r.get('published_at'), now))
+        if pending(r):
+            conn.execute("UPDATE extraction SET epistemic='inference',asserted_by='ai_inference',pending_only=1,model_meta_json=? WHERE extraction_id=?",
+                         (r.get('model_meta_json'), r['extraction_id']))
+            queue_review(conn, 'ai_inference', 'extraction', r['extraction_id'],
+                         {'asserted_by': 'ai_inference', 'pending_only': True, 'url': doc.url, 'finding': r},
+                         dedupe_key='ai:extraction:' + r['extraction_id'])
         new += cur.rowcount
         labels[r['label']] = labels.get(r['label'], 0) + 1
     for tid, n in mentions_of(gaz, doc.text or ' '.join(f"{i['title']} {i['summary']}" for i in doc.items)).items():

@@ -10,6 +10,7 @@ if CRAWLER_DIR not in sys.path:
 from privacy_filter import extract_relevant_dom_region, sanitize_before_store
 from extractor import classify_source_tier, resolve_chef_entity, extract_kitchen_genome_facts
 from vault import canonicalize_url, compute_dedup_cluster, VALID_STATUSES
+import worker
 from worker import (
     load_config, is_trapped_url, effective_domain_delay,
     sort_queue_with_recheck_priority, record_http_status_and_check_halt,
@@ -133,7 +134,7 @@ def test_trapped_urls_recheck_priority_and_halt_policy():
     assert state['halted_domains']['example.com']['policy'] == 'halt_no_bypass_or_identity_rotation'
 
 
-def test_extension_manifest_and_vault_five_stages(tmp_path):
+def test_extension_manifest_and_vault_five_stages(tmp_path, monkeypatch):
     manifest = json.load(open(os.path.join(ROOT, 'extension', 'manifest.json'), encoding='utf-8'))
     assert manifest['manifest_version'] == 3
     assert 'activeTab' in manifest['permissions']
@@ -157,6 +158,11 @@ def test_extension_manifest_and_vault_five_stages(tmp_path):
     assert '[REDACTED_PHONE]' in clip_rec['evidence_locator']['quote']
     assert clip_rec['verification_status'] == 'source_checked'
 
+    # Never mutate tracked crawler artifacts while running the suite: the daily pipeline
+    # aborts on a dirty tree, so the vault/db/summary writes go to the test directory.
+    monkeypatch.setattr(worker, 'VAULT_PATH', str(tmp_path / 'vault.json'))
+    monkeypatch.setattr(worker, 'SUMMARY_PATH', str(tmp_path / 'inbox_summary.json'))
+    monkeypatch.setattr(worker, 'DB_PATH', str(tmp_path / 'vault.db'))
     summary = sync_vault()
     assert summary['auto_publish_connected'] is False
     for st in VALID_STATUSES:

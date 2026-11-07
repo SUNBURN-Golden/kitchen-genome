@@ -60,7 +60,7 @@ def _evidence_for(conn, gap):
     labels = (label,) if isinstance(label, str) else label
     col = {'restaurant': 'resolved_restaurant_target', 'chef': 'resolved_chef_target'}
     t = conn.execute('SELECT kind FROM target WHERE target_id=?', (gap['target_id'],)).fetchone()['kind']
-    rows = conn.execute(f"""SELECT * FROM extraction WHERE {col[t]}=? AND label IN ({','.join('?' * len(labels))}) AND epistemic IN ('claim','fact')
+    rows = conn.execute(f"""SELECT * FROM extraction WHERE {col[t]}=? AND label IN ({','.join('?' * len(labels))}) AND epistemic IN ('claim','fact') AND asserted_by<>'ai_inference' AND pending_only=0 AND extractor NOT LIKE '%deepseek%' AND extractor NOT LIKE '%model:%' AND extractor NOT LIKE '%ai:%'
                             AND (ambiguity IS NULL OR ambiguity IN ('planned_not_done')) ORDER BY epistemic='fact' DESC, published_at DESC""", (gap['target_id'], *labels)).fetchall()
     out = []
     for r in rows:

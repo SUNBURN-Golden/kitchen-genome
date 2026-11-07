@@ -40,7 +40,7 @@ def emp(conn, chef, branch, status='source_claim', **kw):
 
 def test_migrations_apply_once_and_are_checksum_pinned(tmp_path):
     c = kgdb.connect(':memory:')
-    assert kgdb.migrate(c) == ['0001_core_ontology.sql', '0002_daemon_runtime.sql', '0003_collection_bot.sql', '0004_profile_facts.sql', '0005_candidate_fact_types.sql']
+    assert kgdb.migrate(c) == ['0001_core_ontology.sql', '0002_daemon_runtime.sql', '0003_collection_bot.sql', '0004_profile_facts.sql', '0005_candidate_fact_types.sql', '0006_deepseek_collection.sql', '0007_aux_robots_counter.sql']
     assert kgdb.migrate(c) == []
     d = tmp_path / 'm'
     d.mkdir()
