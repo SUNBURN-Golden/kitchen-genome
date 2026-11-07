@@ -81,25 +81,6 @@
   "first_seen": "2026-10-21"
  },
  {
-  "id": "lamant",
-  "name": "라망 시크레",
-  "kind": "chef_move",
-  "new_name": null,
-  "field": null,
-  "value": null,
-  "reliable_hosts": [
-   "indinews.co.kr"
-  ],
-  "sources": [
-   "https://www.indinews.co.kr/news/articleView.html?idxno=13646"
-  ],
-  "dates": [
-   "2026-10-24"
-  ],
-  "note": null,
-  "first_seen": "2026-11-01"
- },
- {
   "id": "oct19",
   "name": "10월 19일",
   "kind": "field",
@@ -134,7 +115,7 @@
    "https://odrenyc.com/homepage"
   ],
   "dates": [
-   "2026-11-07"
+   "2026-11-08"
   ],
   "note": null,
   "first_seen": "2026-10-24"
