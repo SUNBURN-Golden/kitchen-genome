@@ -6,7 +6,7 @@ import sys
 import unicodedata
 
 from kg_ai.budget import Budget
-from kg_ai.deepseek import Client, DeepSeekError, reservation_tokens
+from kg_ai.deepseek import Client, DeepSeekError, TaskReject, reservation_tokens
 from kg_daemon.db import ROOT, stable_id
 from kg_daemon.runner import CostCapExceeded
 
@@ -21,12 +21,19 @@ MIN_MODEL_CHARS = 400
 LABELS = {'career', 'employment_claim', 'opening', 'closure', 'relocation', 'rename', 'menu', 'collab', 'mentorship_claim'}
 FIELDS = {'label', 'chef_text', 'restaurant_text', 'org_text', 'role_text', 'date_text', 'quote', 'span_start', 'span_end', 'ambiguity'}
 NULLABLE = {'chef_text', 'restaurant_text', 'org_text', 'role_text', 'date_text', 'ambiguity'}
-EXTRACT_INSTRUCTION = ('Extract explicitly supported culinary facts; return {"findings":[]} if unsupported. Each finding uses: '
-                       'label (career|employment_claim|opening|closure|relocation|rename|menu|collab|mentorship_claim), '
-                       'chef_text, restaurant_text, org_text, role_text, date_text (nullable ISO date verbatim in text), '
-                       'quote (exact source substring <=200 characters), span_start, span_end (Unicode offsets into the supplied text), ambiguity (nullable). '
-                       'Unknown fields/dates stay null and may be omitted. Extra keys are ignored. '
-                       'Shared employment never implies mentorship. No inferred employer or fetch date.')
+EXTRACT_INSTRUCTION = (
+    'Extract explicitly supported culinary facts. Return one JSON object {"findings":[...]} with at most 8 findings. '
+    'Return {"findings":[]} when nothing is explicitly supported. '
+    'Each finding may contain only label, chef_text, restaurant_text, org_text, role_text, date_text, quote, span_start, span_end, ambiguity. '
+    'label is exactly one of career, employment_claim, opening, closure, relocation, rename, menu, collab, mentorship_claim. '
+    'quote is copied exactly from the supplied text, 1 to 200 characters, including the same spaces. Do not paraphrase, translate, or repair the quote. '
+    'span_start and span_end are optional half-open Unicode offsets where the supplied text slice equals quote. Omit both if unsure. '
+    'A quote that occurs more than once must include those exact offsets. '
+    'chef_text, restaurant_text, org_text, and role_text must themselves occur in the supplied text. Omit a name that does not. Do not copy a name from known_targets unless that exact string is in the text. '
+    'date_text must already appear in the text as ISO YYYY, YYYY-MM, or YYYY-MM-DD and must be copied exactly. Do not convert Korean or other dates. Omit date_text otherwise. '
+    'Omit unknown fields. Extra keys are ignored. Shared employment is not mentorship. '
+    'A mentorship_claim quote must contain 사사, 스승, mentor, or 제자. No inferred employer or fetch date.'
+)
 
 
 def _as_int(value):
@@ -41,18 +48,30 @@ def _as_int(value):
     raise ValueError()
 
 
+def _label_token(value):
+    if isinstance(value, str) and re.fullmatch(r'[a-z0-9_]{1,40}', value):
+        return 'label=' + value
+    return 'label_len=' + str(len(value) if isinstance(value, str) else 0)
+
+
 def normalize_finding(raw, text):
     """Keep a finding only when its quote is an exact source substring.
 
-    Omitted nulls, extra keys, and a wrong offset are structural. A quote that
-    is not in the source, an ambiguous quote with no exact offset, or a field
-    that is not in the text is rejected. The model cannot set persistence fields.
+    A unique exact quote may have its offsets filled in. A quote is never
+    rewritten, trimmed, or searched with folded whitespace. Omitted nulls and
+    extra keys are structural. Any evidence miss rejects the finding.
     """
-    if not isinstance(raw, dict) or raw.get('label') not in LABELS:
-        raise ValueError()
+    if not isinstance(raw, dict):
+        raise TaskReject('shape_invalid', 'finding=not_object')
+    if raw.get('label') not in LABELS:
+        raise TaskReject('label_invalid', _label_token(raw.get('label')))
     quote = raw.get('quote')
-    if not isinstance(quote, str) or not quote or len(quote) > 200 or quote not in text:
-        raise ValueError()
+    if not isinstance(quote, str) or not quote:
+        raise TaskReject('quote_missing')
+    if len(quote) > 200:
+        raise TaskReject('quote_too_long', 'quote_len=' + str(len(quote)))
+    if quote not in text:
+        raise TaskReject('quote_not_exact', 'quote_len=' + str(len(quote)) + ',in_text=0')
     starts = []
     pos = 0
     while len(starts) <= 8:
@@ -69,26 +88,54 @@ def normalize_finding(raw, text):
         span = (start, end)
     elif len(starts) == 1:
         span = (starts[0], starts[0] + len(quote))
+    elif len(starts) > 1:
+        raise TaskReject('offset_ambiguous', 'occurrences=' + str(min(len(starts), 9)))
     else:
-        raise ValueError()
+        raise TaskReject('offset_invalid')
     out = {key: None for key in NULLABLE}
     out.update({'label': raw['label'], 'quote': quote, 'span_start': span[0], 'span_end': span[1]})
     for key in NULLABLE:
         if key not in raw or raw[key] is None:
             continue
         if not isinstance(raw[key], str) or len(raw[key]) > 120:
-            raise ValueError()
+            kind = 'name_invalid' if key in ('chef_text', 'restaurant_text', 'org_text', 'role_text') else 'field_invalid'
+            raise TaskReject(kind, 'field=' + key)
         out[key] = raw[key]
     for key in ('chef_text', 'restaurant_text', 'org_text', 'role_text'):
         if out[key] is not None and out[key].casefold() not in text.casefold():
-            raise ValueError()
-    if out['date_text'] is not None and (not re.fullmatch(r'\d{4}(?:-\d{2}(?:-\d{2})?)?', out['date_text']) or out['date_text'] not in text):
-        raise ValueError()
+            raise TaskReject('name_absent', 'field=' + key)
+    if out['date_text'] is not None:
+        if not re.fullmatch(r'\d{4}(?:-\d{2}(?:-\d{2})?)?', out['date_text']):
+            raise TaskReject('date_not_iso')
+        if out['date_text'] not in text:
+            raise TaskReject('date_not_verbatim')
     if out['label'] == 'mentorship_claim' and not re.search(r'사사|스승|mentor|제자', quote, re.I):
-        raise ValueError()
+        raise TaskReject('mentorship_unsupported')
     if set(out) != FIELDS:
-        raise ValueError()
+        raise TaskReject('field_invalid', 'fields=mismatch')
     return out
+
+
+def validate_extraction(obj, text):
+    """Accept every finding or reject the whole object. The detail lists every miss."""
+    if not isinstance(obj, dict) or not isinstance(obj.get('findings'), list):
+        raise TaskReject('shape_invalid', 'findings=missing')
+    findings = obj['findings']
+    if len(findings) > 8:
+        raise TaskReject('too_many_findings', 'n=' + str(len(findings)))
+    rows, problems = [], []
+    for index, raw in enumerate(findings):
+        try:
+            rows.append(normalize_finding(raw, text))
+        except TaskReject as exc:
+            item = str(index) + ':' + exc.code
+            if exc.detail:
+                item += ',' + exc.detail
+            problems.append(item)
+    if problems:
+        primary = problems[0].split(':', 1)[1].split(',', 1)[0]
+        raise TaskReject(primary, ' '.join(problems))
+    return rows
 
 
 def text_that_fits(client, instruction, data, max_tokens, text):
@@ -220,9 +267,7 @@ class Adapters:
         text = fitted
 
         def validate(obj):
-            if not isinstance(obj, dict) or not isinstance(obj.get('findings'), list) or len(obj['findings']) > 8:
-                raise ValueError()
-            return [normalize_finding(row, text) for row in obj['findings']]
+            return validate_extraction(obj, text)
         self.stats['called'] += 1
         try:
             rows = self.client.call('web-extract-1', EXTRACT_INSTRUCTION, {**body, 'text': text}, validate, max_tokens=4096)

@@ -21,13 +21,41 @@ VERSION = 'json-2'
 # Token count is at most one per payload byte, so this remains an upper bound.
 FRAME_TOKENS = 4096
 MAX_TASK_ATTEMPTS = 2
-RETRYABLE = ('json_blank', 'invalid_task_json')
+SCHEMA_CODES = (
+    'shape_invalid', 'too_many_findings', 'label_invalid', 'quote_missing', 'quote_too_long',
+    'quote_not_exact', 'offset_ambiguous', 'offset_invalid', 'name_absent', 'name_invalid',
+    'date_not_iso', 'date_not_verbatim', 'mentorship_unsupported', 'field_invalid',
+)
+RETRYABLE = ('json_blank', 'invalid_task_json') + SCHEMA_CODES
 # These leave the client enabled: one document is skipped, other requests may continue.
 NONSTOP = {'cached_result_purged', 'task_previously_rejected', 'missing_key', 'input_limit', 'concurrent_attempt'}
 
 
 class DeepSeekError(NonRetryable):
     pass
+
+
+class TaskReject(DeepSeekError):
+    """Schema or evidence rejection. `code` is safe to log; `detail` is sanitized."""
+
+    def __init__(self, code, detail=''):
+        self.code = code
+        self.detail = _safe_detail(detail)
+        super().__init__(code)
+
+
+def _safe_detail(text):
+    return ''.join(ch for ch in (text or '') if ch in 'abcdefghijklmnopqrstuvwxyz0123456789_=,:- ')[:400]
+
+
+def failure_code(value):
+    return (value or '').split(' ', 1)[0]
+
+
+def stored_error(exc):
+    code = getattr(exc, 'code', str(exc))
+    detail = getattr(exc, 'detail', '')
+    return code if not detail else code + ' ' + detail
 
 
 class NoRedirect(urllib.request.HTTPRedirectHandler):
@@ -131,7 +159,7 @@ class Client:
         if cached is not None:
             return cached
         canonical = self.budget.lookup(self._request_key(task, self._payload(instruction, data, max_tokens, None)[1]))
-        if canonical and canonical['state'] == 'failed' and canonical['error'] in RETRYABLE:
+        if canonical and canonical['state'] == 'failed' and failure_code(canonical['error']) in RETRYABLE:
             # The rejected attempt stays charged and is not replayed. Other documents may continue.
             raise DeepSeekError('task_previously_rejected')
         correction = None
@@ -146,7 +174,7 @@ class Client:
                     raise DeepSeekError(correction) from None
                 raise
             except DeepSeekError as exc:
-                code = str(exc)
+                code = failure_code(stored_error(exc))
                 if code in RETRYABLE and attempt + 1 < MAX_TASK_ATTEMPTS:
                     self.stopped = None
                     correction = code
@@ -169,7 +197,7 @@ class Client:
                 # Retention may purge cached IG results after 30 days. That must not disable the
                 # model for every other request in this run; this one request simply has no cache.
                 raise DeepSeekError('cached_result_purged')
-            if old['state'] == 'failed' and old['error'] in RETRYABLE:
+            if old['state'] == 'failed' and failure_code(old['error']) in RETRYABLE:
                 raise DeepSeekError('task_previously_rejected')
             self.stopped = 'previous_attempt_unknown_or_failed'
             raise DeepSeekError(self.stopped)
@@ -209,9 +237,8 @@ class Client:
             # reasoning_content is chain-of-thought, not evidence and not the task object.
             result = validate(parse_json_content((choice.get('message') or {}).get('content')))
         except DeepSeekError as exc:
-            code = str(exc)
-            self.stopped = code
-            self.budget.settle(key, usage, error=code)
+            self.stopped = failure_code(stored_error(exc))
+            self.budget.settle(key, usage, error=stored_error(exc))
             raise
         except Exception:
             self.stopped = 'invalid_task_json'

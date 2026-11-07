@@ -99,12 +99,26 @@ The collector refreshes deterministic gaps, adds validated query suggestions,
 then uses the existing scheduler and fetcher. Model extraction runs only for
 ambiguous rule output or relevant documents with open gaps and no usable rules.
 A quote must be an exact substring of the sanitized text. A unique quote may have
-its offsets repaired; an ambiguous or missing quote is rejected. Dates and names
-must still occur in that text. Omitted nulls and extra keys are ignored, and none
-of those keys can set publication fields. Missing or invalid model output leaves
-deterministic collection available and does not publish facts. `COLLECT=succeeded`
-is not AI success: read `ai=`, `reason=`, and
+its offsets repaired; the quote itself is never rewritten. An ambiguous or missing
+quote is rejected. Dates and names must still occur in that text. Omitted nulls and
+extra keys are ignored, and none of those keys can set publication fields. Missing
+or invalid model output leaves deterministic collection available and does not
+publish facts. `COLLECT=succeeded` is not AI success: read `ai=`, `reason=`, and
 `ai_docs=considered/filtered/called/failed/findings`.
+
+An extraction rejection sets `reason=` to one category: `shape_invalid`,
+`too_many_findings`, `label_invalid`, `quote_missing`, `quote_too_long`,
+`quote_not_exact`, `offset_ambiguous`, `offset_invalid`, `name_absent`,
+`name_invalid`, `date_not_iso`, `date_not_verbatim`, `mentorship_unsupported`,
+or `field_invalid`. `ai_request.error` adds a sanitized index list such as
+`0:quote_not_exact,quote_len=12,in_text=0`. It does not store the quote, names,
+dates, page text, or response body. Run `749a8bdcf4fe` stored only
+`invalid_task_json` because that body was discarded. The extraction instruction
+now states the same limits (at most 8 findings, an exact quote, no date
+conversion, names copied from the page). Schema version stays `json-2`, so a
+cached gap plan is unchanged and the next extract is a new request. One schema
+rejection is still retried once and the retry names the category. If that retry
+cannot be reserved, the stored category remains and no second call is made.
 
 Default pipeline controls:
 

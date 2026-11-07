@@ -78,18 +78,28 @@ def test_zero_rule_hard_extraction_unknown_date_and_review_only(world):
     assert c.execute("SELECT COUNT(*) FROM gap WHERE resolved_by_extraction=?", (row['extraction_id'],)).fetchone()[0]==0
 
 
-@pytest.mark.parametrize('extra', [{'quote':'fabricated'}, {'date_text':'2026-11-05'}, {'label':'shell_command'}, {'org_text':'invented employer'}])
-def test_invalid_model_fields_quotes_and_dates_are_rejected(world, extra):
-    text='달빛정원의 운영 소식입니다.'
-    calls=[]
+@pytest.mark.parametrize('extra,code', [
+    ({'quote': 'fabricated'}, 'quote_not_exact'),
+    ({'date_text': '2026-11-05'}, 'date_not_verbatim'),
+    ({'label': 'shell_command'}, 'label_invalid'),
+    ({'org_text': 'invented employer'}, 'name_absent'),
+])
+def test_invalid_model_fields_quotes_and_dates_are_rejected(world, extra, code):
+    text = '달빛정원의 운영 소식입니다.'
+    calls = []
     def transport(payload, key):
-        calls.append(1)
-        return response({'findings':[finding(text,**extra)]})
-    a=Adapters(Client(Budget(meter(world)), key='dummy', transport=transport))
-    assert a.extract(doc(text), [], Gazetteer(world))==[]
-    assert len(calls)==2 and a.client.stopped=='invalid_task_json' and a.stats['failed']==1 and a.stats['findings']==0
-    assert world.execute("SELECT COUNT(*) FROM ai_request WHERE state='failed' AND result_json IS NULL").fetchone()[0]==2
-    assert world.execute('SELECT COUNT(*) FROM extraction').fetchone()[0]==0
+        calls.append(json.loads(payload))
+        return response({'findings': [finding(text, **extra)]})
+    a = Adapters(Client(Budget(meter(world)), key='dummy', transport=transport))
+    assert a.extract(doc(text), [], Gazetteer(world)) == []
+    assert len(calls) == 2 and a.client.stopped == code and a.stats['failed'] == 1 and a.stats['findings'] == 0
+    assert code in calls[1]['messages'][0]['content']
+    assert 'Previous output was rejected' not in calls[0]['messages'][0]['content']
+    rows = world.execute("SELECT error, result_json FROM ai_request WHERE state='failed'").fetchall()
+    assert len(rows) == 2 and all(r['result_json'] is None and r['error'].startswith(code) for r in rows)
+    blob = ' '.join(r['error'] for r in rows)
+    assert text not in blob and 'fabricated' not in blob and '2026-11-05' not in blob and 'invented' not in blob
+    assert world.execute('SELECT COUNT(*) FROM extraction').fetchone()[0] == 0
 
 
 def test_exact_quote_survives_wrong_offsets_and_cannot_publish(world):
@@ -108,7 +118,119 @@ def test_exact_quote_survives_wrong_offsets_and_cannot_publish(world):
     repeated = '달빛정원 소식. 다른 문장. 달빛정원 소식.'
     ambiguous = adapter(c, {'findings': [{'label': 'closure', 'quote': '달빛정원 소식', 'span_start': 99, 'span_end': 100}]})
     assert ambiguous.extract(doc(repeated, '2'), [], Gazetteer(c)) == []
-    assert ambiguous.client.stopped == 'invalid_task_json'
+    assert ambiguous.client.stopped == 'offset_ambiguous'
+    stored = c.execute("SELECT error FROM ai_request WHERE task='web-extract-1' AND state='failed'").fetchall()
+    assert stored and all(r['error'].startswith('offset_ambiguous') and '달빛정원' not in r['error'] for r in stored)
+
+
+PAGE = '달빛정원 2021-05-01. 한도윤 총괄 셰프 기록.'
+OPENING = '달빛정원 2021-05-01'
+EMPLOYMENT = '한도윤 총괄 셰프'
+
+
+def test_realistic_exact_quotes_stay_pending_and_wrong_unique_offsets_are_repaired(world):
+    c = world
+    before = {t: c.execute('SELECT COUNT(*) FROM ' + t).fetchone()[0] for t in ('claim', 'employment', 'restaurant_status_event')}
+    payload = {'findings': [
+        {'label': 'opening', 'restaurant_text': '달빛정원', 'date_text': '2021-05-01', 'quote': OPENING,
+         'span_start': 1, 'span_end': 2, 'pending_only': False, 'epistemic': 'fact', 'notes': 'ignore'},
+        {'label': 'employment_claim', 'chef_text': '한도윤', 'restaurant_text': '달빛정원', 'role_text': '총괄 셰프',
+         'quote': EMPLOYMENT},
+    ]}
+    calls = []
+    def transport(payload_bytes, key):
+        calls.append(json.loads(payload_bytes))
+        return response(payload)
+    a = Adapters(Client(Budget(meter(c)), key='dummy', transport=transport))
+    result = process_doc(c, doc(PAGE), Gazetteer(c), tier='official', model_adapter=a)
+    assert result['new'] >= 2 and a.client.stopped is None and a.stats['failed'] == 0 and len(calls) == 1
+    sent = calls[0]['messages'][0]['content']
+    assert 'at most 8' in sent and 'Do not convert' in sent and 'Do not paraphrase' in sent
+    rows = c.execute("SELECT label,quote,span_start,span_end,date_text,pending_only,asserted_by,epistemic FROM extraction WHERE extractor='deepseek:web' ORDER BY span_start").fetchall()
+    assert [(r['label'], r['quote'], r['span_start'], r['span_end'], r['date_text'], r['pending_only'], r['asserted_by'], r['epistemic']) for r in rows] == [
+        ('opening', OPENING, 0, len(OPENING), '2021-05-01', 1, 'ai_inference', 'inference'),
+        ('employment_claim', EMPLOYMENT, PAGE.index(EMPLOYMENT), PAGE.index(EMPLOYMENT) + len(EMPLOYMENT), None, 1, 'ai_inference', 'inference'),
+    ]
+    assert {t: c.execute('SELECT COUNT(*) FROM ' + t).fetchone()[0] for t in before} == before
+
+
+def test_realistic_extraction_misses_are_categorized_without_storing_source_text(world):
+    """A Korean page with a converted date and a near quote must not be repaired into evidence."""
+    c = world
+    text = '달빛정원은 2021년 5월 성수동에 문을 열었다. 한도윤 셰프는 달빛정원의 총괄 셰프로 있다.'
+    near = '달빛정원은 2021년 5월에 오픈했다'
+    payload = {'findings': [
+        {'label': 'opening', 'restaurant_text': '달빛정원', 'date_text': '2021-05', 'quote': near},
+        {'label': 'opening', 'restaurant_text': '달빛정원', 'date_text': '2021년 5월', 'quote': '달빛정원은 2021년 5월 성수동에 문을 열었다.'},
+        {'label': 'employment_claim', 'chef_text': '없는사람', 'quote': '한도윤 셰프는 달빛정원의 총괄 셰프로 있다.'},
+        {'label': 'mentorship_claim', 'quote': '한도윤 셰프는 달빛정원의 총괄 셰프로 있다.'},
+    ]}
+    a = adapter(c, payload)
+    assert a.extract(doc(text), [], Gazetteer(c)) == []
+    assert a.client.stopped == 'quote_not_exact' and a.stats['findings'] == 0
+    error = c.execute("SELECT error, result_json FROM ai_request WHERE task='web-extract-1' AND state='failed' ORDER BY rowid").fetchone()
+    assert error['result_json'] is None
+    assert error['error'].startswith('quote_not_exact ')
+    for token in ('0:quote_not_exact', '1:date_not_iso', '2:name_absent', '3:mentorship_unsupported'):
+        assert token in error['error']
+    for secret in (near, '2021-05', '2021년', '없는사람', '한도윤', text):
+        assert secret not in error['error']
+    assert c.execute('SELECT COUNT(*) FROM extraction').fetchone()[0] == 0
+
+
+def test_near_quote_and_too_many_findings_store_no_evidence(world):
+    text = '달빛정원의 운영 소식입니다.'
+    near = adapter(world, {'findings': [finding(text, quote='달빛정원의  운영 소식입니다.')]})
+    assert near.extract(doc(text), [], Gazetteer(world)) == []
+    assert near.client.stopped == 'quote_not_exact'
+    many = adapter(world, {'findings': [finding(text) for _ in range(9)]})
+    assert many.extract(doc(text, '2'), [], Gazetteer(world)) == []
+    assert many.client.stopped == 'too_many_findings'
+    errors = [r['error'] for r in world.execute("SELECT error FROM ai_request WHERE state='failed'").fetchall()]
+    assert any(e.startswith('too_many_findings n=9') for e in errors)
+    assert all(text not in e for e in errors)
+    assert world.execute('SELECT COUNT(*) FROM extraction').fetchone()[0] == 0
+
+
+def test_one_bad_finding_rejects_the_whole_response(world):
+    text = '달빛정원의 운영 소식입니다.'
+    payload = {'findings': [finding(text), finding(text, quote='not on the page')]}
+    a = adapter(world, payload)
+    assert a.extract(doc(text), [], Gazetteer(world)) == []
+    error = world.execute("SELECT error FROM ai_request WHERE state='failed'").fetchone()[0]
+    assert error.startswith('quote_not_exact ') and '0:quote_not_exact' not in error and '1:quote_not_exact' in error
+    assert 'not on the page' not in error
+    assert world.execute('SELECT COUNT(*) FROM extraction').fetchone()[0] == 0
+
+
+def test_category_is_kept_when_the_retry_cannot_be_reserved(world):
+    """Box run 749a8bdcf4fe billed one extract and could not reserve the retry."""
+    conn = world
+    _gap(conn)
+    m = meter(conn, cap=23)
+    conn.execute("INSERT INTO ai_request(request_key,run_id,day,task,model,state,units,reserved_tokens,created_at) VALUES (?,?,?,?,?,?,?,?,?)",
+                 ('spent-plan', m.run_id, '2026-11-07', 'gap-plan-1', 'deepseek-chat', 'done', 6, 12000, db.utcnow()))
+    conn.execute('UPDATE daemon_run SET cost_used_units=? WHERE run_id=?', (6, m.run_id))
+    conn.commit()
+    m.used = 6
+    calls = []
+
+    def transport(payload, key):
+        calls.append(payload)
+        reserved = reservation_tokens(payload, 4096)
+        total = reserved - 10
+        usage = {'prompt_tokens': total - 1182, 'completion_tokens': 1182, 'total_tokens': total, 'prompt_cache_hit_tokens': 0}
+        return response({'findings': [{'label': 'opening', 'quote': 'not on the page', 'date_text': '2021-05'}]}, usage=usage)
+
+    client = Client(Budget(m, daily_cap=20, day=lambda: '2026-11-07'), key='dummy', transport=transport)
+    text = LEAD + ('가' * 12000)
+    a = Adapters(client)
+    assert a.extract(doc(text), [], Gazetteer(conn)) == []
+    assert len(calls) == 1 and a.client.stopped == 'quote_not_exact' and a.stats['called'] == 1 and a.stats['failed'] == 1
+    row = conn.execute("SELECT state, error, result_json, completion_tokens FROM ai_request WHERE task='web-extract-1'").fetchone()
+    assert row['state'] == 'failed' and row['result_json'] is None and row['completion_tokens'] == 1182
+    assert row['error'].startswith('quote_not_exact ') and 'not on the page' not in row['error'] and '2021-05' not in row['error']
+    assert conn.execute('SELECT COUNT(*) FROM extraction').fetchone()[0] == 0
 
 
 def test_billed_blank_content_pauses_ai_and_publishes_nothing(world):

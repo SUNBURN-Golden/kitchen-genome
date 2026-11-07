@@ -7,7 +7,7 @@ from pathlib import Path
 import pytest
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / 'daemon'))
 from kg_ai.budget import Budget
-from kg_ai.deepseek import Client, DeepSeekError, MAX_BODY, NoRedirect, URL
+from kg_ai.deepseek import Client, DeepSeekError, MAX_BODY, NoRedirect, TaskReject, URL
 from kg_daemon.db import connect, migrate, new_id, utcnow
 from kg_daemon.runner import CostCapExceeded, CostMeter
 
@@ -233,3 +233,22 @@ def test_schema_rejection_retries_once_and_double_encoded_json_is_accepted(conn)
     assert bad.stopped == 'invalid_task_json'
     # One rejected sample from the recovered call, then both samples of the unrecovered call.
     assert conn.execute("SELECT COUNT(*) FROM ai_request WHERE state='failed' AND error='invalid_task_json'").fetchone()[0] == 3
+
+
+def test_task_reject_keeps_a_sanitized_category_and_is_not_replayed(conn):
+    secret = 'SECRET-QUOTE should not be stored'
+    calls = []
+    def validate(obj):
+        raise TaskReject('quote_not_exact', '0:quote_not_exact,quote_len=21,in_text=0 ' + secret)
+    client = Client(Budget(meter(conn)), key='dummy', transport=lambda *a: calls.append(1) or response({'findings': []}))
+    with pytest.raises(DeepSeekError, match='^quote_not_exact$'):
+        client.call('web-extract-1', 'JSON', {'text': 'source'}, validate)
+    assert client.stopped == 'quote_not_exact' and len(calls) == 2
+    rows = conn.execute("SELECT error, result_json FROM ai_request WHERE state='failed'").fetchall()
+    assert len(rows) == 2
+    assert all(r['result_json'] is None and r['error'].startswith('quote_not_exact 0:quote_not_exact,quote_len=21,in_text=0') for r in rows)
+    assert secret not in ' '.join(r['error'] for r in rows)
+    later = Client(Budget(meter(conn)), key='dummy', transport=lambda *a: pytest.fail('categorized rejection replayed'))
+    with pytest.raises(DeepSeekError, match='^task_previously_rejected$'):
+        later.call('web-extract-1', 'JSON', {'text': 'source'}, validate)
+    assert later.stopped is None
