@@ -17,6 +17,9 @@ from kg_daemon.runner import NonRetryable, CostCapExceeded
 URL = 'https://api.deepseek.com/chat/completions'
 MAX_BODY = 256 * 1024
 VERSION = 'json-2'
+# Chat-template overhead. Added to the UTF-8 payload length and max_tokens.
+# Token count is at most one per payload byte, so this remains an upper bound.
+FRAME_TOKENS = 4096
 MAX_TASK_ATTEMPTS = 2
 RETRYABLE = ('json_blank', 'invalid_task_json')
 # These leave the client enabled: one document is skipped, other requests may continue.
@@ -42,6 +45,11 @@ def http_transport(payload, key):
         return exc.code, b''
     except Exception:
         raise DeepSeekError('transport_unknown') from None
+
+
+def reservation_tokens(payload, max_tokens):
+    """Upper bound on billed tokens: payload bytes + framing + maximum output."""
+    return len(payload) + FRAME_TOKENS + max_tokens
 
 
 def _correction_suffix(code):
@@ -165,8 +173,8 @@ class Client:
                 raise DeepSeekError('task_previously_rejected')
             self.stopped = 'previous_attempt_unknown_or_failed'
             raise DeepSeekError(self.stopped)
-        # UTF-8 byte bound + generous framing allowance + max output: no heuristic chars/4 estimate.
-        bound = len(payload) + 4096 + max_tokens
+        # Byte ceiling, not a chars/4 guess: under-reserving pauses after the provider has billed.
+        bound = reservation_tokens(payload, max_tokens)
         if not self.budget.reserve(key, task, self.model, bound):
             raise DeepSeekError('concurrent_attempt')
         usage = None

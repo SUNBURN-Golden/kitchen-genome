@@ -8,9 +8,10 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1] / 'daemon'))
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / 'tests'))
 from collect_world import SEED
 from kg_ai.budget import Budget
-from kg_ai.deepseek import Client
+from kg_ai.deepseek import Client, reservation_tokens
 from kg_collect import cycle, gaps, apply, discover
-from kg_collect.deepseek import Adapters
+from kg_collect.deepseek import EXTRACT_INSTRUCTION, Adapters
+from kg_collect.rawstore import RawStore
 from kg_collect.pipeline import process_doc
 from kg_collect.targets import Gazetteer, load_seed_targets
 from kg_collect.net import PoliteNet, Response
@@ -191,6 +192,31 @@ def test_kg_and_model_findings_cannot_corroborate_seed_changes(tmp_path, monkeyp
     assert seed.read_bytes()==original
     summary=json.loads((crawler/'out/last_summary.json').read_text())
     assert summary['applied']==[] and summary['pending_count']==1
+    published = (crawler/'pending.json').read_text() + (crawler/'applied.json').read_text()
+    assert 'deepseek' not in published and 'kitchen.genome' not in published and 'ai_inference' not in published
+
+
+def test_two_reliable_sources_publish_while_model_rows_stay_out(tmp_path, monkeypatch):
+    import importlib.util
+    spec = importlib.util.spec_from_file_location('seed_apply_pub', Path(__file__).resolve().parents[1]/'crawler/apply.py')
+    module = importlib.util.module_from_spec(spec); spec.loader.exec_module(module)
+    crawler = tmp_path/'crawler'; (crawler/'out').mkdir(parents=True)
+    seed = tmp_path/'seed.json'
+    seed.write_text(json.dumps({'restaurants':[{'id':'r','name':'Fixture'}]}))
+    base = {'id':'r','kind':'closure','url':'https://press.test/closure','host':'press.test','date':'2026-11-01','title':'closure'}
+    other = {**base, 'url':'https://news.test/closure', 'host':'news.test'}
+    ai = {**base, 'url':'https://official.test/closure', 'host':'official.test', 'extractor':'deepseek:web', 'asserted_by':'source', 'epistemic':'fact'}
+    kg = {**base, 'url':'https://www.instagram.com/p/x/', 'host':'instagram.com', 'instagram':True, 'collector_account':'kitchen.genome', 'pending_only':True}
+    (crawler/'out/findings-20261105.json').write_text(json.dumps({'findings':[base, other, ai]}))
+    (crawler/'out/ig-20261105.json').write_text(json.dumps({'findings':[kg]}))
+    monkeypatch.setattr(module, 'H', str(crawler)); monkeypatch.setattr(module, 'SEED', str(seed))
+    module.main()
+    saved = json.loads(seed.read_text())
+    assert saved['restaurants'][0]['closed_at'] == '2026-11-01'
+    applied = json.loads((crawler/'applied.json').read_text())
+    assert [a['sources'] for a in applied] == [['https://news.test/closure', 'https://press.test/closure']]
+    published = (crawler/'pending.json').read_text() + (crawler/'applied.json').read_text() + seed.read_text()
+    assert 'deepseek' not in published and 'kitchen.genome' not in published and 'official.test' not in published
 
 
 def test_whitespace_pii_document_is_sent_and_offsets_use_filtered_text(world):
@@ -214,6 +240,89 @@ def test_whitespace_pii_document_is_sent_and_offsets_use_filtered_text(world):
     assert a.stats['called'] == 1 and a.stats['findings'] == 1
     row = c.execute("SELECT quote,span_start,span_end FROM extraction WHERE extractor='deepseek:web'").fetchone()
     assert (row['quote'], row['span_start'], row['span_end']) == (quote, 0, len(quote))
+
+
+SMOKE_PLAN_USAGE = {'prompt_tokens': 2399, 'completion_tokens': 1966, 'total_tokens': 4365, 'prompt_cache_hit_tokens': 0}
+LEAD = '달빛정원은 중요한 곳이다. '
+
+
+def _gap(conn):
+    tid = conn.execute("SELECT target_id FROM target WHERE name_ko='달빛정원'").fetchone()[0]
+    conn.execute("INSERT OR IGNORE INTO gap(gap_id,target_id,field,state,opened_at) VALUES ('g-budget',?,'chef','open',?)", (tid, db.utcnow()))
+    conn.commit()
+
+
+def test_smoke_cap_fits_another_model_call_after_the_billed_plan(world):
+    """Box run b47e3a2d16ce: plan settled at 2.1825, then the next full-document reservation paused the cycle."""
+    conn = world
+    _gap(conn)
+    m = meter(conn, cap=23)
+    budget = Budget(m, daily_cap=20, day=lambda: '2026-11-07')
+    planner = Client(budget, key='dummy', transport=lambda payload, key: response({'ok': True}, usage=SMOKE_PLAN_USAGE))
+    assert planner.call('gap-plan-1', 'JSON', {'n': 1}, lambda o: o, max_tokens=4096) == {'ok': True}
+    assert m.used == pytest.approx(2.1825)
+    calls = []
+
+    def transport(payload, key):
+        calls.append(payload)
+        sent = json.loads(json.loads(payload)['messages'][1]['content'])['text']
+        assert LEAD in sent and reservation_tokens(payload, 4096) <= room
+        return response({'findings': [finding(LEAD.strip())]}, usage={'prompt_tokens': 1000, 'completion_tokens': 100, 'total_tokens': 1100, 'prompt_cache_hit_tokens': 0})
+
+    client = Client(budget, key='dummy', transport=transport)
+    full = (LEAD + ('가' * 12000))[:12000]
+    oversized = client._payload(EXTRACT_INSTRUCTION, {'url': 'https://official.test/1', 'text': full}, 4096, None)[1]
+    room = client.budget.room_tokens()
+    assert reservation_tokens(oversized, 4096) > room
+    claims = conn.execute('SELECT COUNT(*) FROM claim').fetchone()[0]
+    adapter = Adapters(client)
+    rows = adapter.extract(doc(full), [], Gazetteer(conn))
+    assert len(calls) == 1 and rows and rows[0]['pending_only'] is True and rows[0]['asserted_by'] == 'ai_inference'
+    assert adapter.stats['called'] == 1 and adapter.stats['failed'] == 0 and adapter.client.stopped is None
+    assert m.used == pytest.approx(2.1825 + 0.55)
+    room = client.budget.room_tokens()
+    again = adapter.extract(doc(full, '2'), [], Gazetteer(conn))
+    assert len(calls) == 2 and again and adapter.client.stopped is None and m.used < 20
+    assert conn.execute('SELECT COUNT(*) FROM claim').fetchone()[0] == claims
+
+
+def test_exhausted_daily_budget_defers_extract_and_a_later_day_retries(world, tmp_path):
+    conn = world
+    _gap(conn)
+    m = meter(conn, cap=78)
+    conn.execute("INSERT INTO ai_request(request_key,run_id,day,task,model,state,units,reserved_tokens,created_at) VALUES (?,?,?,?,?,?,?,?,?)",
+                 ('spent', m.run_id, '2026-11-07', 'gap-plan-1', 'deepseek-chat', 'done', 20, 40000, db.utcnow()))
+    conn.commit()
+    calls = []
+
+    def transport(payload, key):
+        calls.append(payload)
+        return response({'findings': [finding(LEAD.strip())]})
+
+    client = Client(Budget(m, daily_cap=20, day=lambda: '2026-11-07'), key='dummy', transport=transport)
+    text = LEAD + ('가' * 800)
+    adapter = Adapters(client)
+    assert adapter.extract(doc(text), [], Gazetteer(conn)) == []
+    assert calls == [] and adapter.defer_extract and adapter.client.stopped == 'cost_cap'
+    raw = RawStore(str(tmp_path/'raw'))
+    ref = raw.put_text('official.test', text)
+    conn.execute('UPDATE fetch_record SET text_ref=? WHERE fetch_id=?', (ref, 'f'))
+    conn.commit()
+    bot = cycle.Bot(conn, data_dir=str(tmp_path/'data'), deepseek=True)
+    bot.raw = raw
+    bot.ai = adapter
+    from kg_daemon.runner import CostMeter
+    ctx = SimpleNamespace(env={'bot': bot}, cost=CostMeter(conn, m.run_id, 78, cycle.UNIT_COSTS))
+    cycle.stage_extract(ctx)
+    assert conn.execute('SELECT extracted_at FROM fetch_record WHERE fetch_id=?', ('f',)).fetchone()[0] is None
+    assert conn.execute("SELECT COUNT(*) FROM extraction WHERE extractor='deepseek:web'").fetchone()[0] == 0
+    later = Adapters(Client(Budget(m, daily_cap=20, day=lambda: '2026-11-08'), key='dummy', transport=transport))
+    bot.ai = later
+    cycle.stage_extract(ctx)
+    assert calls and conn.execute('SELECT extracted_at FROM fetch_record WHERE fetch_id=?', ('f',)).fetchone()[0]
+    row = conn.execute("SELECT pending_only, asserted_by, epistemic FROM extraction WHERE extractor='deepseek:web'").fetchone()
+    assert row['pending_only'] == 1 and row['asserted_by'] == 'ai_inference' and row['epistemic'] == 'inference'
+    assert conn.execute("SELECT COUNT(*) FROM claim WHERE created_by LIKE '%ai%' OR status='ai_inference'").fetchone()[0] == 0
 
 
 def test_queue_enumeration_does_not_spend_candidate_budget(world):

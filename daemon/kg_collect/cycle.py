@@ -347,10 +347,16 @@ def stage_extract(ctx):
         if job and job['target_id']:
             t = conn.execute('SELECT * FROM target WHERE target_id=?', (job['target_id'],)).fetchone()
             jctx = {t['kind']: {'name_ko': t['name_ko'], 'target_id': t['target_id']}} if t and t['kind'] in ('chef', 'restaurant') else None
+        if bot.ai:
+            bot.ai.defer_extract = False
         r = process_doc(conn, doc, gaz, tier=tier_of(doc.host), ctx=jctx, via=f['url'], model_hook=bot.model_hook, model_adapter=bot.ai)
         n_all = conn.execute('SELECT COUNT(*) FROM extraction WHERE fetch_id=?', (f['fetch_id'],)).fetchone()[0]
         for a in check_extractor_health(conn, doc, n_all, bot.raw, gaz=gaz):
             stats['alerts'].append(a)
+        # A document the model could not afford stays unextracted so a later run can retry it.
+        # Deterministic rows already committed are idempotent. Other documents still finish.
+        if bot.ai and bot.ai.defer_extract:
+            continue
         conn.execute('UPDATE fetch_record SET extracted_at=?, extractor_version=? WHERE fetch_id=?', (utcnow(), EXTRACTOR_VERSION, f['fetch_id']))
         conn.commit()
         stats['docs'] += 1

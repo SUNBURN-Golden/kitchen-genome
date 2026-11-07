@@ -1,6 +1,7 @@
 # DeepSeek collection design: web and @kitchen.genome
 
-Status: DESIGN (revision 2, design review). Owner order: 2026-11-05.
+Status: DESIGN (revision 3). Owner order: 2026-11-05. Publication lifecycle
+restored to main's squash-merge and result-based deploy; AI output stays pending.
 Baseline: `main` at `bea455d` (revision 1 of this document); runtime baseline
 `8a2326a`. This revision changes only this document. Every module, migration,
 configuration, command, and test described below is still proposed
@@ -90,7 +91,7 @@ it may not exceed an owner cap.
 | `crawler/instagram.py` | Legacy `agamajung` identity/session/flag; delay before each profile; post loop checks `j >= 6` **after** pulling the next post, so it can fetch a seventh caption; no request-level guard. | Leave the module and its `ig_blocked.flag` untouched. Build parallel `crawler/instagram_kg.py` with a request-level guard, durable quotas, and bounded iteration. |
 | `crawler/apply.py` | Reads `crawler/out/ig-*.json`. `n_src = len(hosts) + (1 if ig and hosts else 0)`: one Instagram finding plus one reliable web host reaches 2 and can auto-apply. | New output lives in `crawler/out/ig_kg/` and never matches the glob. Add defense-in-depth rejection of `pending_only`, `ai_inference`, and `collector_account=kitchen.genome`. |
 | `sources/registry.yaml` | `instagram_public` is paused (checkpoint) and points at the legacy adapter. The new account has no entry. | Add `instagram_kitchen_genome`; leave `instagram_public` unchanged. |
-| `scripts/daily_pipeline.sh` | Runs legacy IG unconditionally, force-pushes a fresh branch, immediately squash-merges, optionally deploys, and stages with `git add -A`. | Select KG explicitly, emit `IG_*`/`RESULT`, stage a whitelist, and stop at PR creation. |
+| `scripts/daily_pipeline.sh` | Runs legacy IG unconditionally, force-pushes a fresh branch, immediately squash-merges, optionally deploys, and stages with `git add -A`. | Keep that squash-merge and result-based deploy for verified crawler artifacts. Do not call the legacy account. AI and KG rows never enter seed, applied, or the site. |
 | `.gitignore` | Already ignores `crawler/out/`, `data_store/`, `*.sqlite*`. Session paths are outside the repo. | Add `*.session` and secret-file patterns as defence against accidental copies. |
 
 The legacy registry describes `instagram_public` as paused. Its flag, session,
@@ -614,15 +615,17 @@ Run inside one pipeline lock, with each stage independently bounded:
 6. **Deterministic apply/build guards.** Run existing `crawler/apply.py`,
    enrichment, and `scripts/build_deploy.py`; AI/IG review work cannot alter
    seed/site/service outputs.
-7. **Stage and PR.** Stage only reviewed artifact paths. If publishable files
-   changed, commit, push the branch, create a PR against `main`, and stop. There
-   is no merge or deploy in this pipeline.
-8. **Final summary.** Emit exactly one `RESULT` line on every controlled exit.
+7. **Stage, squash-merge, deploy.** Stage the existing publication paths
+   (`data`, `crawler`, `web`, `scripts`, `.gitignore`). Commit, force-push
+   `crawl/$DAY`, squash-merge, and deploy only when `web/` changed and the
+   Cloudflare token is present. AI and KG rows are removed by apply before
+   those paths are written.
+8. **Final summary.** Emit exactly one success `RESULT` line:
+   `NO_CHANGE`, `MERGED_NO_DEPLOY`, `NEEDS_DEPLOY`, or `DEPLOYED`.
 
 Ignored runtime output, session files, and credentials must never be staged.
-`git add -A` is replaced by an explicit path whitelist such as `data/seed.json`,
-`crawler/pending.json`, `crawler/applied.json`, `web/`, `scripts/`, `.gitignore`,
-and any reviewed registry file. `crawler/out/` and `data_store/` stay ignored.
+`crawler/out/` and `data_store/` stay ignored, so private model output is not
+in the squash-merged PR.
 
 ### 7.2 Environment controls
 
@@ -667,19 +670,22 @@ IG_SKIPPED account=kitchen.genome reason=missing_db
 IG_SKIPPED account=kitchen.genome reason=locked
 IG_BLOCKED account=kitchen.genome reason=checkpoint flag=crawler/out/ig_kg_blocked.flag
 IG_FAILED account=kitchen.genome reason=timeout
-RESULT=NO_CHANGE review_pending=7 collect=succeeded ig=ok
-RESULT=PR_CREATED pr=<url> review_pending=7 collect=succeeded ig=blocked
-RESULT=FAILED stage=build reason=guard_failed
+RESULT=NO_CHANGE
+RESULT=MERGED_NO_DEPLOY pr=<url>
+RESULT=NEEDS_DEPLOY pr=<url>
+RESULT=DEPLOYED pr=<url>
+RESULT=FAILED stage=build reason=command_failed exit=3
 ```
 
 Collection, AI, and IG failures are non-fatal to independent deterministic work
-but are always visible in the final summary. `RESULT=FAILED` is reserved for a
-blocking guard, an unhandled pipeline error, or a failure to create the promised
-PR. Private review data is not included in public PR descriptions.
+but are always visible before the final line. `RESULT=FAILED` is an unexpected
+command failure, not a model or Instagram skip. Private review data is not
+included in the squash-merged PR. `COLLECT=succeeded` means the stages finished;
+`ai=paused reason=cost_cap` means the model budget stopped further calls.
 
 ### 7.4 Exit and recovery semantics
 
-- Exit 0 for `RESULT=NO_CHANGE` and `RESULT=PR_CREATED`.
+- Exit 0 for `RESULT=NO_CHANGE`, `RESULT=MERGED_NO_DEPLOY`, `RESULT=NEEDS_DEPLOY`, and `RESULT=DEPLOYED`.
 - Exit non-zero for `RESULT=FAILED`.
 - A stage timeout records its own failure line and cannot masquerade as success.
 - A KG block or an uncertain IG timeout writes a durable stop before the next
@@ -712,7 +718,7 @@ assert that no socket is opened.
 | IG stops | Challenge or 429 on each request type prevents every later request; partial results survive; block survives midnight; crash marker prevents replay; no account/proxy fallback; uncertain follows not replayed. |
 | IG import | JSON inbox maps to `review_queue` only; dedupe on re-run; unknown targets retained; missing DB is a clean skip; delete nothing on import failure. |
 | Publication | KG finding plus one reliable web source cannot auto-apply; model provenance with forged claim fields remains pending; seed/service/site snapshots unchanged after AI/IG-only run; `crawler/apply.py` rejects pending-only records. |
-| Shell | `bash -n`; stub all subprocesses including git/gh/build/collectors; exact statuses for success/skip/block/cap/timeout; PR-only path; no main push, merge, deploy, force-push, or secret output. |
+| Shell | `bash -n`; stub all subprocesses including git/gh/build/collectors; exact statuses for success/skip/block/cap/timeout; squash-merge then `NO_CHANGE`/`MERGED_NO_DEPLOY`/`NEEDS_DEPLOY`/`DEPLOYED`; no legacy Instagram invocation and no secret output. |
 
 Add `test_deepseek_client.py`, `test_deepseek_budget.py`,
 `test_deepseek_web.py`, `test_daemon_deepseek.py`, `test_instagram_kg.py`,
@@ -749,7 +755,7 @@ carefully, preserving existing unit meanings.
 2. Web planner/extractor adapters, provenance guards, and the `crawler/apply.py`
    defense.
 3. Dedicated IG collector, quota/stop state, and review importer.
-4. Daily pipeline wiring, operator docs, and the PR-only tail.
+4. Daily pipeline wiring and operator docs, keeping squash-merge and result-based deploy.
 5. Fixture-only validation, then an explicitly configured bounded runtime trial
    outside CI.
 
@@ -769,7 +775,7 @@ intact. Never "roll back" by activating the legacy account or by deleting
 - Confirm that the legacy `agamajung` IG step is removed from the daily pipeline
   while the script and its flag remain available separately.
 - Confirm that the first `kitchen.genome` login is owner-observed.
-- Confirm that the pipeline stops at a PR and no longer auto-merges or deploys.
+- The daily pipeline keeps main's squash-merge and `MERGED_NO_DEPLOY` / `NEEDS_DEPLOY` / `DEPLOYED` results. AI rows never enter that publication.
 - Confirm `deepseek-flash` is the intended override model name.
 
 ## 9. Revision history

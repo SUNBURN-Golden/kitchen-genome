@@ -71,6 +71,20 @@ KG_IG=0 KG_COLLECT_UNITS=2 KG_COLLECT_COST_CAP=23 \
   bash scripts/collect_daily.sh /workspace/kitchen-genome
 ```
 
+That is the bounded smoke. A live run at those settings (`run_b47e3a2d16ce`)
+validated one `deepseek-chat` plan, prompt 2399 / completion 1966, cost 2.1825,
+and stored a 40-item result. The cycle then paused because the next reservation
+was the full-document byte ceiling, which did not fit in the remaining daily
+allowance. The ceiling is still the safety bound. An excerpt is shortened until
+that bound fits in the remaining run cap and the daily cap of 20, so this smoke
+can finish every stage. The stored plan is reused and is not billed again.
+`COLLECT=succeeded` means the stages finished, including deterministic apply.
+Read `ai=` and `reason=` as well: `ai=enabled` means the model calls that ran
+were accepted; `ai=paused reason=cost_cap` means a later call could not fit even
+a short excerpt. `COLLECT=paused_cost_cap` means fetch cost, or usage past the
+reservation, stopped the run; the next run resumes that stage. Do not raise
+`KG_AI_DAILY_COST_CAP` (clamped at 20) or the default `KG_COLLECT_COST_CAP` (78).
+
 `collect_daily.sh` is also what the daily script calls for collection. It always
 passes `--no-browser`. `KG_DEEPSEEK` defaults to `1`. Web collection runs when
 Instagram is skipped. Direct equivalents:
@@ -109,7 +123,11 @@ Default pipeline controls:
 
 Cost units are internal, not dollar prices: 0.5 units per 1,000 total model tokens.
 The client reserves UTF-8 request bytes plus framing allowance plus maximum output
-against both run and day before HTTP. Successful responses settle to actual usage.
+against both the run cap and the day cap before HTTP. When that ceiling is larger
+than the room left in either cap, the excerpt is shortened until it fits. A call
+that cannot fit even a short excerpt is not sent; the model stops for that run
+with `reason=cost_cap` and deterministic stages still finish. Successful responses
+settle to actual usage, which releases the unused hold so a later call can reserve.
 Malformed task JSON with valid usage is charged, without partial results. Unknown
 usage, timeout and process loss keep the reservation. New runs cannot erase it.
 A deterministic request key reuses a validated result, including one produced by
@@ -198,28 +216,43 @@ supply a host, date, quote or corroborating vote.
 
 ## Daily pipeline and rollback
 
-`scripts/daily_pipeline.sh` takes an exclusive pipeline lock, requires clean
-tracked files, branches from updated main with a unique name, and runs collection,
-apply and build guards. It stages only tracked publication artifacts. If there
-are publishable changes it pushes the branch and opens a PR against main, then
-stops. It never force-pushes, merges or deploys. Private review growth alone does
-not create a PR. Squash merge is a later human action.
+`scripts/daily_pipeline.sh` keeps the existing publication lifecycle. It takes
+an exclusive lock, requires a clean tree, updates main, and uses branch
+`crawl/$DAY`. Collection runs in place through `scripts/collect_daily.sh` and
+does not call the legacy Instagram account. After apply and the build guards it
+stages `data`, `crawler`, `web`, `scripts`, and `.gitignore` (runtime output
+under `crawler/out/` and `data_store/` stays ignored). Publishable changes are
+committed, force-pushed, squash-merged, and deployed only when `web/` changed
+and the Cloudflare token file is present.
+
+The last line on success is one of:
+
+```text
+RESULT=NO_CHANGE
+RESULT=MERGED_NO_DEPLOY pr=<url>
+RESULT=NEEDS_DEPLOY pr=<url>
+RESULT=DEPLOYED pr=<url>
+```
+
+`MERGED_NO_DEPLOY` means the crawl PR was squash-merged and `web/` did not
+change, so the site is not deployed. `NEEDS_DEPLOY` means `web/` changed and
+deploy did not run or did not succeed. `DEPLOYED` means `./deploy.sh main`
+succeeded. AI and dedicated-account findings are not in that PR: apply drops
+them before `seed.json`, `applied.json`, and the site are written. A model-budget
+stop does not by itself change `web/`. The cron command stays
+`bash scripts/daily_pipeline.sh`. After this lands on main that command no
+longer runs the legacy Instagram account. Build guards (`SHOW_VERDICTS`,
+`SHOW_NEWSLETTER`, no `noindex`) and `scripts/build_deploy.py` still run. No
+second cron is required. Do not point the cron job at a feature branch: the
+script checks out main.
 
 Each IG invocation prints one `IG_OK`, `IG_SKIPPED`, `IG_BLOCKED` or `IG_FAILED`
 line with `account=kitchen.genome`. The shell prints `COLLECT=...` (including
-`ai_docs=considered/filtered/called/failed/findings`) and a daemon exit summary,
-then one final `RESULT=NO_CHANGE|PR_CREATED|FAILED|SKIPPED`. Independent collection
-failure remains visible without blocking deterministic build work. Timeout handling
-marks the IG account stopped before another run can dispatch.
-
-The pipeline is intentionally PR-only: it never merges or deploys. Anything that
-consumes these summary lines (cron wrapper, notification) must accept the
-`PR_CREATED|NO_CHANGE` vocabulary; squash merge and deploy are separate human
-actions performed later. The cron command stays `bash scripts/daily_pipeline.sh`.
-After this lands on main it no longer runs the legacy Instagram entrypoint.
-Build guards (`SHOW_VERDICTS`, `SHOW_NEWSLETTER`, no `noindex`) and
-`scripts/build_deploy.py` still run. No second cron is required. Do not point
-the cron job at a feature branch: the script checks out main.
+`ai_docs=considered/filtered/called/failed/findings`) before the final `RESULT`
+line. `RESULT=FAILED` is only an unexpected command failure. `RESULT=SKIPPED`
+means another run holds the lock. Independent collection failure remains visible
+without blocking deterministic build work. Timeout handling marks the IG account
+stopped before another run can dispatch.
 
 Disable with `KG_DEEPSEEK=0` and `KG_IG=0`; preserve inboxes, daily counters,
 reservations, sessions and block flags. Do not enable the legacy account as a
@@ -235,5 +268,5 @@ bash -n scripts/daily_pipeline.sh
 Fixtures inject provider HTTP, IG HTTP, clocks and subprocesses. They check
 usage/reservations, lost responses, concurrent daily budgets, schema/quote
 validation, bridge provenance, pending-only isolation, daily network limits,
-request spacing, restart quotas, block persistence, optional follows, and PR-only
-shell behavior. No real secret paths, accounts, passwords or paid calls are needed.
+request spacing, restart quotas, block persistence, optional follows, and the
+squash-merge result lines. No real secret paths, accounts, passwords or paid calls are needed.

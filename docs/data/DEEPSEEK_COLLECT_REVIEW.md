@@ -69,7 +69,11 @@ dispatch slots and each previously-unseen host costs two dispatches (robots + pa
 pagination", so this matches the design; recorded because it materially caps throughput versus
 the pre-branch crawler and an operator should confirm that is acceptable.
 
-### F4 — MEDIUM (CONFIRMED, encoded as intended — flag for owner): daily pipeline no longer merges or deploys
+### F4 — SUPERSEDED: daily pipeline no longer merges or deploys
+
+Superseded on 2026-11-07. The daily script again squash-merges and emits
+`MERGED_NO_DEPLOY`, `NEEDS_DEPLOY`, or `DEPLOYED`. The note below describes the
+PR-only revision that was withdrawn. AI output remains excluded from that publish path.
 
 `scripts/daily_pipeline.sh:96-100` stops at `RESULT=PR_CREATED`; the removed code did
 `gh pr merge --squash`, rebuilt main, and ran `./deploy.sh`. Site updates now need a human
@@ -182,7 +186,7 @@ explicit branch → PR → squash-merge-later decision, so it is documented rath
 | F1 | **Fixed** | `Adapters.extract` now runs `sanitize_before_store` first, then sends that exact sanitized text to the model and validates every quote, span, field name, and date against it. Added `ai_stats` (`considered / skipped_filter / skipped_no_targets / skipped_not_needed / called / failed / findings`) to the `COLLECT=` line. |
 | F2 | **Fixed** | Candidate admission moved out of `discover.enqueue` / feed enumeration into actual dispatch (`PoliteNet.get` → `Limits.admit`). Unfetched candidates no longer spend the 500/day candidate budget. |
 | F3 | **Fixed** | Robots fetches now use a separate durable counter on `web_daily_fetch.robots` (migration `0007_aux_robots_counter.sql`, `Limits.dispatch(robots=True)`), with their own 200/day ceiling. They no longer consume the 200/day content-dispatch budget. |
-| F4 | **Accepted (owner decision)** | Daily pipeline remains PR-only. Runbook documents that the external consumer must accept `PR_CREATED|NO_CHANGE`; squash merge and deploy are later human steps. Not silently auto-merging. |
+| F4 | **Superseded** | The 2026-11-05 PR-only decision is withdrawn. The daily script again squash-merges and uses `MERGED_NO_DEPLOY` / `NEEDS_DEPLOY` / `DEPLOYED`. AI and KG findings still cannot enter seed or the site. |
 | F5 | **Fixed** | Added `TransientStop`: transport/network failures stop the run with `IG_FAILED` but leave `ig_account_state.stopped_day` and the block flag unset, so a retry is possible the same day. Checkpoint/challenge/429/session failures still write the flag and pin the day. |
 | F6 | **Fixed** | Purge marks old `ai_request` rows `state='expired'`; the client raises `cached_result_purged` without setting `stopped`, and IG `model_call` no longer disables the client for an ordinary `DeepSeekError`. A purged cache entry no longer silences the model for the rest of the run. |
 | F7 | **Fixed** | Per-task output limits: 2048 tokens by default, 4096 for gap planning and web extraction; the budget reservation bound uses the same value. Tests pin the payload. |

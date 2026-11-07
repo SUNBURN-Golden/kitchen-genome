@@ -9,19 +9,22 @@ ROOT = Path(__file__).resolve().parents[1]
 SH = ROOT / 'scripts/daily_pipeline.sh'
 
 
-def test_daily_pipeline_syntax_and_pr_only_boundary():
+def test_daily_pipeline_syntax_and_publish_contract():
     collect = ROOT / 'scripts/collect_daily.sh'
     subprocess.run(['bash','-n',str(SH)],check=True)
     subprocess.run(['bash','-n',str(collect)],check=True)
     daily, text = SH.read_text(), SH.read_text() + '\n' + collect.read_text()
-    assert daily.index('collect_daily.sh') < daily.index('python3 crawler/apply.py') < daily.index('git add -A --')
+    assert daily.index('collect_daily.sh') < daily.index('python3 crawler/apply.py') < daily.index('git add -A data crawler web scripts .gitignore')
     assert collect.read_text().index('-m kg_collect') < collect.read_text().index('crawler/instagram_kg.py')
     assert 's.get("failed",0)' in collect.read_text()
     assert 'instagram_kg.py' in text and 'instagram.py' not in text
     assert 'git checkout' not in collect.read_text() and 'git pull' not in collect.read_text()
-    assert 'gh pr merge' not in text and '--force' not in text and './deploy.sh' not in text
-    assert 'git add -A -- data/seed.json crawler/pending.json crawler/applied.json web' in daily
-    assert 'git branch -D' not in text
+    assert 'gh pr merge' not in collect.read_text() and './deploy.sh' not in collect.read_text()
+    assert 'gh pr merge "$PR" --squash --delete-branch' in daily
+    assert 'git push -q -u origin "$BR" --force' in daily and './deploy.sh main' in daily
+    assert 'RESULT=NO_CHANGE' in daily and 'RESULT=MERGED_NO_DEPLOY pr=$PR' in daily
+    assert 'RESULT=NEEDS_DEPLOY pr=$PR' in daily and 'RESULT=DEPLOYED pr=$PR' in daily
+    assert 'RESULT=PR_CREATED' not in text
 
 
 def test_daily_pipeline_falls_back_when_clone_path_missing(tmp_path):
@@ -39,6 +42,8 @@ def pipeline(tmp_path):
     repo=tmp_path/'repo'; (repo/'.git').mkdir(parents=True); (repo/'data_store').mkdir()
     (repo/'data_store/state.db').touch(); (repo/'web').mkdir()
     (repo/'web/app.js').write_text('const SHOW_VERDICTS=false;\nconst SHOW_NEWSLETTER=false;\n')
+    (repo/'crawler'/'out').mkdir(parents=True)
+    (repo/'crawler'/'out'/'last_summary.json').write_text('{"applied":[],"pending_count":1}')
     bindir=tmp_path/'bin'; bindir.mkdir()
     log=tmp_path/'commands'
     common=textwrap.dedent(f'''\
@@ -49,9 +54,14 @@ def pipeline(tmp_path):
     ''')
     scripts={
       'git':'''if args[:2]==['rev-parse','--git-common-dir']: print('.git')
+if args[:2]==['diff','--quiet']:
+    sys.exit(1 if os.environ.get('TEST_DIRTY')=='1' else 0)
 if args[:3]==['diff','--cached','--quiet']:
+    if 'web' in args:
+        sys.exit(0 if os.environ.get('TEST_WEB')=='unchanged' or os.environ.get('TEST_CHANGE')!='1' else 1)
     p=pathlib.Path('.git/checks'); n=int(p.read_text()) if p.exists() else 0; p.write_text(str(n+1))
-    sys.exit(1 if n>0 and os.environ.get('TEST_CHANGE')=='1' else 0)
+    if n==0: sys.exit(1 if os.environ.get('TEST_DIRTY')=='1' else 0)
+    sys.exit(1 if os.environ.get('TEST_CHANGE')=='1' else 0)
 ''',
       'gh':"print('https://example.test/pr/1')\n",
       'timeout':'''while args and args[0].startswith('--'): args.pop(0)
@@ -78,25 +88,51 @@ elif 'scripts/build_deploy.py' in args and os.environ.get('TEST_BUILD_FAIL'): sy
         assert 'synthetic-secret' not in p.stdout+p.stderr+commands
         assert 'synthetic-password' not in p.stdout+p.stderr+commands
         assert p.stdout.count('RESULT=')==1
-        assert 'gh pr merge' not in commands and 'git push -q -u origin main' not in commands
-        assert './deploy.sh' not in commands and 'instagram.py' not in commands
+        assert 'git push -q -u origin main' not in commands and 'instagram.py' not in commands
         assert 'kg_collect' in commands
         return p,commands
+    run.repo = repo
     return run
 
 
-@pytest.mark.parametrize('options,expected', [({},'ig=OK'),({'TEST_IG':'BLOCKED'},'ig=BLOCKED'),({'TEST_IG':'SKIPPED'},'ig=SKIPPED'),({'TEST_IG_TIMEOUT':'1'},'ig=FAILED'),({'TEST_COLLECT_RC':'124'},'collect=failed'),({'KG_DEEPSEEK':'0'},'RESULT=NO_CHANGE')])
+@pytest.mark.parametrize('options,expected', [({},'IG_OK'),({'TEST_IG':'BLOCKED'},'IG_BLOCKED'),({'TEST_IG':'SKIPPED'},'IG_SKIPPED'),({'TEST_IG_TIMEOUT':'1'},'IG_FAILED'),({'TEST_COLLECT_RC':'124'},'COLLECT=failed'),({'KG_DEEPSEEK':'0'},'RESULT=NO_CHANGE')])
 def test_pipeline_nonfatal_steps_have_exact_result(pipeline,options,expected):
     p,commands=pipeline(**options)
-    assert p.returncode==0 and 'RESULT=NO_CHANGE' in p.stdout and expected in p.stdout
-    assert 'gh pr create' not in commands
+    assert p.returncode==0 and p.stdout.strip().splitlines()[-1]=='RESULT=NO_CHANGE'
+    assert expected in p.stdout and 'gh pr create' not in commands and 'gh pr merge' not in commands
     if options.get('KG_DEEPSEEK')=='0': assert '--deepseek' not in commands
 
 
-def test_pipeline_pr_stops_before_merge_or_deploy(pipeline):
+def test_pipeline_squash_merges_verified_crawl_without_deploy_when_web_is_unchanged(pipeline):
+    p,commands=pipeline(TEST_CHANGE='1', TEST_WEB='unchanged')
+    assert p.returncode==0
+    assert p.stdout.strip().splitlines()[-1]=='RESULT=MERGED_NO_DEPLOY pr=https://example.test/pr/1'
+    assert 'gh pr create' in commands and 'gh pr merge' in commands and '--squash' in commands
+    assert '--force' in commands and 'deploy.sh' not in commands
+
+
+def test_pipeline_needs_deploy_when_web_changed_without_token(pipeline):
     p,commands=pipeline(TEST_CHANGE='1')
-    assert p.returncode==0 and 'RESULT=PR_CREATED pr=https://example.test/pr/1' in p.stdout
-    assert 'gh pr create' in commands and 'git push -q -u origin crawl/' in commands
+    assert p.returncode==0
+    assert p.stdout.strip().splitlines()[-1]=='RESULT=NEEDS_DEPLOY pr=https://example.test/pr/1'
+    assert 'gh pr merge' in commands and 'deploy.sh' not in commands
+
+
+def test_pipeline_deploys_only_after_squash_merge_when_token_exists(pipeline, tmp_path):
+    token = tmp_path/'cf-token'; token.write_text('fixture-token')
+    script = pipeline.repo/'deploy.sh'
+    script.write_text('#!/bin/sh\necho deploy >> "$TEST_LOG"\nexit 0\n')
+    script.chmod(0o755)
+    p,commands=pipeline(TEST_CHANGE='1', KG_CF_TOKEN_FILE=str(token))
+    assert p.returncode==0, p.stderr
+    assert p.stdout.strip().splitlines()[-1]=='RESULT=DEPLOYED pr=https://example.test/pr/1'
+    assert 'gh pr merge' in commands and 'deploy' in commands.splitlines()
+    script.write_text('#!/bin/sh\necho deploy-fail >> "$TEST_LOG"\nexit 1\n')
+    (pipeline.repo/'.git'/'checks').unlink()
+    p,commands=pipeline(TEST_CHANGE='1', KG_CF_TOKEN_FILE=str(token))
+    assert p.returncode==0, p.stderr
+    assert p.stdout.strip().splitlines()[-1]=='RESULT=NEEDS_DEPLOY pr=https://example.test/pr/1'
+    assert 'deploy-fail' in commands.splitlines()
 
 
 def test_collect_daily_runs_web_without_git_or_legacy_instagram(tmp_path):

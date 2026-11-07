@@ -6,8 +6,9 @@ import sys
 import unicodedata
 
 from kg_ai.budget import Budget
-from kg_ai.deepseek import Client, DeepSeekError
+from kg_ai.deepseek import Client, DeepSeekError, reservation_tokens
 from kg_daemon.db import ROOT, stable_id
+from kg_daemon.runner import CostCapExceeded
 
 _CRAWLER = os.path.join(ROOT, 'crawler')
 if _CRAWLER not in sys.path:
@@ -16,6 +17,7 @@ from privacy_filter import sanitize_before_store  # noqa: E402
 
 from . import gaps
 
+MIN_MODEL_CHARS = 400
 LABELS = {'career', 'employment_claim', 'opening', 'closure', 'relocation', 'rename', 'menu', 'collab', 'mentorship_claim'}
 FIELDS = {'label', 'chef_text', 'restaurant_text', 'org_text', 'role_text', 'date_text', 'quote', 'span_start', 'span_end', 'ambiguity'}
 NULLABLE = {'chef_text', 'restaurant_text', 'org_text', 'role_text', 'date_text', 'ambiguity'}
@@ -89,12 +91,49 @@ def normalize_finding(raw, text):
     return out
 
 
+def text_that_fits(client, instruction, data, max_tokens, text):
+    """Longest prefix whose byte reservation fits the remaining run and day caps.
+
+    The full text is returned unchanged when it already fits, so a cached request
+    key stays stable. None means even a short excerpt cannot be reserved.
+    """
+    def bound(sample):
+        payload = client._payload(instruction, {**data, 'text': sample}, max_tokens, None)[1]
+        return reservation_tokens(payload, max_tokens)
+
+    limit = client.budget.room_tokens()
+    if bound(text) <= limit:
+        return text
+    if len(text) < MIN_MODEL_CHARS or bound(text[:MIN_MODEL_CHARS]) > limit:
+        return None
+    lo, hi, best = MIN_MODEL_CHARS, len(text), MIN_MODEL_CHARS
+    while lo <= hi:
+        mid = (lo + hi) // 2
+        if bound(text[:mid]) <= limit:
+            best = mid
+            lo = mid + 1
+        else:
+            hi = mid - 1
+    return text[:best]
+
+
 class Adapters:
     def __init__(self, client):
         self.client = client
+        self.defer_extract = False
         # Observable extraction funnel: a production no-op must not hide behind ai=enabled.
         self.stats = {'considered': 0, 'skipped_filter': 0, 'skipped_no_targets': 0,
-                      'skipped_not_needed': 0, 'called': 0, 'failed': 0, 'findings': 0}
+                      'skipped_not_needed': 0, 'skipped_budget': 0, 'called': 0, 'failed': 0, 'findings': 0}
+
+    def _budget_stop(self, exc=None):
+        """A reservation that does not fit stops later model calls and lets deterministic stages finish.
+
+        Usage past the byte ceiling still aborts the run: that call was already billed.
+        """
+        if exc is not None and self.client.stopped == 'usage_over_reservation':
+            raise exc
+        self.client.stopped = 'cost_cap'
+        return []
 
     @classmethod
     def for_meter(cls, meter):
@@ -139,9 +178,12 @@ class Adapters:
             return self.client.call('gap-plan-1', 'Return JSON {"queries":[{"gap_id":"known ID","target_id":"known ID","query":"search terms","reason":"short reason"}]}. At most 3 per gap. Seek independent permitted sources; never bypass blocked access.', data, validate, max_tokens=4096)
         except DeepSeekError:
             return []
+        except CostCapExceeded as exc:
+            return self._budget_stop(exc)
 
     def extract(self, doc, recs, gaz, context=None):
-        if self.client.status != 'enabled':
+        self.defer_extract = False
+        if self.client.stopped not in (None, 'cost_cap') or not self.client.key:
             return []
         self.stats['considered'] += 1
         # Send the same filtered text we validate offsets against. Every real page contains
@@ -167,6 +209,15 @@ class Adapters:
             self.stats['skipped_not_needed'] += 1
             return []
         targets = list({m['target_id']: {k: m.get(k) for k in ('target_id', 'kind', 'name_ko', 'name_en')} for m in mentions if m.get('target_id')}.values())
+        body = {'url': doc.url, 'published_at': doc.published_at, 'known_targets': targets,
+                'rule_ambiguities': [r.get('ambiguity') for r in recs]}
+        fitted = text_that_fits(self.client, EXTRACT_INSTRUCTION, body, 4096, text)
+        if fitted is None or self.client.stopped == 'cost_cap':
+            self.defer_extract = True
+            self.stats['skipped_budget'] += 1
+            self.client.stopped = 'cost_cap'
+            return []
+        text = fitted
 
         def validate(obj):
             if not isinstance(obj, dict) or not isinstance(obj.get('findings'), list) or len(obj['findings']) > 8:
@@ -174,12 +225,14 @@ class Adapters:
             return [normalize_finding(row, text) for row in obj['findings']]
         self.stats['called'] += 1
         try:
-            rows = self.client.call('web-extract-1', EXTRACT_INSTRUCTION,
-                                    {'url': doc.url, 'published_at': doc.published_at, 'text': text, 'known_targets': targets,
-                                     'rule_ambiguities': [r.get('ambiguity') for r in recs]}, validate, max_tokens=4096)
+            rows = self.client.call('web-extract-1', EXTRACT_INSTRUCTION, {**body, 'text': text}, validate, max_tokens=4096)
         except DeepSeekError:
             self.stats['failed'] += 1
             return []
+        except CostCapExceeded as exc:
+            self.defer_extract = True
+            self.stats['skipped_budget'] += 1
+            return self._budget_stop(exc)
         result = []
         for row in rows:
             r = {**row, 'epistemic': 'inference', 'asserted_by': 'ai_inference', 'pending_only': True, 'extractor': 'deepseek:web',

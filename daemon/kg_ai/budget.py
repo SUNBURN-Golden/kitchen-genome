@@ -18,6 +18,17 @@ class Budget:
     def lookup(self, key):
         return self.conn.execute('SELECT * FROM ai_request WHERE request_key=?', (key,)).fetchone()
 
+    def room_tokens(self):
+        """Tokens still reservable under both the run cap and the shared day cap."""
+        m = self.meter
+        run_left = m.cap - m.used
+        daily = self.conn.execute('SELECT COALESCE(SUM(units),0) FROM ai_request WHERE day=?', (self.day(),)).fetchone()[0]
+        left = min(run_left, self.daily_cap - float(daily))
+        rate = m.unit_costs.get('llm_tokens_k') or 0
+        if left <= 0 or rate <= 0:
+            return 0
+        return int(left / rate * 1000)
+
     def reserve(self, key, task, model, tokens):
         c, m = self.conn, self.meter
         units = tokens / 1000 * m.unit_costs['llm_tokens_k']
