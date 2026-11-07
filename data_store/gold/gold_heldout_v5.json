@@ -1,0 +1,210 @@
+{
+ "_note": "FRESH HELD-OUT v5: sentences from documents fetched in daily collect cycles 2026-11-03..05 KST (plus 11-06 morning crawl findings for 손종원/빌롱), after rules/1.5. Labelled by Kitchen Genome self-improvement check at 2026-11-06 ~09:20 KST BEFORE any rules/1.6 change and BEFORE running the extractor on this file. Conventions as v4: search_lead->unverified; product/hotel package 출시 without chef-restaurant event->[ ]; brand/product 셰프컬렉션 출시 with chef of R->collab; 팝업 레스토랑 'X'을/를 연다->opening; gala 디너를 연다->collab; dual head-chef 겸하고->employment_claim per venue.",
+ "targets": [],
+ "sentences": [
+  {
+   "text": "조선 팰리스 ‘이타닉 가든’ 리뉴얼 오픈 — 조선호텔앤리조트의 최상급 호텔 ‘조선 팰리스 서울 강남, 럭셔리 컬렉션 호텔의 ‘이타닉 가든’이 한 달 여간의 준비를 마치고 리뉴얼 오픈한다.",
+   "host": "bing.com",
+   "published_at": null,
+   "tier": "search_lead",
+   "url": "https://bing.com/news/search?format=rss&q=%EC%9D%B4%ED%83%80%EB%8B%89+%EA%B0%80%EB%93%A0+%EC%9D%B4%EC%A0%84+%EB%A6%AC%EB%89%B4%EC%96%BC&setlang=ko",
+   "expect": [
+    {
+     "label": "opening",
+     "chef": null,
+     "restaurant": "이타닉 가든",
+     "epistemic": "unverified"
+    }
+   ]
+  },
+  {
+   "text": "스케이프, 미쉐린 1스타 ‘라망 시크레’ 런치·와인 페어링 담은 패키지 출시 — [스포츠서울 | 위수정 기자] 조선호텔앤리조트의 부티크 호텔 ‘레스케이프(L’Escape)’가 6년 연속 미쉐린 1스타를 획득한 레스토랑 ‘라망 시크레(L’",
+   "host": "bing.com",
+   "published_at": null,
+   "tier": "search_lead",
+   "url": "https://bing.com/news/search?format=rss&q=%EB%9D%BC%EB%A7%9D+%EC%8B%9C%ED%81%AC%EB%A0%88+%EC%9D%B4%EC%A0%84+%EB%A6%AC%EB%89%B4%EC%96%BC&setlang=ko",
+   "expect": []
+  },
+  {
+   "text": "CJ제일제당 '퀴진케이' 셰프, 용산에 한식 다이닝 '오닐' 오픈 — [서울=뉴스핌] 김용석 기자 = CJ제일제당의 K푸드 인재 발굴·육성 프로젝트 '퀴진케이'가 발굴한 진연준·최인규 셰프가 서울 용산구에 한식 다이닝 '오닐'",
+   "host": "bing.com",
+   "published_at": null,
+   "tier": "search_lead",
+   "url": "https://bing.com/news/search?format=rss&q=%EC%99%80%EC%9D%B8+%EB%8B%A4%EC%9D%B4%EB%8B%9D+%EC%85%B0%ED%94%84+%EC%98%A4%ED%94%88+%EC%84%9C%EC%9A%B8&setlang=ko",
+   "expect": [
+    {
+     "label": "opening",
+     "chef": "최인규",
+     "restaurant": "오닐",
+     "epistemic": "unverified"
+    }
+   ]
+  },
+  {
+   "text": "CJ가 키운 K-셰프들 매장 개점…‘퀴진케이 출신’ 한식 다이닝 ‘오닐’ 오픈 — (왼쪽부터) ‘오닐(ONIL)’의 진연준 셰프, 최인규 셰프.",
+   "host": "bing.com",
+   "published_at": null,
+   "tier": "search_lead",
+   "url": "https://bing.com/news/search?format=rss&q=%EC%99%80%EC%9D%B8+%EB%8B%A4%EC%9D%B4%EB%8B%9D+%EC%85%B0%ED%94%84+%EC%98%A4%ED%94%88+%EC%84%9C%EC%9A%B8&setlang=ko",
+   "expect": [
+    {
+     "label": "opening",
+     "chef": "진연준",
+     "restaurant": "오닐",
+     "epistemic": "unverified"
+    }
+   ]
+  },
+  {
+   "text": "더블트리 바이 힐튼 서울 판교, 유러피언 다이닝 '루 판교' 리뉴얼 오픈 — (판교=열린뉴스통신) 최선혜 기자 = 더블트리 바이 힐튼 서울 판교 호텔이 컨템포러리 유러피언 다이닝&바 '루 판교(LUH Pangyo)'를 리뉴얼 오픈했다",
+   "host": "bing.com",
+   "published_at": null,
+   "tier": "search_lead",
+   "url": "https://bing.com/news/search?format=rss&q=%EC%99%80%EC%9D%B8+%EB%8B%A4%EC%9D%B4%EB%8B%9D+%EC%85%B0%ED%94%84+%EC%98%A4%ED%94%88+%EC%84%9C%EC%9A%B8&setlang=ko",
+   "expect": [
+    {
+     "label": "opening",
+     "chef": null,
+     "restaurant": "루 판교",
+     "epistemic": "unverified"
+    }
+   ]
+  },
+  {
+   "text": "식당 아리아께가 문성오 셰프의 스시 코스와 주류를 함께 즐기는 갈라 디너를 연다.",
+   "host": "newspim.com",
+   "published_at": "2026-10-16",
+   "tier": "press",
+   "url": "https://newspim.com/news/view/20261016000917",
+   "expect": [
+    {
+     "label": "collab",
+     "chef": "문성오",
+     "restaurant": "아리아께",
+     "epistemic": "claim"
+    }
+   ]
+  },
+  {
+   "text": "업계에서는 호텔 레스토랑의 셰프 협업과 고급 미식 경험이 차별화 전략의 하나로 활용되는 가운데, 스테이의 운영 종료와 후속 레스토랑 출범이 시그니엘 서울의 다이닝 콘셉트 변화로 이어질지 주목된다.",
+   "host": "fnnews.com",
+   "published_at": "2026-10-28",
+   "tier": "press",
+   "url": "https://fnnews.com/news/202610280902598404",
+   "expect": []
+  },
+  {
+   "text": "퀴진케이가 열 번째 팝업 레스토랑 ‘빌롱(Belong)’을 연다.",
+   "host": "bing.com",
+   "published_at": null,
+   "tier": "search_lead",
+   "url": "https://www.bing.com/news/search?format=rss&setlang=ko&q=%EB%B9%8C%EB%A1%B1%20%EC%98%A4%ED%94%88",
+   "expect": [
+    {
+     "label": "opening",
+     "chef": null,
+     "restaurant": "빌롱",
+     "epistemic": "unverified"
+    }
+   ]
+  },
+  {
+   "text": "CJ제일제당, ‘소설한남’ 엄태철 셰프와 ‘비비고 셰프컬렉션’ 출시 — CJ제일제당의 ‘비비고’가 스타 셰프의 맛을 담은 비비고 셰프컬렉션 시즌",
+   "host": "bing.com",
+   "published_at": null,
+   "tier": "search_lead",
+   "url": "https://www.bing.com/news/search?format=rss&setlang=ko&q=%EC%86%8C%EC%84%A4%ED%95%9C%EB%82%A8%20%EC%97%84%ED%83%9C%EC%B2%A0",
+   "expect": [
+    {
+     "label": "collab",
+     "chef": "엄태철",
+     "restaurant": "소설한남",
+     "epistemic": "unverified"
+    }
+   ]
+  },
+  {
+   "text": "CJ제일제당 퀴진케이 열번째 팝업…신용우 셰프 '빌롱' 오픈 — 미쉐린 3스타 경험 쌓은 신용우 셰프 복귀…제철 식재료 활용 10코스 한식 선봬",
+   "host": "bing.com",
+   "published_at": null,
+   "tier": "search_lead",
+   "url": "https://www.bing.com/news/search?format=rss&setlang=ko&q=%EB%B9%8C%EB%A1%B1%20%EC%98%A4%ED%94%88",
+   "expect": [
+    {
+     "label": "opening",
+     "chef": "신용우",
+     "restaurant": "빌롱",
+     "epistemic": "unverified"
+    }
+   ]
+  },
+  {
+   "text": "미쉐린 3스타 거쳐 다시 퀴진케이…신용우 셰프 ‘빌롱’ 오픈 [스포츠서울 | 조선우 기자] CJ제일제당의 한식 셰프 발굴·육성 프로젝트 ‘퀴진케이(Cuisine. K)’가 10번째 팝업 레스토랑을 연다.",
+   "host": "sportsseoul.com",
+   "published_at": "2026-10-05",
+   "tier": "press",
+   "url": "https://www.sportsseoul.com/news/read/1639420",
+   "expect": [
+    {
+     "label": "opening",
+     "chef": "신용우",
+     "restaurant": "빌롱",
+     "epistemic": "claim"
+    }
+   ]
+  },
+  {
+   "text": "테이블 옆에서 와인 맛보고 고른다…더블트리 바이 힐튼 서울 판교 '루 판교' 오픈 — 게리동 와인 서비스, 테이블 옆에서 맛보고 고른다",
+   "host": "bing.com",
+   "published_at": null,
+   "tier": "search_lead",
+   "url": "https://bing.com/news/search?format=rss&q=%EC%99%80%EC%9D%B8+%EB%A0%88%EC%8A%A4%ED%86%A0%EB%9E%91+%EC%85%B0%ED%94%84+%EC%98%A4%ED%94%88+%EC%84%9C%EC%9A%B8&setlang=ko",
+   "expect": [
+    {
+     "label": "opening",
+     "chef": null,
+     "restaurant": "루 판교",
+     "epistemic": "unverified"
+    }
+   ]
+  },
+  {
+   "text": "시크레 코스 담은 미식 패키지 ‘에피큐리언 이스케이프: 라망 시크레’ 출시 — 조선호텔앤리조트의 부티크 호텔 레스케이프 서울 명동",
+   "host": "bing.com",
+   "published_at": null,
+   "tier": "search_lead",
+   "url": "https://bing.com/news/search?format=rss&q=%EB%9D%BC%EB%A7%9D+%EC%8B%9C%ED%81%AC%EB%A0%88+%ED%8F%90%EC%97%85&setlang=ko",
+   "expect": []
+  },
+  {
+   "text": "손종원 셰프, 신세계그룹 전문임원 승진…36명 중 유일 손종원 셰프가 10월 23일 신세계그룹 신규 임원 인사에서 전문임원으로 승진했다.",
+   "host": "indinews.co.kr",
+   "published_at": "2026-10-24",
+   "tier": "press",
+   "url": "https://www.indinews.co.kr/news/articleView.html?idxno=13646",
+   "expect": []
+  },
+  {
+   "text": "손종원 셰프는 조선호텔앤리조트 소속으로 조선팰리스 '이타닉가든'과 레스케이프 호텔 '라망 시크레'의 헤드 셰프를 겸하고 있다.",
+   "host": "indinews.co.kr",
+   "published_at": "2026-10-24",
+   "tier": "press",
+   "url": "https://www.indinews.co.kr/news/articleView.html?idxno=13646",
+   "expect": [
+    {
+     "label": "employment_claim",
+     "chef": "손종원",
+     "restaurant": "이타닉 가든",
+     "epistemic": "claim"
+    },
+    {
+     "label": "employment_claim",
+     "chef": "손종원",
+     "restaurant": "라망 시크레",
+     "epistemic": "claim"
+    }
+   ]
+  }
+ ],
+ "resolve": []
+}

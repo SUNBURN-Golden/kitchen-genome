@@ -110,3 +110,45 @@ collab 단서는 같은 헤드라인 절(—, …, | 로 구분) 안에서만 op
 
 v4 남은 오류(다음 개선 후보, 튜닝 금지 → 다음 held-out으로 검증): 'R 엄태철 셰프와 ○○ 출시' 같은 협업 키워드 없는 제품 협업(병기 employment_claim로 오분류),
 '팝업 레스토랑 ‘R’을 연다'('연다' 미지원).
+
+## Phase 6 (2026-11-06): rules/1.6 — 제품 협업·팝업 opening
+
+셰프가 명시된 문장의 셰프컬렉션·브랜드/제품 출시를 collab으로 추출하고 병기 employment_claim을 억제한다.
+미등록 인접 인용 식당명과 `식당 NAME가` 행사 주어도 collab에 연결한다. 팝업/레스토랑/식당/다이닝의 매장 목적어가
+`을/를 연다` 또는 `을/를 열고`이면 opening이며, 디너/만찬/행사/이벤트/갈라는 제외한다. 기존 갈라 디너 collab은 유지한다.
+
+합성 문장만으로 구현·검증한 뒤, 기존 라벨을 변경하지 않은 held-out v5(15문장, 정답 12항목)에 아래 명령을 실행했다.
+동일 DB/명령으로 변경 전·후를 실측했으며, 요청서의 대략적인 baseline 대신 실제 실행 수치를 기록한다. 개별 오류를 보고 추가 튜닝하지 않았다.
+
+```sh
+PYTHONPATH=daemon python3 -m kg_collect --db data_store/kg_service.db gold data_store/gold/gold_heldout_v5.json --registry
+```
+
+| 평가셋 (--registry) | rules/1.5 (before) | rules/1.6 (after) |
+|---|---|---|
+| held-out v5 | P 0.818 / R 0.750 / F1 0.783 | **P 0.857 / R 1.000 / F1 0.923** |
+| TP / FP / FN | 9 / 2 / 3 | 12 / 2 / 0 |
+| 인식상태 정확도 | 1.000 | 1.000 |
+
+검증: 요청된 rules/1.5·1.6 + collect_extraction 59개 통과; rules/1.3·1.4 포함 72개 통과.
+
+## Phase 7 (2026-11-07): rules/1.7 — type/event nouns are not venues
+
+`팝업 레스토랑을 연다`처럼 매장 유형 명사만 목적어인 opening과, `레스토랑 출범이`처럼 사건 명사를 collab 파트너로 붙이는 FP를 막는다.
+`clean_venue`가 유형·사건 명사(레스토랑/식당/다이닝/출범/론칭 등)를 거절하고, collab은 셰프 또는 실제 식당명이 있을 때만 만든다. 합성 문장(`tests/test_extract_rules_17.py`)만으로 구현·검증한 뒤 held-out에는 추가 튜닝하지 않았다.
+
+```sh
+PYTHONPATH=daemon python3 -m kg_collect --db data_store/kg_service.db gold data_store/gold/gold_heldout_v5.json --registry
+PYTHONPATH=daemon python3 -m kg_collect --db data_store/kg_service.db gold data_store/gold/gold_heldout_v6.json --registry
+```
+
+| 평가셋 (--registry) | rules/1.6 (before) | rules/1.7 (after) |
+|---|---|---|
+| held-out v5 | P 0.857 / R 1.000 / F1 0.923 | **P 1.000 / R 1.000 / F1 1.000** |
+| TP / FP / FN | 12 / 2 / 0 | 12 / 0 / 0 |
+| 인식상태 정확도 | 1.000 | 1.000 |
+| **새 held-out v6** (11-06 저녁 수집·11-07 크롤 문장 15개, 정답 17항목, 라벨 선작성) | – | **P 0.786 / R 0.647 / F1 0.710** |
+
+v6 남은 오류(다음 개선 후보, 튜닝 금지 → 다음 held-out으로 검증): 갈라 디너 문장에서 셰프명 미부착 collab, 단축형 '문 셰프' 공지시 없는 mentorship/career, 레지스트리 짧은 별칭('모수')으로 '모수 서울' 고용 주장 표면형 불일치.
+검증: rules/1.5·1.6·1.7 + collect_extraction 70개 통과; held-out v4 (--registry) P/R/F1 1.0 유지.
+

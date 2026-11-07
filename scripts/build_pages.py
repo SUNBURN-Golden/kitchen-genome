@@ -22,7 +22,7 @@ def page(path,title,desc,body,ld):
 <link rel="alternate" type="application/rss+xml" title="키친 게놈" href="/rss.xml"><link rel="stylesheet" href="/style.css">
 <script type="application/ld+json">{json.dumps(ld,ensure_ascii=False).replace("</","<\\/")}</script></head><body>
 <header class="top"><div class="wrap bar"><a class="logo" href="/" aria-label="키친 게놈 홈">{LOGO}<span class="wm">키친 게놈<small>KITCHEN GENOME</small></span></a>
-<nav id="nav" aria-label="주요 메뉴"><a href="/">계보</a><a href="/directory/">디렉토리</a><a href="/#/rising">다음에 뜰 집</a><a href="/#/submit">제보</a><a href="/en{path}" hreflang="en" lang="en">EN</a></nav></div></header>
+<nav id="nav" aria-label="주요 메뉴"><a href="/">셰프 DNA 계보도</a><a href="/directory/">식당 목록</a><a href="/#/rising">다음에 뜰 집</a><a href="/#/submit">제보</a><a href="/en{path}" hreflang="en" lang="en">EN</a></nav></div></header>
 <main class="wrap">{body}</main>
 <footer class="wrap foot">키친 게놈 · 계보마다 출처와 확인일을 붙였어요. 틀린 곳이 있으면 <a href="/#/submit">제보</a>해 주세요.</footer><script src="/auth.js"></script></body></html>
 '''
@@ -82,7 +82,7 @@ def kpage(k):
     body=f'''<article class="card"><p class="muted">출신 주방</p><h1>{e(k['name'])} <small class="muted">{e(k.get('en',''))}</small></h1>
 <p class="lead">{e(desc)}</p><dl><dt>미쉐린</dt><dd>{e(k.get('michelin') or '미확인')}{(' · '+link(k['michelin_src'],'출처')) if k.get('michelin_src') else ''}</dd><dt>자료 확인일</dt><dd>{e(k.get('checked') or d['generated'])}</dd></dl>
 <h2>출신 셰프가 연 식당</h2><ul>{lis or '<li>아직 수집된 기록이 없어요</li>'}</ul>
-<p class="cta"><a class="btn p" href="/#/k/{e(k['id'])}">인터랙티브 계보도 보기</a> <a class="btn g" href="/directory/">전체 디렉토리</a></p></article>'''
+<p class="cta"><a class="btn p" href="/#/k/{e(k['id'])}">셰프 DNA 계보도 보기</a> <a class="btn g" href="/directory/">전체 식당 목록</a></p></article>'''
     ld={'@context':'https://schema.org','@type':'Restaurant','@id':BASE+path+'#kitchen','name':k['name'],'alternateName':k.get('en'),'url':BASE+path,
         'subjectOf':{'@type':'ItemList','numberOfItems':len(al),'itemListElement':[{'@type':'ListItem','position':i+1,'url':f'{BASE}/r/{r["id"]}/','name':r['name']} for i,r in enumerate(al)]}}
     return path,page(path,title,desc,body,ld)
@@ -91,9 +91,9 @@ def dirpage():
     sec=''.join(f'<section class="card"><h2><a href="/k/{k["id"]}/">{e(k["name"])}</a> <small class="muted">{sum(r.get("kitchen")==k["id"] for r in R)}곳</small></h2><ul>'+''.join(f'<li><a href="/r/{r["id"]}/">{e(r["name"])}</a> · {e(chef(r) or "셰프 미확인")}</li>' for r in R if r.get('kitchen')==k['id'])+'</ul></section>' for k in d['kitchens'])
     other=[r for r in R if r.get('kitchen') not in K]
     if other: sec+='<section class="card"><h2>출신 주방 미확인</h2><ul>'+''.join(f'<li><a href="/r/{r["id"]}/">{e(r["name"])}</a></li>' for r in other)+'</ul></section>'
-    body=f'<h1>디렉토리</h1><p class="lead">{e(desc)}</p>{sec}<p class="cta"><a class="btn p" href="/#/dir">인터랙티브 디렉토리</a></p>'
-    ld={'@context':'https://schema.org','@type':'CollectionPage','name':'키친 게놈 디렉토리','url':BASE+path}
-    return path,page(path,'셰프 계보 식당 디렉토리 | 키친 게놈',desc,body,ld)
+    body=f'<h1>식당 목록</h1><p class="lead">{e(desc)}</p>{sec}<p class="cta"><a class="btn p" href="/#/dir">식당 목록 (필터)</a></p>'
+    ld={'@context':'https://schema.org','@type':'CollectionPage','name':'키친 게놈 식당 목록','url':BASE+path}
+    return path,page(path,'셰프 계보 식당 목록 | 키친 게놈',desc,body,ld)
 for sub in ('r','k','directory'): shutil.rmtree(os.path.join(web,sub),ignore_errors=True)
 out=[rpage(r) for r in R]+[kpage(k) for k in d['kitchens']]+[dirpage()]
 for path,html in out:

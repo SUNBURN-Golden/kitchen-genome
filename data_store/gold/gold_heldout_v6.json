@@ -1,0 +1,242 @@
+{
+ "_note": "FRESH HELD-OUT v6: sentences from documents/findings fetched around 2026-11-06 evening collect and 2026-11-07 morning crawl (fnnews 문성오 갈라, 빌롱 openings, 손종원/이타닉, SSG×알렌, 모수 이전/운영, macro 폐업 noise). Labelled by Kitchen Genome self-improvement check at 2026-11-07 ~09:20 KST BEFORE any rules/1.7 change was measured on this file (rules/1.7 itself was developed only on synthetic tests). Conventions as v5: search_lead->unverified; product 협업/출시 with chef of R->collab; 팝업 레스토랑 ‘X’을/를 연다->opening; gala 디너->collab; dual 겸하고/이끄는->employment_claim per venue; 폐업 아닌 이전->relocation; type/event nouns (레스토랑/출범) alone are not venues; macro 폐업 stats->[].",
+ "targets": [],
+ "sentences": [
+  {
+   "text": "CJ제일제당의 한식 셰프 발굴·육성 플랫폼 ‘퀴진케이(Cuisine. K)’가 열 번째 팝업 레스토랑 ‘빌롱(Belong)’을 연다.",
+   "host": "fntimes.com",
+   "published_at": "2026-10-02",
+   "tier": "press",
+   "url": "https://www.fntimes.com/",
+   "expect": [
+    {
+     "label": "opening",
+     "chef": null,
+     "restaurant": "빌롱",
+     "epistemic": "claim"
+    }
+   ]
+  },
+  {
+   "text": "CJ제일제당은 차세대 한식 셰프 발굴·육성 플랫폼 '퀴진케이(Cuisine. K)'의 열 번째 팝업 레스토랑 '빌롱(Belong)'을 오는 7일 오픈한다고 2일 밝혔다.",
+   "host": "etnews.com",
+   "published_at": "2026-10-02",
+   "tier": "press",
+   "url": "https://www.etnews.com/20261002000016",
+   "expect": [
+    {
+     "label": "opening",
+     "chef": null,
+     "restaurant": "빌롱",
+     "epistemic": "claim"
+    }
+   ]
+  },
+  {
+   "text": "조선호텔앤리조트의 손종원 셰프가 이끄는 한식당 '이타닉 가든'과 양식당 '라망 시크레'가 미쉐린 1스타를 또 다시 획득했다.",
+   "host": "bing.com",
+   "published_at": null,
+   "tier": "search_lead",
+   "url": "https://bing.com/news",
+   "expect": [
+    {
+     "label": "employment_claim",
+     "chef": "손종원",
+     "restaurant": "이타닉 가든",
+     "epistemic": "unverified"
+    },
+    {
+     "label": "employment_claim",
+     "chef": "손종원",
+     "restaurant": "라망 시크레",
+     "epistemic": "unverified"
+    }
+   ]
+  },
+  {
+   "text": "[서울=뉴시스]김상윤 기자 = 서울신라호텔이 23년 경력의 문성오 셰프가 선보이는 스시 오마카세와 프리미엄 주류를 함께 즐길 수 있는 갈라 디너를 마련한다고 16일 밝혔다.",
+   "host": "fnnews.com",
+   "published_at": "2026-10-16",
+   "tier": "press",
+   "url": "https://fnnews.com/news/202610160851308398",
+   "expect": [
+    {
+     "label": "collab",
+     "chef": "문성오",
+     "restaurant": null,
+     "epistemic": "claim"
+    }
+   ]
+  },
+  {
+   "text": "서울신라호텔에 따르면 23일 일식당 '아리아께'에서는 문성오 스시 카운터 헤드 셰프의 스시 갈라 디너가 진행된다.",
+   "host": "fnnews.com",
+   "published_at": "2026-10-16",
+   "tier": "press",
+   "url": "https://fnnews.com/news/202610160851308398",
+   "expect": [
+    {
+     "label": "employment_claim",
+     "chef": "문성오",
+     "restaurant": "아리아께",
+     "epistemic": "claim"
+    },
+    {
+     "label": "collab",
+     "chef": "문성오",
+     "restaurant": "아리아께",
+     "epistemic": "claim"
+    }
+   ]
+  },
+  {
+   "text": "문 셰프는 2014년부터 아리아께를 이끌었던 모리타 셰프에게 정통 에도마에 스시를 전수받았으며 2017년 일본 도쿄의 스시 전문점 '기요다 스시'에서 연수를 받았다.",
+   "host": "fnnews.com",
+   "published_at": "2026-10-16",
+   "tier": "press",
+   "url": "https://fnnews.com/news/202610160851308398",
+   "expect": [
+    {
+     "label": "mentorship_claim",
+     "chef": null,
+     "restaurant": "모리타",
+     "epistemic": "claim"
+    },
+    {
+     "label": "career",
+     "chef": null,
+     "restaurant": "기요다 스시",
+     "epistemic": "claim"
+    }
+   ]
+  },
+  {
+   "text": "SSG닷컴, 미쉐린 가이드 2스타 ‘알렌’ 서현민 셰프와 단독 협업상품 출시",
+   "host": "bing.com",
+   "published_at": null,
+   "tier": "search_lead",
+   "url": "https://bing.com/news",
+   "expect": [
+    {
+     "label": "collab",
+     "chef": "서현민",
+     "restaurant": "알렌",
+     "epistemic": "unverified"
+    }
+   ]
+  },
+  {
+   "text": "SSG닷컴이 미쉐린 가이드 2스타 레스토랑 ‘알렌’의 서현민 셰프와 협업한 스테이크·에그생면 파스타 3종을 선보인다.",
+   "host": "bing.com",
+   "published_at": null,
+   "tier": "search_lead",
+   "url": "https://bing.com/news",
+   "expect": [
+    {
+     "label": "collab",
+     "chef": "서현민",
+     "restaurant": "알렌",
+     "epistemic": "unverified"
+    }
+   ]
+  },
+  {
+   "text": "[현장] 국내 유일 미쉐린 3스타 '모수'…\"폐업 아닌 이전, 한식 대표할 것\"",
+   "host": "bing.com",
+   "published_at": null,
+   "tier": "search_lead",
+   "url": "https://bing.com/news",
+   "expect": [
+    {
+     "label": "relocation",
+     "chef": null,
+     "restaurant": "모수",
+     "epistemic": "unverified"
+    }
+   ]
+  },
+  {
+   "text": "안성재 셰프가 운영하는 파인다이닝 레스토랑 ‘모수 서울’을 찾은 한 손님이 ‘와인 바꿔치기’ 피해를 당했다고 밝혔다.",
+   "host": "bing.com",
+   "published_at": null,
+   "tier": "search_lead",
+   "url": "https://bing.com/news",
+   "expect": [
+    {
+     "label": "employment_claim",
+     "chef": "안성재",
+     "restaurant": "모수 서울",
+     "epistemic": "unverified"
+    }
+   ]
+  },
+  {
+   "text": "조선호텔앤리조트의 최상급 호텔 ‘조선 팰리스 서울 강남, 럭셔리 컬렉션 호텔의 ‘이타닉 가든’이 한 달 여간의 준비를 마치고 리뉴얼 오픈한다.",
+   "host": "bing.com",
+   "published_at": null,
+   "tier": "search_lead",
+   "url": "https://bing.com/news",
+   "expect": [
+    {
+     "label": "opening",
+     "chef": null,
+     "restaurant": "이타닉 가든",
+     "epistemic": "unverified"
+    }
+   ]
+  },
+  {
+   "text": "손종원 셰프는 조선호텔앤리조트 소속으로 조선팰리스 '이타닉가든'과 레스케이프 호텔 '라망 시크레'의 헤드 셰프를 겸하고 있다.",
+   "host": "indinews.co.kr",
+   "published_at": "2026-10-24",
+   "tier": "press",
+   "url": "https://www.indinews.co.kr/news/articleView.html?idxno=13646",
+   "expect": [
+    {
+     "label": "employment_claim",
+     "chef": "손종원",
+     "restaurant": "이타닉가든",
+     "epistemic": "claim"
+    },
+    {
+     "label": "employment_claim",
+     "chef": "손종원",
+     "restaurant": "라망 시크레",
+     "epistemic": "claim"
+    }
+   ]
+  },
+  {
+   "text": "지난해 폐업 신고를 한 사업자 수가 100만명에 육박해 통계 집계 이래 최대인 것으로 나타났다.",
+   "host": "bing.com",
+   "published_at": null,
+   "tier": "search_lead",
+   "url": "https://bing.com/news",
+   "expect": []
+  },
+  {
+   "text": "폐업신고방법은 사업을 그만두려는 사업자가 관할 세무서나 홈택스를 통해 사업자등록을 정리하는 절차를 가리킨다.",
+   "host": "bing.com",
+   "published_at": null,
+   "tier": "search_lead",
+   "url": "https://bing.com/news",
+   "expect": []
+  },
+  {
+   "text": "서울신라호텔 관계자는 \"이번 갈라 디너는 문성오 셰프가 쌓아온 오랜 경험과 아리아께의 정통성을 가장 가까이에서 만날 수 있는 특별한 자리가 될 것\"이라고 말했다.",
+   "host": "fnnews.com",
+   "published_at": "2026-10-16",
+   "tier": "press",
+   "url": "https://fnnews.com/news/202610160851308398",
+   "expect": [
+    {
+     "label": "collab",
+     "chef": "문성오",
+     "restaurant": "아리아께",
+     "epistemic": "claim"
+    }
+   ]
+  }
+ ],
+ "resolve": []
+}
