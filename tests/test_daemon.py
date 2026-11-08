@@ -423,3 +423,56 @@ def test_close_superseded_runs_repairs_legacy_rows_and_keeps_live_or_final_ones(
     assert row('run_stale') == ('abandoned', '2026-10-28T01:55:26Z')
     assert row('run_failed') == ('failed', '2026-10-27T01:05:00Z')                      # final statuses are history, untouched
     assert row('run_other') == ('running', None)                                        # another daemon's chain is its own business
+
+
+
+def test_vault_body_omits_null_provenance_but_keeps_set_flags():
+    """#75 added pending_only/asserted_by/extractor/collector_account to every vault body as null,
+    which changed the content hash of unchanged articles and flooded source_modified reviews."""
+    from kg_daemon.stages import _vault_body
+    rec = json.load(open(os.path.join(FIX, 'vault_minimal.json'), encoding='utf-8'))['records'][0]
+    old = {k: rec.get(k) for k in ('target_id', 'kind', 'title', 'published_at', 'extracted_facts', 'evidence_locator')}
+    body = _vault_body(rec)
+    assert body == old
+    assert 'pending_only' not in body and 'asserted_by' not in body
+    rec2 = {**rec, 'pending_only': True, 'asserted_by': 'ai_inference'}
+    body2 = _vault_body(rec2)
+    assert body2['pending_only'] is True and body2['asserted_by'] == 'ai_inference'
+    assert json.dumps(body, ensure_ascii=False, sort_keys=True) != json.dumps(body2, ensure_ascii=False, sort_keys=True)
+
+
+def test_reingesting_pre_provenance_vault_record_is_not_source_modified(world):
+    """A document stored before the provenance envelope, with an already-applied fact, must not
+    look like a source edit when the same vault article is ingested again."""
+    import hashlib
+    from kg_daemon.claims import create_claim
+    from kg_daemon.db import stable_id
+    from kg_daemon.stages import canonicalize_url
+
+    c, env, _ = world
+    rec = json.load(open(env['vault_path'], encoding='utf-8'))['records'][0]
+    old_body = {k: rec.get(k) for k in ('target_id', 'kind', 'title', 'published_at', 'extracted_facts', 'evidence_locator')}
+    content = json.dumps(old_body, ensure_ascii=False, sort_keys=True)
+    h = hashlib.sha256(content.encode()).hexdigest()
+    sid = 'press_articles'
+    canon = canonicalize_url(rec['url']) + f"#target={rec.get('target_id')}&kind={rec.get('kind')}"
+    did = stable_id('doc', sid, canon, h)
+    c.execute(
+        "INSERT INTO document(document_id,source_id,url,canonical_url,content_hash,fetched_at,published_at) VALUES (?,?,?,?,?,?,?)",
+        (did, sid, rec['url'], canon, h, '2026-10-28', rec.get('published_at')),
+    )
+    claim_id = create_claim(c, 'status_event', 'source_claim', 'test')
+    c.execute(
+        """INSERT INTO candidate_fact(candidate_id,idempotency_key,document_id,source_id,fact_type,payload_json,evidence_json,extractor,asserted_by,resolution,applied_claim_id,created_at)
+           VALUES (?,?,?,?,?,?,?,?,?,?,?,?)""",
+        ('cnd_old', 'idem_old', did, sid, 'closure', '{}', '{}', 'rule:test', 'source', 'resolved', claim_id, '2026-10-28T00:00:00Z'),
+    )
+    c.execute(
+        "INSERT INTO change_event(change_id,document_id,prev_document_id,change_kind,run_id,created_at) VALUES (?,?,?,?,?,?)",
+        ('chg_old', did, None, 'new', None, '2026-10-28T00:00:00Z'),
+    )
+    c.commit()
+    before = c.execute("SELECT COUNT(*) FROM review_queue WHERE reason='source_modified'").fetchone()[0]
+    daemon(c, env).run()
+    assert c.execute("SELECT COUNT(*) FROM document WHERE url=?", (rec['url'],)).fetchone()[0] == 1
+    assert c.execute("SELECT COUNT(*) FROM review_queue WHERE reason='source_modified'").fetchone()[0] == before

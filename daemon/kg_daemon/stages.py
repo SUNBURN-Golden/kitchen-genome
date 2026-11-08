@@ -60,6 +60,20 @@ def source_discovery(ctx: StageContext) -> StageResult:
 
 
 # ───────────── 2. incremental fetch ─────────────
+_CONTENT_BODY_KEYS = ('target_id', 'kind', 'title', 'published_at', 'extracted_facts', 'evidence_locator')
+_PROVENANCE_BODY_KEYS = ('pending_only', 'asserted_by', 'extractor', 'collector_account')
+
+
+def _vault_body(rec: dict) -> dict:
+    """Document body for a vault record. Provenance keys ride along only when set, so adding the
+    envelope (as of #75, often with all-null values) does not change the content hash of an unchanged article."""
+    body = {k: rec.get(k) for k in _CONTENT_BODY_KEYS}
+    for k in _PROVENANCE_BODY_KEYS:
+        if rec.get(k) is not None:
+            body[k] = rec[k]
+    return body
+
+
 def _vault_by_source(ctx) -> dict:
     """crawler/vault.json holds records of every tier; route each to its registry source (tier -> source) once per run."""
     out: dict = {}
@@ -69,7 +83,7 @@ def _vault_by_source(ctx) -> dict:
     for rec in json.load(open(path, encoding='utf-8')).get('records', []):
         tier = rec.get('source_tier') or 'search_lead'
         sid = 'manual_clip' if rec.get('collection_path') == 'manual_clip' else reg_mod.TIER_TO_SOURCE.get(tier, 'search_leads')
-        body = {k: rec.get(k) for k in ('target_id', 'kind', 'title', 'published_at', 'extracted_facts', 'evidence_locator', 'pending_only', 'asserted_by', 'extractor', 'collector_account')}
+        body = _vault_body(rec)
         # one article can back several target records: identity is (url, target, kind) so they are not mistaken for edits of each other
         out.setdefault(sid, []).append({'url': rec['url'], 'doc_key': f"#target={rec.get('target_id')}&kind={rec.get('kind')}",
                                         'published_at': rec.get('published_at'), 'body': body, 'collected_at': rec.get('collected_at')})
