@@ -141,7 +141,9 @@ PAREN = re.compile(r'\s?\(([^()]{1,40})\)')
 LIST_SEP = re.compile(r'^\s?[\'’"”」』]?\s?(?:(?:,|，|과|와|·|ㆍ|/|및|그리고|,\s?그리고|,\s?및)\s?(?:[\'‘"“「『]|(?:[가-힣A-Za-z]{1,10}\s){1,2}[\'‘"“「『])?|(?:(?:오너|총괄|헤드|수석)\s?)?(?:셰프|쉐프)?\s?겸\s?)\s?$')
 # '이타닉가든'과 레스케이프 호텔 '라망 시크레' (descriptor words allowed only before a QUOTED next item) / 'A 헤드 셰프 겸 B'
 PARTICLE_START = set('은는이가을를의에도와과로으만부까처랑나엔')
-AFTER_UI_KEEP = re.compile(r'^\s?(?:' + ROLE_RE + r'|메뉴|코스|오너|대표|주방|디저트|매장|지점|분점|팝업|레스토랑|식당|공동|새|신임|전\s|前|창업자|설립자|운영자|헤드|총괄|수석|파티시에)')
+# '노을의 갈라 디너' names the venue. '재료 온기의 맛' does not: only a role or an event noun keeps a short name.
+_EVENT_AFTER_UI = r'(?:스페셜|특별|와인|갈라|게스트)?\s?(?:갈라|디너|만찬|런치|협업|콜라보|게스트|페어링|마리아주|행사|이벤트)'
+AFTER_UI_KEEP = re.compile(r'^\s?(?:' + ROLE_RE + r'|메뉴|코스|오너|대표|주방|디저트|매장|지점|분점|팝업|레스토랑|식당|공동|새|신임|전\s|前|창업자|설립자|운영자|헤드|총괄|수석|파티시에|' + _EVENT_AFTER_UI + r')')
 SHORT_REF = re.compile(r'(?<![가-힣A-Za-z])([가-힣]{1,2})\s?(?:셰프|쉐프)(?![가-힣]{0,1}들)')
 
 
@@ -270,6 +272,27 @@ def nearest_before(items: list, pos: int):
     """Chef mention closest before `pos` (else the first one after). Mentions are dicts with start/end/surface."""
     before = [i for i in items if i['end'] <= pos]
     return before[-1] if before else (items[0] if items else None)
+
+
+_COORD_GAP = re.compile(r'^(?:\s?(?:셰프|쉐프|오너|총괄|헤드|수석|씨))?\s*(?:와|과|,|，|·|및|그리고)\s*(?:(?:오너|총괄|헤드|수석)\s?)?(?:셰프|쉐프)?\s*$')
+
+
+def surface_at(items, pos: int, sent: str | None = None):
+    """Name the cue is about.
+
+    A coordinated subject ('한도윤 셰프와 서하람 셰프가') keeps its first name, which is the
+    participant the record has always stored. A person in an earlier clause ('김하늘이 사회를
+    보고 임지훈이 협업한다') is a bystander and is not substituted for the name beside the verb.
+    """
+    ordered = sorted(items, key=lambda x: x['start'])
+    hit = nearest_before(ordered, pos)
+    if not hit:
+        return None
+    i = ordered.index(hit)
+    if sent is not None:
+        while i > 0 and _COORD_GAP.match(sent[ordered[i - 1]['end']:ordered[i]['start']]):
+            i -= 1
+    return ordered[i]['surface']
 
 
 BARE_ORG_STOP = {'호텔', '해외', '국내', '한식', '양식', '일식', '중식', '프렌치', '이탈리안', '유명', '대형', '현지', '명문', '요리', '학교', '조리', '대학', '업계', '외식', '미쉐린', '미슐랭',
@@ -444,7 +467,7 @@ def extract_text(text: str, *, gaz, host: str, published_at: str | None = None, 
             pv = QUOTED_VENUE.search(sent) or re.search(r'[‘\'“"]([^’\'”"]{2,30})[’\'”"]', sent[popup.start():])
             pname = next((r['surface'] for r in rests if r['start'] >= popup.start()), None) or (clean_venue(pv.group(1)) if pv else None)
             if pname:
-                mk('career', chef=chef_names[0], org=pname, anchor=popup.start(), extra={'venue_format': 'popup'})
+                mk('career', chef=surface_at(list(chefs) + list(new_chefs), popup.start(), sent), org=pname, anchor=popup.start(), extra={'venue_format': 'popup'})
                 continue
         # ── collab / co-working first: they veto employment readings ──
         is_collab = bool(hits['collab'])
@@ -453,13 +476,13 @@ def extract_text(text: str, *, gaz, host: str, published_at: str | None = None, 
             qcv = None if rests else QUOTED_VENUE.search(sent)      # 'X 2스타 레스토랑 ‘R’의 Y 셰프와 협업': an unregistered quoted venue is still the partner restaurant
             if not rests and not qcv:
                 qcv = next((m for m in QUOTED_NAME.finditer(sent) if any(m.end() <= c['start'] and SIDE_GAP.match(sent[m.end():c['start']]) for c in chefs + new_chefs)), None)
-            collab_rest = rests[0]['surface'] if rests else (clean_venue(qcv.group(1)) if qcv else (clean_venue(scv.group(1)) if scv else None))
+            collab_rest = surface_at(rests, hits['collab'].start(), sent) if rests else (clean_venue(qcv.group(1)) if qcv else (clean_venue(scv.group(1)) if scv else None))
             # Need a chef and/or a real venue name; '레스토랑 출범이' / bare type nouns are not partners.
             if chef_names or collab_rest:
-                mk('collab', chef=chef_names[0] if chef_names else None, rest=collab_rest, anchor=hits['collab'].start(),
+                mk('collab', chef=surface_at(list(chefs) + list(new_chefs), hits['collab'].start(), sent), rest=collab_rest, anchor=hits['collab'].start(),
                    extra={'collab_kind': 'guest_event'})
         if hits['co_worker'] and not hits['mentor'] and (chef_names or rests):
-            mk('collab', chef=chef_names[0] if chef_names else None, rest=rests[0]['surface'] if rests else None, anchor=hits['co_worker'].start(),
+            mk('collab', chef=surface_at(list(chefs) + list(new_chefs), hits['co_worker'].start(), sent), rest=surface_at(rests, hits['co_worker'].start(), sent), anchor=hits['co_worker'].start(),
                extra={'collab_kind': 'co_worker'}, ambiguity=None)
         if hits['mentor'] and (chefs or new_chefs):
             allc = sorted([c for c in chefs] + new_chefs, key=lambda x: x['start'])
