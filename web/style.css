@@ -46,6 +46,7 @@ h3{font-size:clamp(1.125rem,1rem + .5vw,1.25rem);line-height:1.4}
 .chip.on{border-color:var(--accent);color:var(--accent);font-weight:600}
 .tag{display:inline-block;font-size:12px;padding:0 var(--s1);border-radius:8px;border:1px solid var(--line);color:var(--ink-2);margin-left:var(--s1);vertical-align:middle}
 .tag.v{border-color:var(--accent);color:var(--accent)}
+.tag.ai{margin-left:0;border-style:dashed}
 .legend{display:flex;gap:var(--s3);font-size:var(--f-s);color:var(--ink-2);margin:var(--s1) 0}
 .legend i{display:inline-block;width:24px;border-top:2px solid var(--accent);vertical-align:middle;margin-right:var(--s1)}
 .legend i.d{border-top:2px dashed var(--dash)}

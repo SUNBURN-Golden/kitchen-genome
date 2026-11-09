@@ -89,7 +89,9 @@ def normalize_finding(raw, text):
     elif len(starts) == 1:
         span = (starts[0], starts[0] + len(quote))
     elif len(starts) > 1:
-        raise TaskReject('offset_ambiguous', 'occurrences=' + str(min(len(starts), 9)))
+        # The identical quote repeats (titles, captions, syndicated leads). Keep the first occurrence instead of
+        # aborting the document; the review stage sees every occurrence and rejects if they support different claims.
+        span = (starts[0], starts[0] + len(quote))
     else:
         raise TaskReject('offset_invalid')
     out = {key: None for key in NULLABLE}
@@ -101,6 +103,8 @@ def normalize_finding(raw, text):
             kind = 'name_invalid' if key in ('chef_text', 'restaurant_text', 'org_text', 'role_text') else 'field_invalid'
             raise TaskReject(kind, 'field=' + key)
         out[key] = raw[key]
+    if len(starts) > 1 and out['ambiguity'] is None:
+        out['ambiguity'] = 'quote_repeats=' + str(min(len(starts), 9))
     for key in ('chef_text', 'restaurant_text', 'org_text', 'role_text'):
         if out[key] is not None and out[key].casefold() not in text.casefold():
             raise TaskReject('name_absent', 'field=' + key)
