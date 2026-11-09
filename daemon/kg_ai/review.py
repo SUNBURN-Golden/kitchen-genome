@@ -1,0 +1,375 @@
+"""DeepSeek review stage: open ai_inference findings are reviewed and either published or closed.
+
+Owner decision 2026-11-09: AI findings must not pile up as pending. Each open finding is
+checked deterministically first (stored source text, verbatim quote, names present), then
+reviewed by DeepSeek (deepseek-chat, thinking disabled, temperature 0, JSON). Approved findings
+are written to data/seed.json under `ai_reviewed` on the matching restaurant/kitchen (or the
+top-level `ai_reviewed_unlinked` list) with the source URL and an 'AI 검토' badge. Every
+decision is appended to data/ai_review_log.jsonl; scripts/ai_review_rollback.py undoes it.
+Rejected findings are closed (review_queue.state='dismissed') with the reason.
+
+Only the verbatim quote is ever published; model text is never published. Core seed fields
+(chef, kitchen, closed_at, ...) are never modified. Cost counts within KG_AI_DAILY_COST_CAP.
+"""
+import argparse
+import datetime as dt
+import json
+import os
+import re
+import sys
+import unicodedata
+
+from kg_ai.budget import Budget
+from kg_ai.deepseek import RETRYABLE, Client, DeepSeekError, reservation_tokens
+from kg_daemon.db import ROOT, connect, migrate, new_id, utcnow
+from kg_daemon.runner import CostCapExceeded, CostMeter
+
+_CRAWLER = os.path.join(ROOT, 'crawler')
+if _CRAWLER not in sys.path:
+    sys.path.insert(0, _CRAWLER)
+from privacy_filter import sanitize_before_store  # noqa: E402
+
+TASK = 'ai-review-1'
+DAEMON = 'kg-ai-review'
+BADGE = 'AI 검토'
+MAX_BATCH = 8
+CONTEXT = 160
+MAX_OCC = 3
+LABEL_KO = {'career': '경력', 'employment_claim': '근무', 'opening': '오픈', 'closure': '폐업', 'relocation': '이전',
+            'rename': '이름 변경', 'menu': '메뉴', 'collab': '협업', 'mentorship_claim': '사사'}
+UNIT_COSTS = {'http_request': 1.0, 'llm_tokens_k': 0.5, 'db_write': 0.0}
+INSTRUCTION = (
+    'You review machine-extracted culinary findings before they are published on a Korean chef-lineage site. '
+    'Input: {"url","published_at","findings":[{"id","label","chef_text","restaurant_text","org_text","role_text","date_text","quote","occurrences":[source excerpts around each place the quote appears],"site_record"}]}. '
+    'For EACH finding return {"id","decision":"approve"|"reject","reason":"short English reason"}. Output exactly {"reviews":[...]} with one entry per input id. '
+    'Approve ONLY when ALL hold: (1) the excerpts show the quote states this finding about real people and real restaurants '
+    '(reject TV drama, film, novel, game, fictional characters, actors playing roles, or competition-show mock restaurants); '
+    '(2) every given field (chef_text, restaurant_text, org_text, role_text, date_text) is supported by the excerpt and attached to the right person and place '
+    '(reject when the role, chef, or restaurant belongs to a different sentence, person, or place); '
+    '(3) the label fits what the quote says (opening means a restaurant opened, closure means it actually closed, collab is a real collaboration, '
+    'menu is a dish/menu/program of that restaurant, employment_claim/career is a real job at that place); planned, rumoured, or "near closure" is not closure; '
+    '(4) when the quote occurs more than once, every occurrence supports the same claim; '
+    '(5) nothing contradicts site_record (the already-published data); if site_record is null there is nothing to contradict. '
+    'Shared employment is not mentorship. Judge only from the supplied text; never use outside knowledge to add facts. Reject when unsure.'
+)
+
+
+def kst_now():
+    return dt.datetime.now(dt.timezone(dt.timedelta(hours=9))).strftime('%Y-%m-%dT%H:%M:%S+09:00')
+
+
+def _norm(s):
+    return re.sub(r'\s+', '', unicodedata.normalize('NFC', s or '')).casefold()
+
+
+def source_text(raw_dir, text_ref):
+    """The text the extractor validated offsets against: NFC(sanitize(raw[:12000])); also the full raw text."""
+    if not text_ref:
+        return None, None
+    path = os.path.join(raw_dir, text_ref)
+    if not os.path.isfile(path):
+        return None, None
+    raw = open(path, encoding='utf-8').read()
+    clean, _ = sanitize_before_store(raw[:12000])
+    return unicodedata.normalize('NFC', clean or ''), unicodedata.normalize('NFC', raw)
+
+
+def occurrences(text, quote, limit=9):
+    out, pos = [], 0
+    while len(out) < limit:
+        i = text.find(quote, pos)
+        if i < 0:
+            break
+        out.append(i)
+        pos = i + 1
+    return out
+
+
+def precheck(f, text):
+    """Deterministic gate. Returns (reject_reason | None, [occurrence excerpts])."""
+    if text is None:
+        return 'source_unavailable: stored source text missing', []
+    q = f['quote'] or ''
+    occ = occurrences(text, q)
+    if not q or not occ:
+        return 'quote_not_in_source: quote is not verbatim in the stored source', []
+    for k in ('chef_text', 'restaurant_text', 'org_text', 'role_text'):
+        if f.get(k) and f[k].casefold() not in text.casefold():
+            return f'name_absent: {k} not in source', []
+    if f.get('date_text') and f['date_text'] not in text:
+        return 'date_not_verbatim: date not in source', []
+    return None, [text[max(0, i - CONTEXT): i + len(q) + CONTEXT] for i in occ[:MAX_OCC]]
+
+
+class Site:
+    """Matches a finding to a published seed restaurant/kitchen. Exact (whitespace/case-folded) names only."""
+
+    def __init__(self, seed):
+        self.seed = seed
+        self.by_name = {}
+        for k in seed.get('kitchens', []):
+            for n in (k.get('name'), k.get('en'), k.get('name_en')):
+                if n:
+                    self.by_name.setdefault(_norm(n), []).append(('kitchen', k))
+        for r in seed.get('restaurants', []):
+            for n in [r.get('name'), r.get('name_en')] + list(r.get('prev_names') or []):
+                if n:
+                    self.by_name.setdefault(_norm(n), []).append(('restaurant', r))
+        self.by_chef = {}
+        for r in seed.get('restaurants', []):
+            if r.get('chef'):
+                self.by_chef.setdefault(_norm(r['chef']), []).append(('restaurant', r))
+
+    def match(self, f):
+        for key in ('restaurant_text', 'org_text'):
+            hits = {id(x[1]): x for x in self.by_name.get(_norm(f.get(key)), [])} if f.get(key) else {}
+            if len(hits) == 1:
+                return next(iter(hits.values()))
+            rest = [x for x in hits.values() if x[0] == 'restaurant']
+            if len(rest) == 1:                    # a kitchen and its own restaurant page share the name: the restaurant page carries it
+                return rest[0]
+        if f.get('chef_text') and not f.get('restaurant_text'):
+            hits = self.by_chef.get(_norm(f['chef_text']), [])
+            if len(hits) == 1:
+                return hits[0]
+        return None
+
+    @staticmethod
+    def record(m):
+        if not m:
+            return None
+        kind, x = m
+        keys = ('id', 'name', 'name_en', 'en', 'chef', 'role', 'kitchen', 'opened', 'closed_at', 'area', 'cuisine', 'michelin')
+        rec = {k: x[k] for k in keys if x.get(k) not in (None, '')}
+        rec['kind'] = kind
+        if x.get('chef_career'):
+            rec['chef_career'] = [c.get('text') for c in x['chef_career']][:6]
+        return rec
+
+
+def validate_reviews(ids):
+    def check(obj):
+        if not isinstance(obj, dict) or not isinstance(obj.get('reviews'), list):
+            raise ValueError()
+        out = {}
+        for r in obj['reviews']:
+            if not isinstance(r, dict) or r.get('id') not in ids or r['id'] in out:
+                raise ValueError()
+            if r.get('decision') not in ('approve', 'reject') or not isinstance(r.get('reason'), str):
+                raise ValueError()
+            out[r['id']] = {'decision': r['decision'], 'reason': re.sub(r'[\x00-\x1f]', ' ', r['reason'])[:200]}
+        if set(out) != set(ids):
+            raise ValueError()
+        return out
+    return check
+
+
+def open_items(conn):
+    """Open ai_inference extraction reviews (oldest first) joined with their source fetch."""
+    return conn.execute("""SELECT q.review_id, q.created_at q_created, e.*, f.text_ref, f.url fetch_url FROM review_queue q
+                           JOIN extraction e ON e.extraction_id=q.subject_id JOIN fetch_record f ON f.fetch_id=e.fetch_id
+                           WHERE q.reason='ai_inference' AND q.subject_type='extraction' AND q.state='open'
+                           ORDER BY q.created_at, q.rowid""").fetchall()
+
+
+def _close(conn, review_id, decision, reason, meta, now):
+    row = conn.execute('SELECT payload_json FROM review_queue WHERE review_id=?', (review_id,)).fetchone()
+    p = json.loads(row['payload_json'] or '{}')
+    p['ai_review'] = {'decision': decision, 'reason': reason, 'at': now, **({'model_meta': meta} if meta else {})}
+    conn.execute('UPDATE review_queue SET state=?, resolved_at=?, payload_json=? WHERE review_id=? AND state=\'open\'',
+                 ('resolved' if decision == 'approve' else 'dismissed', now, json.dumps(p, ensure_ascii=False, sort_keys=True), review_id))
+
+
+def close_linked_candidates(conn, now):
+    """candidate_fact ai_inference reviews follow the decision already taken on their source extraction."""
+    n = 0
+    for r in conn.execute("""SELECT q.review_id, c.candidate_id, json_extract(c.evidence_json,'$.locator.extraction_id') ext FROM review_queue q
+                             JOIN candidate_fact c ON c.candidate_id=q.subject_id
+                             WHERE q.reason='ai_inference' AND q.subject_type='candidate_fact' AND q.state='open'""").fetchall():
+        if not r['ext']:
+            continue
+        src = conn.execute("""SELECT state, json_extract(payload_json,'$.ai_review.decision') d, json_extract(payload_json,'$.ai_review.reason') why
+                              FROM review_queue WHERE reason='ai_inference' AND subject_type='extraction' AND subject_id=?""", (r['ext'],)).fetchone()
+        if not src or not src['d']:
+            continue
+        _close(conn, r['review_id'], src['d'], f"follows extraction {r['ext']}: {src['why']}", None, now)
+        if src['d'] == 'reject':
+            conn.execute("UPDATE candidate_fact SET resolution='rejected' WHERE candidate_id=?", (r['candidate_id'],))
+        n += 1
+    conn.commit()
+    return n
+
+
+def publish(seed, site, f, review_id, now):
+    """Add the verbatim quote under the matched restaurant/kitchen (or the unlinked list). Idempotent."""
+    m = site.match(f)
+    entry = {'label': f['label'], 'label_ko': LABEL_KO.get(f['label'], f['label']), 'quote': f['quote'], 'src': f['canonical_url'],
+             'date': f['published_at'], 'chef': f['chef_text'], 'restaurant': f['restaurant_text'] or f['org_text'],
+             'provenance': 'ai_reviewed', 'badge': BADGE, 'extraction_id': f['extraction_id'], 'review_id': review_id, 'reviewed_at': now}
+    if m:
+        lst = m[1].setdefault('ai_reviewed', [])
+        target = f'{m[0]}:{m[1]["id"]}'
+    else:
+        lst = seed.setdefault('ai_reviewed_unlinked', [])
+        target = 'unlinked'
+    if any(x['extraction_id'] == f['extraction_id'] or (x['quote'] == f['quote'] and x['label'] == f['label']) for x in lst):
+        return target, False
+    lst.append(entry)
+    return target, True
+
+
+def append_log(path, rec):
+    with open(path, 'a', encoding='utf-8') as fh:
+        fh.write(json.dumps(rec, ensure_ascii=False, sort_keys=True) + '\n')
+
+
+def _start_run(conn, cap):
+    rid = new_id('run')
+    conn.execute('INSERT INTO daemon_run(run_id,daemon,status,trigger,cost_cap_units,started_at) VALUES (?,?,?,?,?,?)',
+                 (rid, DAEMON, 'running', 'daily', cap, utcnow()))
+    conn.commit()
+    return rid
+
+
+def review(conn, seed_path, log_path, raw_dir, *, client=None, daily_cap=None, limit=None):
+    daily_cap = float(os.environ.get('KG_AI_DAILY_COST_CAP', '20') if daily_cap is None else daily_cap)
+    daily_cap = max(0.0, min(20.0, daily_cap))
+    now = utcnow()
+    stats = {'approved': 0, 'rejected': 0, 'published': 0, 'prechecked_rejects': 0, 'calls': 0, 'stopped': None, 'candidates_closed': 0}
+    stats['candidates_closed'] += close_linked_candidates(conn, now)
+    items = open_items(conn)
+    if limit:
+        items = items[:limit]
+    if not items:
+        stats['remaining'] = 0
+        return stats
+    seed = json.load(open(seed_path, encoding='utf-8'))
+    site = Site(seed)
+    run_id = _start_run(conn, daily_cap)
+    meter = CostMeter(conn, run_id, daily_cap, UNIT_COSTS)
+    meter.stage = 'ai_review'
+    if client is None:
+        client = Client(Budget(meter, daily_cap=daily_cap))
+    else:
+        client.budget.meter, client.budget.conn = meter, conn
+    seed_changed = False
+
+    def decide(f, decision, reason, meta):
+        nonlocal seed_changed
+        ts = utcnow()
+        rec = {'at': ts, 'at_kst': kst_now(), 'action': decision, 'review_id': f['review_id'], 'extraction_id': f['extraction_id'],
+               'label': f['label'], 'quote': f['quote'], 'src': f['canonical_url'], 'reason': reason, 'model_meta': meta}
+        if decision == 'approve':
+            target, added = publish(seed, site, f, f['review_id'], ts)
+            rec['target'] = target
+            rec['published'] = added
+            seed_changed |= added
+            stats['approved'] += 1
+            stats['published'] += int(added)
+        else:
+            stats['rejected'] += 1
+        append_log(log_path, rec)
+        _close(conn, f['review_id'], decision, reason, meta, ts)
+        conn.commit()
+
+    groups = {}
+    for f in items:
+        f = dict(f)
+        text, raw_full = source_text(raw_dir, f['text_ref'])
+        why, ctx = precheck(f, text)
+        if why and text is not None and raw_full is not None:
+            alt_why, alt_ctx = precheck(f, raw_full)
+            if not alt_why:
+                why, ctx = None, alt_ctx
+        if why:
+            stats['prechecked_rejects'] += 1
+            decide(f, 'reject', why, None)
+            continue
+        f['_ctx'] = ctx
+        groups.setdefault(f['fetch_id'], []).append(f)
+
+    def payload_for(batch):
+        return {'url': batch[0]['canonical_url'], 'published_at': batch[0]['published_at'],
+                'findings': [{'id': f['extraction_id'], 'label': f['label'], 'chef_text': f['chef_text'], 'restaurant_text': f['restaurant_text'],
+                              'org_text': f['org_text'], 'role_text': f['role_text'], 'date_text': f['date_text'], 'quote': f['quote'],
+                              'occurrences': f['_ctx'], 'site_record': Site.record(site.match(f))} for f in batch]}
+
+    def max_tokens(batch):
+        return 200 + 120 * len(batch)
+
+    def fits(batch):
+        data = payload_for(batch)
+        payload = client._payload(INSTRUCTION, data, max_tokens(batch), None)[1]
+        return reservation_tokens(payload, max_tokens(batch)) <= client.budget.room_tokens()
+
+    queue = []
+    for fs in groups.values():
+        for i in range(0, len(fs), MAX_BATCH):
+            queue.append(fs[i:i + MAX_BATCH])
+    while queue and not stats['stopped']:
+        batch = queue.pop(0)
+        if not client.key:
+            stats['stopped'] = 'missing_key'
+            break
+        if not fits(batch):
+            if len(batch) > 1:
+                h = len(batch) // 2
+                queue[:0] = [batch[:h], batch[h:]]
+                continue
+            stats['stopped'] = 'cost_cap'
+            break
+        ids = {f['extraction_id'] for f in batch}
+        try:
+            stats['calls'] += 1
+            res = client.call(TASK, INSTRUCTION, payload_for(batch), validate_reviews(ids), max_tokens=max_tokens(batch))
+        except CostCapExceeded:
+            stats['stopped'] = 'cost_cap'
+            break
+        except DeepSeekError as exc:
+            code = getattr(exc, 'code', str(exc)).split(' ')[0]
+            if code in RETRYABLE + ('task_previously_rejected',):
+                # A batch the model cannot answer validly is split; a single finding it cannot review is closed, not left pending.
+                client.stopped = None
+                if len(batch) > 1:
+                    h = len(batch) // 2
+                    queue[:0] = [batch[:h], batch[h:]]
+                else:
+                    decide(batch[0], 'reject', 'review_unavailable: model returned no valid review (' + code + ')', None)
+                continue
+            stats['stopped'] = code
+            break
+        meta = dict(client.last_meta)
+        for f in batch:
+            r = res[f['extraction_id']]
+            decide(f, r['decision'], ('model: ' + r['reason']), meta)
+    if seed_changed:
+        json.dump(seed, open(seed_path, 'w', encoding='utf-8'), ensure_ascii=False, indent=1)
+    stats['candidates_closed'] += close_linked_candidates(conn, utcnow())
+    stats['remaining'] = conn.execute("SELECT COUNT(*) FROM review_queue WHERE reason='ai_inference' AND state='open'").fetchone()[0]
+    stats['cost_used'] = round(conn.execute('SELECT cost_used_units FROM daemon_run WHERE run_id=?', (run_id,)).fetchone()[0], 3)
+    conn.execute('UPDATE daemon_run SET status=?, finished_at=? WHERE run_id=?',
+                 ('paused_cost_cap' if stats['stopped'] == 'cost_cap' else 'failed' if stats['stopped'] else 'succeeded', utcnow(), run_id))
+    conn.commit()
+    stats['run_id'] = run_id
+    return stats
+
+
+def main(argv=None):
+    ap = argparse.ArgumentParser(prog='kg-ai-review')
+    ap.add_argument('--db', required=True)
+    ap.add_argument('--seed', default=os.path.join(ROOT, 'data', 'seed.json'))
+    ap.add_argument('--log', default=os.path.join(ROOT, 'data', 'ai_review_log.jsonl'))
+    ap.add_argument('--raw-dir')
+    ap.add_argument('--limit', type=int)
+    a = ap.parse_args(argv)
+    conn = connect(a.db)
+    migrate(conn)
+    raw_dir = a.raw_dir or os.path.join(os.path.dirname(os.path.abspath(a.db)), 'raw')
+    s = review(conn, a.seed, a.log, raw_dir, limit=a.limit)
+    print('AI_REVIEW approved=%s rejected=%s published=%s prechecked=%s calls=%s remaining=%s stopped=%s cost=%s' % (
+        s['approved'], s['rejected'], s['published'], s['prechecked_rejects'], s['calls'], s.get('remaining'), s['stopped'] or 'none', s.get('cost_used', 0)))
+    return 0
+
+
+if __name__ == '__main__':
+    raise SystemExit(main())

@@ -32,7 +32,7 @@ ID: `chf_…`, `rst_…`, `brn_…`, `clm_…`, `evd_…` — 입력으로부터
 | 상태 | 의미 | 올라가는 조건 |
 |---|---|---|
 | `unverified` | 단서(소셜, 검색, 출처 없음) | — |
-| `ai_inference` | 모델 추정. **절대 사실로 적용하지 않음** (`state_history_update`가 검토 큐로만 보냄) | `human:` 검토자만 `verified`로 |
+| `ai_inference` | 모델 추정. 온톨로지 사실 테이블에는 적용하지 않음 (`state_history_update`가 검토 큐로 보냄). **2026-11-09부터 DeepSeek 검토 단계(`daemon/kg_ai/review.py`)가 매일 검토**: 원문 인용 일치·인물/식당 매핑·기존 공개 데이터와 충돌 없음을 통과하면 `data/seed.json`의 `ai_reviewed`(원문 인용+출처 URL+'AI 검토' 배지)로 바로 공개, 아니면 사유와 함께 닫음. 감사 로그 `data/ai_review_log.jsonl`, 되돌리기 `scripts/ai_review_rollback.py` | `human:` 검토자만 `verified`로 |
 | `source_claim` | 출처가 그렇게 말함 (공식/언론/사람 입력 1곳) | 아래 `verified` 조건 |
 | `verified` | 독립된 신뢰 호스트(공식·언론·사람 tier) **2곳 이상**, 또는 공식/사람 출처 1곳 | — |
 

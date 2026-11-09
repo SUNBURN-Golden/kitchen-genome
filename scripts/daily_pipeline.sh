@@ -4,7 +4,9 @@
 # Usage: bash scripts/daily_pipeline.sh [/path/to/clone]   (default /tmp/kg; falls back to /workspace/kitchen-genome when that path is gone,
 # e.g. /tmp/kg symlink lost after a box restore — the 2026-11-03 07:00 run died on `cd /tmp/kg`)
 # Exit 0 always on success; last line is one of: RESULT=NO_CHANGE | RESULT=MERGED_NO_DEPLOY pr=<url> | RESULT=NEEDS_DEPLOY pr=<url> | RESULT=DEPLOYED pr=<url>
-# Collection is in-place and never calls the legacy Instagram account. AI rows stay pending and cannot enter seed or the site.
+# Collection is in-place and never calls the legacy Instagram account. AI findings never apply through the rule path;
+# the DeepSeek review stage (daemon/kg_ai/review.py) reviews each one: approved -> seed `ai_reviewed` (badged 'AI 검토',
+# source URL, data/ai_review_log.jsonl for rollback), rejected -> closed with reason. Nothing stays pending.
 set -euo pipefail
 REPO="${1:-/tmp/kg}"; KG_HOME="${KG_HOME:-/workspace/kitchen-genome}"
 SCRIPT_DIR=$(cd "$(dirname "$0")" && pwd)
@@ -33,6 +35,17 @@ git checkout -q main && git pull -q --ff-only
 git branch -D "$BR" >/dev/null 2>&1 || true; git checkout -q -b "$BR"
 KG_DB="${KG_SERVICE_DB:-$KG_HOME/data_store/kg_service.db}"
 export KG_SERVICE_DB="$KG_DB" KG_HOME
+ai_review() {
+  # DeepSeek review of open AI findings; its cost counts within KG_AI_DAILY_COST_CAP (max 20).
+  if [ "${KG_DEEPSEEK:-1}" = 1 ] && [ "${KG_AI_REVIEW:-1}" = 1 ] && [ -f "$KG_DB" ]; then
+    local out
+    out=$(PYTHONPATH=daemon timeout 600 python3 -m kg_ai --db "$KG_DB" --seed "$REPO/data/seed.json" --log "$REPO/data/ai_review_log.jsonl" 2>/dev/null) \
+      || out="AI_REVIEW failed exit=$?"
+    printf '%s\n' "$out" | sed -n '/^AI_REVIEW/p' | tail -1
+  fi
+}
+STAGE=ai_review_backlog
+ai_review   # drain yesterday's findings first so new collection cannot starve the review
 STAGE=crawl
 python3 crawler/crawl.py
 # Web collection does not wait on Instagram. The legacy account is not invoked.
@@ -55,6 +68,8 @@ if [ "${KG_COLLECT:-1}" = 1 ] && [ -f "$KG_DB" ]; then
     --cost-cap "${KG_DAEMON_COST_CAP:-20}" "${AI_ARGS[@]}" >/dev/null 2>&1 || DAEMON_RC=$?
   echo "DAEMON=finished exit=$DAEMON_RC"
 fi
+STAGE=ai_review
+ai_review
 STAGE=apply
 python3 crawler/apply.py
 python3 data/enrich_en.py
@@ -72,7 +87,7 @@ SUM=$(python3 -c "import json;s=json.load(open('crawler/out/last_summary.json'))
 git commit -q -m "crawl $DAY: $SUM"
 git push -q -u origin "$BR" --force
 PR=$(gh pr create --repo SUNBURN-Golden/kitchen-genome --base main --head "$BR" --title "crawl $DAY: $SUM" \
-  --body "Automated daily crawl (scripts/daily_pipeline.sh). Applied only with >=2 independent reliable sources; see crawler/applied.json. Review queue: crawler/pending.json. AI and dedicated-account findings stay pending and are not applied. SHOW_VERDICTS/SHOW_NEWSLETTER=false, no noindex (guards passed).")
+  --body "Automated daily crawl (scripts/daily_pipeline.sh). Applied only with >=2 independent reliable sources; see crawler/applied.json. Review queue: crawler/pending.json. AI findings are published only after the DeepSeek review stage approves them (badged 'AI 검토', source URL, data/ai_review_log.jsonl; rollback: scripts/ai_review_rollback.py); rejected ones are closed with a reason. SHOW_VERDICTS/SHOW_NEWSLETTER=false, no noindex (guards passed).")
 gh pr merge "$PR" --squash --delete-branch
 git checkout -q main && git pull -q --ff-only
 python3 scripts/build_deploy.py >/dev/null   # dist/deploy_kitchengenome.js from merged main

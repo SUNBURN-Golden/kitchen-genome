@@ -117,10 +117,10 @@ def test_exact_quote_survives_wrong_offsets_and_cannot_publish(world):
     assert {t: c.execute('SELECT COUNT(*) FROM '+t).fetchone()[0] for t in before} == before
     repeated = '달빛정원 소식. 다른 문장. 달빛정원 소식.'
     ambiguous = adapter(c, {'findings': [{'label': 'closure', 'quote': '달빛정원 소식', 'span_start': 99, 'span_end': 100}]})
-    assert ambiguous.extract(doc(repeated, '2'), [], Gazetteer(c)) == []
-    assert ambiguous.client.stopped == 'offset_ambiguous'
-    stored = c.execute("SELECT error FROM ai_request WHERE task='web-extract-1' AND state='failed'").fetchall()
-    assert stored and all(r['error'].startswith('offset_ambiguous') and '달빛정원' not in r['error'] for r in stored)
+    rows = ambiguous.extract(doc(repeated, '2'), [], Gazetteer(c))
+    # a repeated identical quote keeps the first occurrence (flagged) instead of pausing the model; review checks every occurrence
+    assert ambiguous.client.stopped is None and len(rows) == 1
+    assert (rows[0]['span_start'], rows[0]['ambiguity'], rows[0]['pending_only']) == (0, 'quote_repeats=2', True)
 
 
 PAGE = '달빛정원 2021-05-01. 한도윤 총괄 셰프 기록.'
