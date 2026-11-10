@@ -240,6 +240,34 @@ def test_deferred_older_recheck_does_not_stop_fresh_extraction(world, tmp_path):
     assert world.execute('SELECT SUM(units) FROM ai_request').fetchone()[0]<=20
 
 
+def test_trimmed_recheck_without_known_names_stays_uninspected(world, tmp_path):
+    budget,seeds=setup_due(world); recheck.admit(world,seeds,budget,now=NOW)
+    link=world.execute('SELECT * FROM restaurant_recheck_job').fetchone()
+    # The real byte fitting keeps a prefix but removes the only known names.
+    text='Introduction. '+('a '*500)+' 한도윤 셰프 달빛정원 운영 소식입니다.'
+    raw=RawStore(str(tmp_path/'raw'))
+    ref=raw.put_text('official.test',text)
+    world.execute("UPDATE fetch_record SET job_id=?,text_ref=? WHERE fetch_id='f'",(link['job_id'],ref))
+    world.execute("UPDATE crawl_job SET state='done' WHERE job_id=?",(link['job_id'],));world.commit()
+    a=Adapters(Client(budget,key='dummy',transport=lambda *args:pytest.fail('trimmed unknown-only completion'),
+                      balance_transport=healthy_balance))
+    bot=cycle.Bot(world,data_dir=str(tmp_path/'data'),deepseek=True)
+    bot.raw,bot.ai=raw,a
+    cycle.stage_extract(SimpleNamespace(env={'bot':bot},cost=budget.meter))
+    assert a.window_partial and a.stats['skipped_no_targets']==1
+    assert a.defer_extract and a.client.stopped is None
+    assert world.execute("SELECT extracted_at FROM fetch_record WHERE fetch_id='f'").fetchone()[0] is None
+    assert not world.execute("SELECT 1 FROM restaurant_recheck_job WHERE fetch_id='f' AND extraction_id IS NULL").fetchone()
+    assert not world.execute('SELECT 1 FROM ai_request').fetchone()
+    assert not world.execute("SELECT 1 FROM ai_review_hold WHERE state='held'").fetchone()
+    # Finishing any deterministic findings still cannot certify the incomplete scan.
+    assert world.execute("SELECT 1 FROM review_queue WHERE state='open' AND reason='ai_inference'").fetchone()
+    world.execute("UPDATE review_queue SET state='dismissed' WHERE reason='ai_inference'");world.commit()
+    recheck.reconcile(world)
+    row=world.execute("SELECT * FROM restaurant_recheck WHERE restaurant_id='r_dal'").fetchone()
+    assert row['last_checked_at'] is None and row['active_attempt_id']==link['attempt_id']
+
+
 @pytest.mark.parametrize('text,completed', [
     ('모래시계 공식 소개 페이지입니다.', False),
     ('서하람 셰프의 공식 소개 페이지입니다.', False),
@@ -287,6 +315,42 @@ def test_coalesced_job_ignores_historical_fetches(world, historical_extracted):
     row=world.execute("SELECT * FROM restaurant_recheck WHERE restaurant_id='r_dal'").fetchone()
     assert row['last_checked_at'] and row['last_outcome']=='reviewed_or_no_change'
     assert not world.execute("SELECT 1 FROM restaurant_recheck_job WHERE fetch_id='historical'").fetchone()
+
+
+@pytest.mark.parametrize('historical_state', ['done','failed','blocked'])
+@pytest.mark.parametrize('current_state', ['queued','failed'])
+def test_coalesced_job_links_current_children_without_finished_history(world, historical_state, current_state):
+    budget,seeds=setup_due(world)
+    tid=world.execute("SELECT target_id FROM restaurant_recheck WHERE restaurant_id='r_dal'").fetchone()[0]
+    url='https://official.test/1'
+    discover.enqueue(world,path='official_chain',pool='refresh',url=url,target_id=tid,now='2026-10-01T00:00:00Z')
+    jid=discover.job_id('official_chain',url)
+    discover.enqueue(world,path='official_chain',pool='refresh',url=url+'/historical',parent=jid,
+                     target_id=tid,state=historical_state,now='2026-10-01T00:00:00Z')
+    recheck.admit(world,seeds,budget,now=NOW)
+    # An older queued child is still live work; a newly failed child is a real failure.
+    discover.enqueue(world,path='official_chain',pool='refresh',url=url+'/current',parent=jid,
+                     target_id=tid,state=current_state,
+                     now='2026-10-01T00:00:00Z' if current_state=='queued' else recheck.iso(NOW+dt.timedelta(seconds=1)))
+    recheck.link_children(world,jid)
+    current=discover.job_id('official_chain',url+'/current')
+    assert recheck.active_for_job(world,current)
+    assert not recheck.active_for_job(world,discover.job_id('official_chain',url+'/historical'))
+    world.execute("UPDATE fetch_record SET job_id=? WHERE fetch_id='f'",(jid,));world.commit()
+    process_doc(world,doc('달빛정원 공식 소개 페이지입니다.'),Gazetteer(world),tier='official')
+    world.execute("UPDATE fetch_record SET extracted_at=? WHERE fetch_id='f'",(db.utcnow(),))
+    world.execute("UPDATE crawl_job SET state='done' WHERE job_id=?",(jid,));world.commit()
+    recheck.reconcile(world)
+    row=world.execute("SELECT * FROM restaurant_recheck WHERE restaurant_id='r_dal'").fetchone()
+    assert row['last_checked_at'] is None
+    if current_state=='failed':
+        assert row['last_outcome']=='source_unavailable'
+    else:
+        assert row['active_attempt_id']
+        world.execute("UPDATE crawl_job SET state='done' WHERE job_id=?",(current,));world.commit()
+        recheck.reconcile(world)
+        row=world.execute("SELECT * FROM restaurant_recheck WHERE restaurant_id='r_dal'").fetchone()
+        assert row['last_checked_at'] and row['last_outcome']=='reviewed_or_no_change'
 
 
 @pytest.mark.parametrize('existing_hold', [False,True])

@@ -99,7 +99,14 @@ def admit(conn, seeds, budget, *, now=None):
 def link_children(conn, parent):
     attempt = active_for_job(conn, parent)
     if attempt:
-        for j in conn.execute('SELECT job_id FROM crawl_job WHERE parent_job_id=?', (parent,)).fetchall():
+        # Coalesced roots retain old child jobs. Only live work or activity since
+        # admission belongs to this attempt; finished history cannot invalidate it.
+        children = conn.execute("""SELECT j.job_id FROM crawl_job j WHERE j.parent_job_id=:parent
+                                   AND (j.state='queued' OR j.created_at>=:queued_at OR j.finished_at>=:queued_at
+                                     OR EXISTS (SELECT 1 FROM fetch_record f WHERE f.job_id=j.job_id
+                                                AND f.fetched_at>=:queued_at))""",
+                                {'parent':parent,'queued_at':attempt['queued_at']}).fetchall()
+        for j in children:
             if not conn.execute('SELECT 1 FROM restaurant_recheck_job WHERE attempt_id=? AND job_id=?', (attempt['attempt_id'],j['job_id'])).fetchone():
                 conn.execute('INSERT INTO restaurant_recheck_job(attempt_id,job_id) VALUES (?,?)', (attempt['attempt_id'],j['job_id']))
 

@@ -1,6 +1,6 @@
 # DeepSeek collector efficiency improvements
 
-Status: REVIEW FIX implemented (2026-11-10), awaiting re-review/audit. Owner order:
+Status: RE-REVIEW implemented (2026-11-10), awaiting audit. Owner order:
 2026-11-10. The reviewed design below is preserved as the implementation contract.
 Verification uses mocked completion and balance HTTP only. No paid call, live
 provider smoke, runtime database migration, deployment, or publication was run.
@@ -39,6 +39,12 @@ BUILD notes:
   collector HTTP units remain separate from the shared model allowance.
 
 BUILD REVIEW corrections (R1–R4 in `DEEPSEEK_IMPROVE_REVIEW.md`):
+
+RE-REVIEW also keeps a partially fitted recheck deferred when its remaining
+prefix contains no registered names, so the final pre-filter cannot certify an
+incomplete inspection. Child-job lineage excludes finished history from a
+coalesced root; queued children and activity since admission still count toward
+the current attempt, including real failures. Both cases have offline regressions.
 
 - Recheck extraction fits its own byte reservation plus full review-context hold
   before reserving either. A workload deferral leaves fresh extraction enabled;

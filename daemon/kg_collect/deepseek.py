@@ -371,6 +371,10 @@ class Adapters:
                 self.client.stopped = 'cost_cap'
             return []
         self.window_partial = len(fitted) < len(text)
+        # Keep incomplete rechecks retryable even if fitting removed every known
+        # name and the final eligibility gate returns before the model call.
+        if workload == 'recheck' and self.window_partial:
+            self.defer_extract = True
         text = fitted
         if not eligibility(gaz, text)['target_ids']:
             self.stats['skipped_no_targets'] += 1
@@ -424,7 +428,5 @@ class Adapters:
                 matches = [m for m in gaz.lookup(r.get(field + '_text') or '') if m.get('kind') == kind]
                 r['resolved_' + field + '_target'] = matches[0]['target_id'] if len(matches) == 1 else None
             result.append(r)
-        if workload == 'recheck' and len(text) < len(unicodedata.normalize('NFC', sanitize_before_store(doc.text[:12000])[0] or '')):
-            self.defer_extract = True
         self.stats['findings'] += len(result)
         return result

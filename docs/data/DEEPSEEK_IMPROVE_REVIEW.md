@@ -7,6 +7,11 @@ Changes remain on `feat/deepseek-collector-improve-20261110` / PR #83 for the
 separate re-review and audit stages; merge remains with the human/coordinator.
 The original findings and reproduction evidence are retained for review.
 
+RE-REVIEW update (2026-11-10): **PASS after two residual corrections** below.
+The R1/R3 inspection edge and R4 child-job history edge were reproduced offline,
+fixed on the existing branch, and covered by seven new regression cases. No
+known blocker from R1–R4 remains. Audit and human/coordinator merge remain pending.
+
 Reviewed `origin/main` (`613cccefcedd1e5b38fde50c388d23cd29583fa8`)
 against implementation `d893263080a911c02a593521d8ec86e533634edc`
 on `review/deepseek-efficiency-build-20261110`. This new branch starts at
@@ -260,3 +265,52 @@ flags are unchanged. No site output changed, so no deploy is required.
 Unrelated local `config/dev_lanes.json`, `.devpipe-font/`, `marketing/x_launch.md`,
 and `marketing/x_launch_argon.md` changes remain outside the fix commit. No
 known residual from R1–R4 remains; separate re-review and audit are still required.
+
+## RE-REVIEW corrections and verification
+
+Reviewed the complete feature diff against `origin/main` (`613ccce`), including
+REVIEW FIX commit `3b6eb14`. The existing suite first passed unchanged: 400 tests,
+one existing synthetic acceptance skip, and 285 subtests. Two further edge cases
+still required correction:
+
+1. **R1/R3: budget trimming could certify an incomplete inspection.** A source
+   with an introductory paragraph and its only known names near the end fits
+   only a prefix after reserving review room. The final pre-filter correctly
+   skips that unknown-only prefix, but previously returned before setting
+   `defer_extract`. The common pipeline then recorded an inspection marker and
+   marked the fetch extracted. Set deferral immediately when fitting produces a
+   partial recheck, before the last eligibility gate. The new regression runs
+   the real fitting and extraction stage, verifies no completion/reservation or
+   hold occurs, and verifies that even finishing the deterministic review items
+   cannot advance `last_checked_at` for the incomplete scan. Fresh work remains
+   enabled.
+2. **R4: a reused root could import finished child-job history.** Fetch-time
+   boundaries already excluded historical fetches, but `link_children` attached
+   every historical child of a coalesced root. A failed child from the preceding
+   month could therefore invalidate a fully inspected current page. Child links
+   now require queued work or creation/completion/fetch activity since admission.
+   Existing queued work still keeps an attempt open, and current failures still
+   produce `source_unavailable`. Six regression cases cover historical done,
+   failed, and blocked children alongside queued and newly failed current work.
+
+All seven new regression cases failed before the corrections. Final checks:
+
+```sh
+KG_IG=0 PYTHONPATH=daemon:tests pytest -q tests
+# 407 passed, 1 skipped, 285 subtests passed
+bash -n scripts/daily_pipeline.sh scripts/collect_daily.sh marketing/argon_review.sh
+git diff --check origin/main
+```
+
+The focused monthly/extraction/efficiency suites also passed (72 tests). Tests
+use injected completion/balance HTTP, temporary databases/raw stores/seed/logs,
+and stubbed external commands; the live DeepSeek guard remains active. No live
+DeepSeek request, money spent, production pipeline/migration, Argon invocation,
+social publication, merge, or deploy occurred. Shared AI and daemon caps remain
+at most 20, `KG_IG=0`, protected Instagram flags untouched, and both web feature
+flags false. No web/public seed output changed, so no deploy is needed.
+
+This stage commits and pushes to the existing feature branch for PR #83; it does
+not create a branch or PR or merge. Unrelated local lane-config, font, and
+marketing changes remain outside the commit. The audit stage and final squash
+merge remain with the human/coordinator.
