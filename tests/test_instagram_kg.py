@@ -1,3 +1,4 @@
+from tests_balance_fake import healthy_balance
 """Synthetic identity/HTTP/model tests; never read the real secret directory."""
 import datetime as dt
 import json
@@ -203,7 +204,7 @@ def test_deepseek_ig_json_is_metered_filtered_and_pending(world):
     def transport(payload, key):
         data = json.loads(json.loads(payload)['messages'][1]['content']); requests.append(data)
         return response({'findings': [{'kind':'opening','excerpt':'오픈'}], 'follow':'review'})
-    client = Client(Budget(meter(conn)), key='dummy', transport=transport)
+    client = Client(Budget(meter(conn)), key='dummy', transport=transport, balance_transport=healthy_balance)
     rows, decision = ig.scan_text(conn, client, 'brand0','r0','https://www.instagram.com/p/fake/',None,'오픈 안내. 문의 me@example.test')
     assert requests and 'me@example.test' not in json.dumps(requests)
     assert any(r['asserted_by']=='ai_inference' for r in rows) and decision == 'review'
@@ -241,7 +242,7 @@ def test_real_backend_guards_temporary_sessions_and_rejects_wrong_identity(world
 
 def test_retention_purges_review_output_and_model_cache(world):
     conn, clock, calls, opts = world
-    client=Client(Budget(meter(conn),day=lambda:'2026-09-01'), key='dummy',transport=lambda *a:response({'findings':[{'kind':'opening','excerpt':'오픈'}],'follow':'review'}))
+    client=Client(Budget(meter(conn),day=lambda:'2026-09-01'), key='dummy',transport=lambda *a:response({'findings':[{'kind':'opening','excerpt':'오픈'}],'follow':'review'}), balance_transport=healthy_balance)
     ig.scan_text(conn,client,'brand','target','https://www.instagram.com/p/x/',None,'오픈 안내','2026-09-01')
     opts['out'].mkdir(); (opts['out']/'20260901.json').write_text('{"excerpt":"오픈"}')
     ig.purge(conn,opts['out'],clock.now())

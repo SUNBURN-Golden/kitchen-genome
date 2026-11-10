@@ -44,6 +44,10 @@ def mentions_of(gaz: Gazetteer, text: str) -> dict:
 
 def process_doc(conn, doc: Doc, gaz: Gazetteer, *, tier: str, ctx: dict | None = None, via: str = '', ocr_conf=None, model_hook=None, model_adapter=None, now=None) -> dict:
     """Returns {'new': n, 'total': n, 'labels': {...}, 'alerts': [...]}. Never raises on empty extraction (that is information)."""
+    from .recheck import active_for_job
+    fr = conn.execute('SELECT job_id FROM fetch_record WHERE fetch_id=?', (doc.fetch_id,)).fetchone()
+    attempt = active_for_job(conn, fr['job_id']) if fr and fr['job_id'] else None
+    workload = 'recheck' if attempt else 'fresh'
     now = now or utcnow()
     texts = [(doc.text, doc.published_at)]
     if doc.items:                                  # feed/sitemap: every item is its own short document with its own date
@@ -53,17 +57,23 @@ def process_doc(conn, doc: Doc, gaz: Gazetteer, *, tier: str, ctx: dict | None =
     for text, pub in texts:
         recs = extract_text(text, gaz=gaz, host=doc.host, published_at=pub or doc.published_at, tier=tier, ctx=ctx, ocr_conf=ocr_conf or doc.ocr_conf,
                             official_hosts=off_hosts, content_hash=(doc.content_hash or '') + (pub or ''))
+        if attempt:
+            for r in recs:
+                r.update({'epistemic': 'inference', 'asserted_by': 'ai_inference', 'pending_only': True,
+                          'extraction_id': stable_id('ext', r['extraction_id'], attempt['attempt_id']),
+                          'model_meta_json': json.dumps({'workload': 'recheck', 'rule_extractor': r['extractor']})})
         resolve_extractions(conn, recs, gaz, doc.url, via or doc.url)
         recs_all.extend(recs)
-    if model_hook:                                 # ambiguous only; output is epistemic=inference and never applied
+    if model_hook and not attempt:                                 # ambiguous only; output is epistemic=inference and never applied
         for r in list(recs_all):
             if needs_model(r):
                 alt = model_hook(r)
                 if alt:
                     alt.update({'epistemic': 'inference', 'extractor': 'model:hook', 'extraction_id': r['extraction_id'] + '_m'})
                     recs_all.append({**r, **alt, 'asserted_by': 'ai_inference', 'pending_only': True})
-    if model_adapter and not doc.items:
-        recs_all.extend(model_adapter.extract(doc, recs_all, gaz, ctx))
+    rule_inspected = bool(attempt and not any(needs_model(r) for r in recs_all))
+    if model_adapter and not doc.items and not rule_inspected:
+        recs_all.extend(model_adapter.extract(doc, recs_all, gaz, ctx, workload=workload, attempt_id=attempt['attempt_id'] if attempt else None))
     new = 0
     labels: dict = {}
     for r in recs_all:
@@ -74,14 +84,20 @@ def process_doc(conn, doc: Doc, gaz: Gazetteer, *, tier: str, ctx: dict | None =
                             r.get('role_text'), r.get('date_iso') or r.get('date_text'), r.get('tenure_from'), r.get('tenure_to'), r['span_start'], r['span_end'], r['quote'],
                             r['extractor'], r['extractor_version'], r.get('ambiguity'), r.get('resolved_chef_target'), r.get('resolved_restaurant_target'), r.get('resolved_org_target'),
                             r.get('resolve_note'), r.get('published_at'), now))
+        conn.execute('INSERT OR IGNORE INTO article_extraction_fetch(extraction_id,fetch_id) VALUES (?,?)', (r['extraction_id'], doc.fetch_id))
+        if attempt:
+            conn.execute("UPDATE extraction SET workload='recheck' WHERE extraction_id=?", (r['extraction_id'],))
+            conn.execute('INSERT OR IGNORE INTO restaurant_recheck_job(attempt_id,job_id,fetch_id,extraction_id) VALUES (?,?,?,?)', (attempt['attempt_id'],fr['job_id'],doc.fetch_id,r['extraction_id']))
         if pending(r):
             conn.execute("UPDATE extraction SET epistemic='inference',asserted_by='ai_inference',pending_only=1,model_meta_json=? WHERE extraction_id=?",
                          (r.get('model_meta_json'), r['extraction_id']))
             queue_review(conn, 'ai_inference', 'extraction', r['extraction_id'],
-                         {'asserted_by': 'ai_inference', 'pending_only': True, 'url': doc.url, 'finding': r},
+                         {'workload': workload, 'asserted_by': 'ai_inference', 'pending_only': True, 'url': doc.url, 'finding': r},
                          dedupe_key='ai:extraction:' + r['extraction_id'])
         new += cur.rowcount
         labels[r['label']] = labels.get(r['label'], 0) + 1
+    if attempt and not doc.items and (rule_inspected or (model_adapter and not model_adapter.defer_extract and model_adapter.client.status == 'enabled')) and len(doc.text) <= 12000 and eligibility_for_recheck(gaz, doc.text):
+        conn.execute('INSERT INTO restaurant_recheck_job(attempt_id,job_id,fetch_id) VALUES (?,?,?)', (attempt['attempt_id'],fr['job_id'],doc.fetch_id))
     for tid, n in mentions_of(gaz, doc.text or ' '.join(f"{i['title']} {i['summary']}" for i in doc.items)).items():
         conn.execute('INSERT OR IGNORE INTO doc_target(fetch_id,target_id,mentions) VALUES (?,?,?)', (doc.fetch_id, tid, n))
     conn.commit()
@@ -232,3 +248,9 @@ def fetch_regression_alert(conn, doc, now=None) -> dict | None:
                  (aid, doc.host, doc.canonical_url, kind, f"previously {prev['text_chars']} chars of text, now {doc.outcome} ({doc.error})", json.dumps({'chars': prev['text_chars']}),
                   json.dumps({'outcome': doc.outcome}), now or utcnow()))
     return {'kind': kind, 'url': doc.canonical_url}
+
+
+def eligibility_for_recheck(gaz, text):
+    from .targets import eligibility
+    from .deepseek import sanitize_before_store
+    return bool(eligibility(gaz, sanitize_before_store(text)[0] or '')['target_ids'])

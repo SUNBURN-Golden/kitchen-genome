@@ -63,7 +63,7 @@ def load_seed_targets(conn, seed: dict, now=None) -> dict:
         official = r.get('official_source_url') or ''
         attrs = {'seed_id': r['id'], 'area': r.get('area'), 'cuisine': r.get('cuisine'), 'kitchen': r.get('kitchen'), 'opened': r.get('opened'), 'site': r.get('url'),
                  'role': r.get('role'), 'chef': r.get('chef')}
-        rt = upsert_target(conn, 'restaurant', r['name'], r.get('name_en'), attrs=attrs, now=now)
+        rt = upsert_target(conn, 'restaurant', r['name'], r.get('name_en'), attrs=attrs, aliases=r.get('prev_names') or (), now=now)
         n['restaurant'] += 1
         for ko, en in chef_names(r.get('chef'), r.get('chef_en')):
             ct = upsert_target(conn, 'chef', ko, en, attrs={'restaurants': [r['id']], 'origin_kitchen': r.get('kitchen')}, now=now)
@@ -124,3 +124,11 @@ class Gazetteer:
                 for ent in self.by_alias[alias]:
                     out.append({**ent, 'start': s, 'end': e, 'surface': low[s:e]})
         return sorted(out, key=lambda x: x['start'])
+
+
+def eligibility(gaz, text):
+    """Only textual mentions of registered active chefs/restaurants admit paid work."""
+    spans = [m for m in gaz.find(text) if m['kind'] in ('chef', 'restaurant')
+             and m['status'] == 'active' and m['origin'] in ('seed', 'discovered')]
+    return {'target_ids': sorted({m['target_id'] for m in spans}), 'spans': spans,
+            'reason': None if spans else 'skipped_no_targets'}

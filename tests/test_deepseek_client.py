@@ -1,3 +1,4 @@
+from tests_balance_fake import healthy_balance
 """All provider HTTP is injected. No credentials, internet or paid requests."""
 import concurrent.futures
 import json
@@ -36,7 +37,7 @@ def test_measured_usage_cache_and_zero_cap(conn):
     def transport(payload, key):
         calls.append((json.loads(payload), key)); return response()
     m = meter(conn)
-    client = Client(Budget(m), key='synthetic-key', transport=transport)
+    client = Client(Budget(m), key='synthetic-key', transport=transport, balance_transport=healthy_balance)
     assert client.call('test', 'JSON', {'source': 'text'}, lambda o: o) == {'ok': True}
     assert m.used == pytest.approx(.06)
     assert conn.execute('SELECT SUM(units) FROM cost_ledger').fetchone()[0] == pytest.approx(.06)
@@ -47,14 +48,14 @@ def test_measured_usage_cache_and_zero_cap(conn):
     assert calls[0][0]['max_tokens'] == 2048 and calls[0][1] == 'synthetic-key'
     assert calls[0][0]['thinking'] == {'type': 'disabled'} and calls[0][0]['temperature'] == 0
     assert 'reasoning_effort' not in calls[0][0] and calls[0][0]['response_format'] == {'type': 'json_object'}
-    c2 = Client(Budget(meter(conn, 0)), key='dummy', transport=lambda *a: pytest.fail('paid request at zero cap'))
+    c2 = Client(Budget(meter(conn, 0)), key='dummy', transport=lambda *a: pytest.fail('paid request at zero cap'), balance_transport=healthy_balance)
     with pytest.raises(CostCapExceeded): c2.call('zero', 'JSON', {}, lambda o: o)
 
 
 @pytest.mark.parametrize('status,code', [(400, 'model_or_request_rejected'), (401, 'auth_failed'), (404, 'model_unavailable'), (429, 'rate_limited'), (503, 'provider_failed'), (302, 'provider_failed')])
 def test_http_errors_are_sanitized_and_not_retried(conn, status, code):
     calls = []
-    client = Client(Budget(meter(conn)), key='never-log-me', transport=lambda *a: (calls.append(1) or (status, b'never-log-me')))
+    client = Client(Budget(meter(conn)), key='never-log-me', transport=lambda *a: (calls.append(1) or (status, b'never-log-me')), balance_transport=healthy_balance)
     for _ in range(2):
         with pytest.raises(DeepSeekError, match=code): client.call('task', 'JSON', {}, lambda o: o)
     assert len(calls) == 1
@@ -64,18 +65,18 @@ def test_http_errors_are_sanitized_and_not_retried(conn, status, code):
 
 def test_lost_response_survives_new_run(conn):
     def lost(*a): raise TimeoutError('synthetic-password')
-    client = Client(Budget(meter(conn)), key='dummy', transport=lost)
+    client = Client(Budget(meter(conn)), key='dummy', transport=lost, balance_transport=healthy_balance)
     with pytest.raises(DeepSeekError, match='invalid_response_or_usage'): client.call('task', 'JSON', {}, lambda o: o)
     used = client.budget.meter.used
     assert used > 0
-    next_client = Client(Budget(meter(conn)), key='dummy', transport=lambda *a: pytest.fail('unknown attempt replayed'))
+    next_client = Client(Budget(meter(conn)), key='dummy', transport=lambda *a: pytest.fail('unknown attempt replayed'), balance_transport=healthy_balance)
     with pytest.raises(DeepSeekError, match='previous_attempt'): next_client.call('task', 'JSON', {}, lambda o: o)
     assert conn.execute('SELECT SUM(units) FROM ai_request').fetchone()[0] == used
 
 
 @pytest.mark.parametrize('raw', [b'not-json', b'x' * (MAX_BODY+1), response(usage={'prompt_tokens': True, 'completion_tokens': 1, 'total_tokens': 2})[1]])
 def test_invalid_response_keeps_reservation(conn, raw):
-    client = Client(Budget(meter(conn)), key='dummy', transport=lambda *a: (200, raw))
+    client = Client(Budget(meter(conn)), key='dummy', transport=lambda *a: (200, raw), balance_transport=healthy_balance)
     with pytest.raises(DeepSeekError): client.call('task', 'JSON', {}, lambda o: o)
     assert conn.execute('SELECT state,units FROM ai_request').fetchone()['state'] == 'unknown'
     assert client.budget.meter.used > 0
@@ -83,7 +84,7 @@ def test_invalid_response_keeps_reservation(conn, raw):
 
 def test_invalid_schema_and_truncation_charge_actual_without_partial_cache(conn):
     calls = []
-    client = Client(Budget(meter(conn)), key='dummy', transport=lambda *a: calls.append(1) or response(finish='length'))
+    client = Client(Budget(meter(conn)), key='dummy', transport=lambda *a: calls.append(1) or response(finish='length'), balance_transport=healthy_balance)
     with pytest.raises(DeepSeekError, match='truncated_json'): client.call('task', 'JSON', {}, lambda o: o)
     row = conn.execute('SELECT * FROM ai_request').fetchone()
     assert len(calls) == 1
@@ -91,7 +92,7 @@ def test_invalid_schema_and_truncation_charge_actual_without_partial_cache(conn)
 
 
 def test_missing_key_and_redirects(conn):
-    client = Client(Budget(meter(conn)), key='', transport=lambda *a: pytest.fail('missing key dispatched'))
+    client = Client(Budget(meter(conn)), key='', transport=lambda *a: pytest.fail('missing key dispatched'), balance_transport=healthy_balance)
     with pytest.raises(DeepSeekError, match='missing_key'): client.call('task', 'JSON', {}, lambda o: o)
     assert client.status == 'disabled'
     assert NoRedirect().redirect_request(None, None, 302, '', {}, 'https://other.test') is None
@@ -118,7 +119,7 @@ def test_reservation_day_cap_is_atomic_across_connections(tmp_path):
 
 
 def test_usage_above_bound_is_recorded_in_full(conn):
-    client = Client(Budget(meter(conn)), key='dummy', transport=lambda *a: response(usage={'prompt_tokens': 100000, 'completion_tokens': 0, 'total_tokens': 100000}))
+    client = Client(Budget(meter(conn)), key='dummy', transport=lambda *a: response(usage={'prompt_tokens': 100000, 'completion_tokens': 0, 'total_tokens': 100000}), balance_transport=healthy_balance)
     with pytest.raises(CostCapExceeded): client.call('task', 'JSON', {}, lambda o: o)
     assert client.budget.meter.used == 50
 
@@ -127,7 +128,7 @@ def test_task_specific_output_limit_and_purged_cache_does_not_disable_run(conn):
     seen = []
     def transport(payload, key):
         seen.append(json.loads(payload)); return response({'ok': True})
-    client = Client(Budget(meter(conn)), key='dummy', transport=transport)
+    client = Client(Budget(meter(conn)), key='dummy', transport=transport, balance_transport=healthy_balance)
     assert client.call('planner', 'JSON', {'n': 1}, lambda o: o, max_tokens=4096) == {'ok': True}
     assert seen[0]['max_tokens'] == 4096
     # Retention purges cached IG results; a repeat must not stop the model for the whole run.
@@ -181,7 +182,7 @@ def test_json_mode_blank_retries_once_then_pauses_without_using_reasoning(conn):
         assert body['thinking'] == {'type': 'disabled'}
         assert 'do not treat this as the task' not in payload.decode()
         return envelope('   ', SMOKE_USAGE)
-    client = Client(Budget(meter(conn)), key='dummy', transport=transport)
+    client = Client(Budget(meter(conn)), key='dummy', transport=transport, balance_transport=healthy_balance)
     # Prompt-sized input keeps the 8,958-token smoke usage inside the byte reservation.
     with pytest.raises(DeepSeekError, match='^json_blank$'):
         client.call('web-extract-1', 'JSON', {'text': 'source ' * 800}, lambda o: o)
@@ -191,7 +192,7 @@ def test_json_mode_blank_retries_once_then_pauses_without_using_reasoning(conn):
     assert len(rows) == 2
     assert all(r['state'] == 'failed' and r['error'] == 'json_blank' and r['result_json'] is None for r in rows)
     assert (rows[0]['prompt_tokens'], rows[0]['completion_tokens']) == (8323, 635)
-    later = Client(Budget(meter(conn)), key='dummy', transport=lambda *a: pytest.fail('rejected task replayed'))
+    later = Client(Budget(meter(conn)), key='dummy', transport=lambda *a: pytest.fail('rejected task replayed'), balance_transport=healthy_balance)
     with pytest.raises(DeepSeekError, match='^task_previously_rejected$'):
         later.call('web-extract-1', 'JSON', {'text': 'source ' * 800}, lambda o: o)
     assert later.stopped is None and later.status == 'enabled'
@@ -204,11 +205,11 @@ def test_blank_then_valid_json_is_cached_and_reasoning_is_ignored(conn):
         if len(calls) == 1:
             return envelope(' \n\t ')
         return envelope('```json\n{"ok": true}\n```', reasoning='not the answer')
-    client = Client(Budget(meter(conn)), key='dummy', transport=transport)
+    client = Client(Budget(meter(conn)), key='dummy', transport=transport, balance_transport=healthy_balance)
     assert client.call('task', 'JSON', {'n': 1}, lambda o: o) == {'ok': True}
     assert client.stopped is None and len(calls) == 2
     assert 'not the answer' not in json.dumps(calls[1])
-    again = Client(Budget(meter(conn)), key='dummy', transport=lambda *a: pytest.fail('validated retry replayed'))
+    again = Client(Budget(meter(conn)), key='dummy', transport=lambda *a: pytest.fail('validated retry replayed'), balance_transport=healthy_balance)
     assert again.call('task', 'JSON', {'n': 1}, lambda o: o) == {'ok': True}
     assert again.stopped is None
 
@@ -224,10 +225,10 @@ def test_schema_rejection_retries_once_and_double_encoded_json_is_accepted(conn)
         if obj.get('ok') is not True:
             raise ValueError('schema')
         return obj
-    client = Client(Budget(meter(conn)), key='dummy', transport=transport)
+    client = Client(Budget(meter(conn)), key='dummy', transport=transport, balance_transport=healthy_balance)
     assert client.call('task', 'JSON', {'n': 2}, validate) == {'ok': True}
     assert len(calls) == 2 and client.stopped is None
-    bad = Client(Budget(meter(conn)), key='dummy', transport=lambda *a: response({'nope': True}))
+    bad = Client(Budget(meter(conn)), key='dummy', transport=lambda *a: response({'nope': True}), balance_transport=healthy_balance)
     with pytest.raises(DeepSeekError, match='^invalid_task_json$'):
         bad.call('task', 'JSON', {'n': 3}, validate)
     assert bad.stopped == 'invalid_task_json'
@@ -240,7 +241,7 @@ def test_task_reject_keeps_a_sanitized_category_and_is_not_replayed(conn):
     calls = []
     def validate(obj):
         raise TaskReject('quote_not_exact', '0:quote_not_exact,quote_len=21,in_text=0 ' + secret)
-    client = Client(Budget(meter(conn)), key='dummy', transport=lambda *a: calls.append(1) or response({'findings': []}))
+    client = Client(Budget(meter(conn)), key='dummy', transport=lambda *a: calls.append(1) or response({'findings': []}), balance_transport=healthy_balance)
     with pytest.raises(DeepSeekError, match='^quote_not_exact$'):
         client.call('web-extract-1', 'JSON', {'text': 'source'}, validate)
     assert client.stopped == 'quote_not_exact' and len(calls) == 2
@@ -248,7 +249,7 @@ def test_task_reject_keeps_a_sanitized_category_and_is_not_replayed(conn):
     assert len(rows) == 2
     assert all(r['result_json'] is None and r['error'].startswith('quote_not_exact 0:quote_not_exact,quote_len=21,in_text=0') for r in rows)
     assert secret not in ' '.join(r['error'] for r in rows)
-    later = Client(Budget(meter(conn)), key='dummy', transport=lambda *a: pytest.fail('categorized rejection replayed'))
+    later = Client(Budget(meter(conn)), key='dummy', transport=lambda *a: pytest.fail('categorized rejection replayed'), balance_transport=healthy_balance)
     with pytest.raises(DeepSeekError, match='^task_previously_rejected$'):
         later.call('web-extract-1', 'JSON', {'text': 'source'}, validate)
     assert later.stopped is None
