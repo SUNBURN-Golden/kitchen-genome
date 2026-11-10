@@ -932,6 +932,20 @@
      "extraction_id": "ext_212d80df9878",
      "review_id": "rev_8c0e1cb8a347",
      "reviewed_at": "2026-11-09T07:28:00Z"
+    },
+    {
+     "label": "employment_claim",
+     "label_ko": "근무",
+     "quote": "서울 ‘밍글스’를 이끄는 미쉐린 3스타 셰프 강민구(42)",
+     "src": "https://hankyung.com/article/2026101546211",
+     "date": "2026-10-15",
+     "chef": "강민구",
+     "restaurant": "밍글스",
+     "provenance": "ai_reviewed",
+     "badge": "AI 검토",
+     "extraction_id": "ext_bc489b6d3a3d",
+     "review_id": "rev_688898173a52",
+     "reviewed_at": "2026-11-10T22:16:47Z"
     }
    ]
   },
@@ -2629,6 +2643,48 @@
    "extraction_id": "ext_c5b841f19b55",
    "review_id": "rev_c0e29e4294ce",
    "reviewed_at": "2026-11-09T07:28:02Z"
+  },
+  {
+   "label": "menu",
+   "label_ko": "메뉴",
+   "quote": "메뉴는 한식과 프랑스 요리를 단순히 결합하는 데 그치지 않고 한국 요리 본연의 맛과 식문화를 살리는 데 초점을 맞췄다",
+   "src": "https://wkorea.com/2026/10/20/%ED%95%9C%EC%8B%9D%EC%9D%98-%EB%AF%B8%ED%95%99%EA%B3%BC-%ED%8C%8C%EB%A6%AC%EC%9D%98-%EB%AF%B8%EC%8B%9D-%EC%85%B0%ED%94%84-%EA%B0%95%EB%AF%BC%EA%B5%AC%EC%9D%98-seok",
+   "date": "2026-10-20",
+   "chef": null,
+   "restaurant": "SEOK",
+   "provenance": "ai_reviewed",
+   "badge": "AI 검토",
+   "extraction_id": "ext_e9b670017d32",
+   "review_id": "rev_6a32cfd9cf40",
+   "reviewed_at": "2026-11-10T22:16:45Z"
+  },
+  {
+   "label": "opening",
+   "label_ko": "오픈",
+   "quote": "지난달 17일 한식당 ‘세옥(SEOK)’이 문을 열었다",
+   "src": "https://hankyung.com/article/2026101546211",
+   "date": "2026-10-15",
+   "chef": "강민구",
+   "restaurant": "세옥",
+   "provenance": "ai_reviewed",
+   "badge": "AI 검토",
+   "extraction_id": "ext_1e628c62783c",
+   "review_id": "rev_9eb8764e831f",
+   "reviewed_at": "2026-11-10T22:16:47Z"
+  },
+  {
+   "label": "menu",
+   "label_ko": "메뉴",
+   "quote": "10월 4일부터 31일까지 더 플라잉 호그에서 두 셰프가 함께 구성한 '스와니예 × 라 리스트 셀렉션 7코스'가 별도로 운영된다",
+   "src": "https://digitalchosun.dizzo.com/site/data/html_dir/2026/09/07/2026090780197.html",
+   "date": null,
+   "chef": "이준",
+   "restaurant": "더 플라잉 호그",
+   "provenance": "ai_reviewed",
+   "badge": "AI 검토",
+   "extraction_id": "ext_5f9547ace77e",
+   "review_id": "rev_c8c0ca164903",
+   "reviewed_at": "2026-11-10T22:28:16Z"
   }
  ]
 }

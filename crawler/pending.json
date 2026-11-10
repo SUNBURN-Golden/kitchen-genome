@@ -115,25 +115,6 @@
   "first_seen": "2026-10-21"
  },
  {
-  "id": "jungsik_r",
-  "name": "정식당",
-  "kind": "site_down",
-  "new_name": null,
-  "field": null,
-  "value": null,
-  "reliable_hosts": [
-   "jungsik.com"
-  ],
-  "sources": [
-   "https://www.jungsik.com/hello/"
-  ],
-  "dates": [
-   "2026-11-10"
-  ],
-  "note": null,
-  "first_seen": "2026-11-09"
- },
- {
   "id": "oct19",
   "name": "10월 19일",
   "kind": "field",
@@ -168,7 +149,7 @@
    "https://odrenyc.com/homepage"
   ],
   "dates": [
-   "2026-11-10"
+   "2026-11-11"
   ],
   "note": null,
   "first_seen": "2026-10-24"
