@@ -155,7 +155,7 @@ def article_data(data, text):
             **{k: v for k, v in data.items() if k not in ('url', 'published_at')}}
 
 
-def text_that_fits(client, instruction, data, max_tokens, text):
+def text_that_fits(client, instruction, data, max_tokens, text, *, limit=None):
     """Longest prefix whose byte reservation fits the remaining run and day caps.
 
     The full text is returned unchanged when it already fits, so a cached request
@@ -165,7 +165,7 @@ def text_that_fits(client, instruction, data, max_tokens, text):
         payload = client._payload(instruction, article_data(data, sample), max_tokens, None)[1]
         return reservation_tokens(payload, max_tokens)
 
-    limit = client.budget.room_tokens()
+    limit = client.budget.room_tokens() if limit is None else limit
     if bound(text) <= limit:
         return text
     if len(text) < MIN_MODEL_CHARS or bound(text[:MIN_MODEL_CHARS]) > limit:
@@ -190,14 +190,15 @@ class Adapters:
         self.stats = {'considered': 0, 'skipped_filter': 0, 'skipped_no_targets': 0,
                       'eligible': 0, 'plan_skipped_targets': 0, 'skipped_balance': 0, 'skipped_not_needed': 0, 'skipped_budget': 0, 'called': 0, 'failed': 0, 'findings': 0}
 
-    def _budget_stop(self, exc=None):
-        """A reservation that does not fit stops later model calls and lets deterministic stages finish.
+    def _budget_stop(self, exc=None, workload='fresh'):
+        """Defer rechecks independently; a shared cap pause lets rules finish.
 
         Usage past the byte ceiling still aborts the run: that call was already billed.
         """
         if exc is not None and self.client.stopped == 'usage_over_reservation':
             raise exc
-        self.client.stopped = 'cost_cap'
+        if workload != 'recheck':
+            self.client.stopped = 'cost_cap'
         return []
 
     @classmethod
@@ -344,6 +345,8 @@ class Adapters:
         self.client.budget.workload = workload
         cache_key = (article_key(body['url'], text), workload, body['snapshot_key'], body['source_start'])
         cached = self.article_results.get(cache_key)
+        review_tokens, previous_hold = 0, None
+        fit_limit = self.client.budget.room_tokens()
         if workload == 'recheck' and cached is None:
             reason = self.client.balance.check(self.client.key)
             if reason:
@@ -351,24 +354,34 @@ class Adapters:
                 self.defer_extract = True
                 self.stats['skipped_balance'] += 1
                 return []
-            from .recheck import hold_review
             # Reserve for at most two recheck findings; the extraction validator enforces that ceiling.
+            # Fit BOTH costs before creating a hold. Keep full review context even
+            # when extraction fits only a prefix, and preserve prior window holds.
             review_tokens = len(text.encode()) + 4096 + 440 + 2400
-            if not hold_review(gaz.conn, attempt_id, self.client.budget, review_tokens):
-                self.defer_extract = True
-                self.stats['skipped_budget'] += 1
-                return []
-        fitted = cached[2] if cached else text_that_fits(self.client, EXTRACT_INSTRUCTION, body, max_output, text)
+            old = gaz.conn.execute("SELECT units FROM ai_review_hold WHERE attempt_id=? AND day=? AND state='held'",
+                                  (attempt_id, self.client.budget.day())).fetchone()
+            previous_hold = old['units'] if old else None
+            old_tokens = (previous_hold or 0) / self.client.budget.meter.unit_costs['llm_tokens_k'] * 1000
+            fit_limit -= max(0, review_tokens - old_tokens)
+        fitted = cached[2] if cached else text_that_fits(self.client, EXTRACT_INSTRUCTION, body, max_output, text, limit=fit_limit)
         if fitted is None or self.client.stopped == 'cost_cap':
             self.defer_extract = True
             self.stats['skipped_budget'] += 1
-            self.client.stopped = 'cost_cap'
+            if workload != 'recheck':
+                self.client.stopped = 'cost_cap'
             return []
         self.window_partial = len(fitted) < len(text)
         text = fitted
         if not eligibility(gaz, text)['target_ids']:
             self.stats['skipped_no_targets'] += 1
             return []
+        if workload == 'recheck' and cached is None:
+            from .recheck import hold_review
+            extract_tokens = reservation_tokens(self.client._payload(EXTRACT_INSTRUCTION, article_data(body, text), max_output, None)[1], max_output)
+            if not hold_review(gaz.conn, attempt_id, self.client.budget, review_tokens, extraction_tokens=extract_tokens):
+                self.defer_extract = True
+                self.stats['skipped_budget'] += 1
+                return []
 
         def validate(obj):
             rows = validate_extraction(obj, text)
@@ -376,6 +389,7 @@ class Adapters:
                 raise TaskReject('too_many_findings')
             return rows
         self.stats['called'] += int(cached is None)
+        rows = []
         try:
             if cached is None:
                 rows = self.client.call('web-extract-2', EXTRACT_INSTRUCTION, article_data(body, text), validate, max_tokens=max_output)
@@ -394,7 +408,11 @@ class Adapters:
         except CostCapExceeded as exc:
             self.defer_extract = True
             self.stats['skipped_budget'] += 1
-            return self._budget_stop(exc)
+            return self._budget_stop(exc, workload)
+        finally:
+            if workload == 'recheck' and cached is None and not rows:
+                from .recheck import restore_review_hold
+                restore_review_hold(gaz.conn, attempt_id, previous_hold)
         result = []
         for row in rows:
             r = {**row, 'epistemic': 'inference', 'asserted_by': 'ai_inference', 'pending_only': True, 'extractor': 'deepseek:web',

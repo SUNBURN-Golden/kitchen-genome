@@ -351,7 +351,7 @@ def stage_extract(ctx):
     rows = conn.execute("""SELECT * FROM fetch_record WHERE outcome='ok' AND (extracted_at IS NULL OR extractor_version<>?) ORDER BY fetched_at, rowid""", (EXTRACTOR_VERSION,)).fetchall()
     stats = {'docs': 0, 'new_extractions': 0, 'labels': {}, 'alerts': []}
     for f in rows:
-        attempt = recheck.active_for_job(conn, f['job_id']) if f['job_id'] else None
+        attempt = recheck.active_for_fetch(conn, f)
         if attempt and (not bot.ai or bot.ai.client.status != 'enabled'):
             continue
         doc = load_doc(conn, bot.raw, f)

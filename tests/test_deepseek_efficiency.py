@@ -40,7 +40,7 @@ def test_context_ids_and_candidate_names_never_admit_http(world):
 def test_final_budget_text_is_gated_again(world,monkeypatch):
     import kg_collect.deepseek as module
     a=adapter(world,{'findings':[]})
-    monkeypatch.setattr(module,'text_that_fits',lambda *a:'알수없는 이름만 남았다')
+    monkeypatch.setattr(module,'text_that_fits',lambda *a, **kw:'알수없는 이름만 남았다')
     assert a.extract(doc('처음에는 달빛정원이 있었다'),[],Gazetteer(world))==[]
     assert a.stats['skipped_no_targets']==1 and a.stats['called']==0
 

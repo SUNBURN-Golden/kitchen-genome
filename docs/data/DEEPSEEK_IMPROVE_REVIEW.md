@@ -1,6 +1,11 @@
 # DeepSeek efficiency BUILD REVIEW
 
-Date: 2026-11-10. Decision: **CHANGES REQUIRED** before merge.
+Date: 2026-11-10. BUILD REVIEW decision: **CHANGES REQUIRED** before merge.
+
+REVIEW FIX update (2026-11-10): **R1–R4 fixed**, with mocked regressions below.
+Changes remain on `feat/deepseek-collector-improve-20261110` / PR #83 for the
+separate re-review and audit stages; merge remains with the human/coordinator.
+The original findings and reproduction evidence are retained for review.
 
 Reviewed `origin/main` (`613cccefcedd1e5b38fde50c388d23cd29583fa8`)
 against implementation `d893263080a911c02a593521d8ec86e533634edc`
@@ -9,15 +14,23 @@ on `review/deepseek-efficiency-build-20261110`. This new branch starts at
 the complete 36-file implementation diff and the design contract in
 `docs/data/DEEPSEEK_IMPROVE_DESIGN.md`.
 
-This commit records BUILD REVIEW only. The four findings below belong in the
-next `review_fix` stage, followed by `re_review` and `audit` from
-`config/dev_lanes.json`. No paid development lane, Cursor CloudAgent, live
+The original review recorded the four findings below for `review_fix`, followed
+by `re_review` and `audit` from `config/dev_lanes.json`. No paid development lane, Cursor CloudAgent, live
 DeepSeek request (including balance), Argon invocation, production pipeline,
 production migration, network publication, merge, or deploy was executed.
 
 ## Findings
 
 ### R1 — P1: A recheck sublimit pause stops affordable fresh extraction
+
+**Fixed.** Extraction now fits its byte reservation and full review-context
+headroom together before creating or growing a hold. Recheck sublimit/fitting
+and reservation-race deferrals leave the shared client enabled for fresh work.
+Empty/failed extraction releases its speculative hold or restores an earlier
+window's hold. Usage exceeding a paid reservation still stops the phase.
+Regressions run the actual chronological extraction stage with an older,
+deferred recheck followed by fresh work; they also cover empty results,
+reservation races, restored holds, and the unchanged 8/20-unit caps.
 
 Location: `daemon/kg_collect/deepseek.py:354-365`, especially the unconditional
 `self.client.stopped = 'cost_cap'` at line 365;
@@ -49,6 +62,16 @@ Add a regression with an older deferred recheck followed by an eligible fresh
 document; assert fresh extraction runs and total/recheck caps remain enforced.
 
 ### R2 — P1: Korean rule dates make valid recheck findings unreviewable
+
+**Fixed.** New extraction rows persist verbatim `date_text` and separate
+`date_iso`; status/gap/bridge consumers prefer the normalized value. Additive
+migration 0009 preserves legacy normalized dates and repairs already queued
+rule rechecks from their original structured finding. Model evidence and its
+strict precheck are unchanged. Rule parsing also recognizes valid ISO month/day
+dates without substituting publication/fetch dates. Parameterized regressions
+send Korean, relative, English, and ISO dates through common review with both
+approval and rejection, checking badge/source/log, rollback, and unchanged core
+seed fields. A legacy-schema migration regression excludes model-evidence repair.
 
 Location: the new rule-to-review routing in
 `daemon/kg_collect/pipeline.py:60-64,84,91-96`, interacting with
@@ -83,6 +106,12 @@ common review path.
 
 ### R3 — P2: A page about another restaurant advances the due restaurant
 
+**Fixed.** The inspection marker requires a textual Gazetteer alias belonging
+to the attempt's restaurant target. Another registered restaurant, an unrelated
+chef, or even the due restaurant's chef alone cannot advance the timestamp;
+job/search context is insufficient evidence. Regressions cover all three
+negative cases and both Korean and English target aliases.
+
 Location: `daemon/kg_collect/pipeline.py:99-100,253-256`;
 `daemon/kg_collect/recheck.py:157-158`.
 
@@ -109,6 +138,13 @@ chef, plus a genuine target alias; only supported target inspection may advance
 `last_checked_at`.
 
 ### R4 — P2: Coalesced jobs include historical fetches in the current attempt
+
+**Fixed.** Extraction assignment and reconciliation use the same attempt-time
+boundary (`fetched_at >= queued_at`). Historical fetches remain ordinary
+collection provenance and cannot complete or invalidate the current attempt.
+Current pending fetches still keep the attempt open for retry. Regressions
+coalesce an ordinary official job with either an extracted or an unextracted
+historical fetch, then inspect the current fetch and verify monthly completion.
 
 Location: `daemon/kg_collect/recheck.py:148-156`, with job coalescing at
 `daemon/kg_collect/recheck.py:59-64`.
@@ -145,7 +181,7 @@ fetch.
 | --- | --- |
 | Pre-filter | Shared active Gazetteer eligibility covers extraction/review; plan uses active registered gap metadata rather than page bodies. Unknown-only input is skipped; a known mention can admit mixed known/unknown text. Existing mocked tests pass. Monthly completion needs the stronger association in R3. |
 | Article batching/cache | Stable sanitized source messages precede variable findings/corrections; equivalent URL/snapshots group across review fetches, extraction reuses validated article results, and strict review ID validation and budget splitting are tested. No additional blocking finding identified in these paths. |
-| Monthly recheck | Additive durable schedule, daily admission, staggering, workload subcap, holds, provenance, and common review routing are present. R1–R4 prevent accepting this requirement as complete. |
+| Monthly recheck | Additive durable schedule, daily admission, staggering, workload subcap, holds, provenance, and common review routing are present. REVIEW FIX addresses R1–R4 with budget fairness, literal dates, target-specific inspection, and attempt-time fetch boundaries; separate re-review/audit remain. |
 | Weekly digest | Offline writer reconciles published career/employment approvals and rollbacks, preserves separate human/Argon copy, and writes under `marketing/drafts/`. Header/docs require explicit Gemini Argon review through `marketing/argon_review.sh`; daily generation does not invoke it. Mocked filesystem/no-network tests pass. |
 | Balance warning | USD 0.50 / CNY 4.00 floors, unavailable/low-balance fail-closed handling, healthy TTL, pause latch, pre-reservation guard, and summary propagation are present. Mocked low-balance, unavailable, schema, bounds, replay and shell-result tests pass. |
 
@@ -198,6 +234,29 @@ and `config/dev_lanes.json` are unchanged against `origin/main`;
 `.devpipe-font/`, `marketing/x_launch.md`, and `marketing/x_launch_argon.md` stay
 outside the commit. No site output changed, so **no deploy is required**.
 
-Open the branch as a draft PR with these findings visible. Keep merge with the
-human/coordinator after REVIEW FIX, re-review, audit, and passing regression
-tests; passing existing tests alone does not resolve these four findings.
+PR #83 already exists; REVIEW FIX updates that same branch and PR. Keep merge
+with the human/coordinator after re-review, audit, and passing regression tests.
+
+## REVIEW FIX verification
+
+Final verification after R1–R4 corrections:
+
+```sh
+KG_IG=0 PYTHONPATH=daemon:tests pytest -q tests
+# 400 passed, 1 skipped, 285 subtests passed
+bash -n scripts/daily_pipeline.sh scripts/collect_daily.sh marketing/argon_review.sh
+git diff --cached --check
+```
+
+The skip remains the existing synthetic collector acceptance case. Completion
+and balance transports are mocked; the autouse guard rejects unexpected live
+DeepSeek HTTP. The migration upgrade runs only in temporary test databases.
+Staged credential-pattern, scope, and feature-flag checks passed without printing
+credential content. No live provider, production pipeline, Argon, publication,
+merge, deploy, or paid development lane ran. Instagram remains disabled and its
+protected flags were untouched; the 20-unit shared cap and false web feature
+flags are unchanged. No site output changed, so no deploy is required.
+
+Unrelated local `config/dev_lanes.json`, `.devpipe-font/`, `marketing/x_launch.md`,
+and `marketing/x_launch_argon.md` changes remain outside the fix commit. No
+known residual from R1–R4 remains; separate re-review and audit are still required.

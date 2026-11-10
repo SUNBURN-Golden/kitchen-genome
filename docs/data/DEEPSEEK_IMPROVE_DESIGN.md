@@ -1,6 +1,6 @@
 # DeepSeek collector efficiency improvements
 
-Status: BUILD implemented (2026-11-10), awaiting BUILD REVIEW. Owner order:
+Status: REVIEW FIX implemented (2026-11-10), awaiting re-review/audit. Owner order:
 2026-11-10. The reviewed design below is preserved as the implementation contract.
 Verification uses mocked completion and balance HTTP only. No paid call, live
 provider smoke, runtime database migration, deployment, or publication was run.
@@ -37,6 +37,23 @@ BUILD notes:
 - Both shell summaries retain AI pause reasons across deterministic work and
   review passes. `KG_IG` defaults to zero. Local-daemon caps are clamped to 20;
   collector HTTP units remain separate from the shared model allowance.
+
+BUILD REVIEW corrections (R1–R4 in `DEEPSEEK_IMPROVE_REVIEW.md`):
+
+- Recheck extraction fits its own byte reservation plus full review-context hold
+  before reserving either. A workload deferral leaves fresh extraction enabled;
+  empty/error results release only the new hold or restore prior headroom.
+- Migration 0009 separates verbatim rule `date_text` from normalized `date_iso`.
+  Review uses the former; date consumers prefer the latter. Existing queued rule
+  rechecks recover literal dates from their structured findings. Model evidence
+  retains the strict verbatim/ISO extraction checks and is never repaired.
+- A completed monthly inspection must mention the due restaurant's own active
+  Gazetteer alias. Chef-only mentions and job/search metadata do not establish
+  a restaurant inspection, even when they pass general AI eligibility.
+- A coalesced job contributes only fetches at or after the attempt's `queued_at`
+  boundary, consistently during extraction and reconciliation. Historical
+  extracted/unextracted fetches retain their ordinary provenance; current
+  uninspected fetches and open reviews keep the attempt pending.
 
 
 Review fixes folded into this revision:

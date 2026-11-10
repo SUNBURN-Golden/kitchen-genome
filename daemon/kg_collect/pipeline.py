@@ -44,9 +44,9 @@ def mentions_of(gaz: Gazetteer, text: str) -> dict:
 
 def process_doc(conn, doc: Doc, gaz: Gazetteer, *, tier: str, ctx: dict | None = None, via: str = '', ocr_conf=None, model_hook=None, model_adapter=None, now=None) -> dict:
     """Returns {'new': n, 'total': n, 'labels': {...}, 'alerts': [...]}. Never raises on empty extraction (that is information)."""
-    from .recheck import active_for_job
-    fr = conn.execute('SELECT job_id FROM fetch_record WHERE fetch_id=?', (doc.fetch_id,)).fetchone()
-    attempt = active_for_job(conn, fr['job_id']) if fr and fr['job_id'] else None
+    from .recheck import active_for_fetch
+    fr = conn.execute('SELECT job_id,fetched_at FROM fetch_record WHERE fetch_id=?', (doc.fetch_id,)).fetchone()
+    attempt = active_for_fetch(conn, fr) if fr else None
     workload = 'recheck' if attempt else 'fresh'
     now = now or utcnow()
     texts = [(doc.text, doc.published_at)]
@@ -77,11 +77,11 @@ def process_doc(conn, doc: Doc, gaz: Gazetteer, *, tier: str, ctx: dict | None =
     new = 0
     labels: dict = {}
     for r in recs_all:
-        cur = conn.execute("""INSERT OR IGNORE INTO extraction(extraction_id,fetch_id,canonical_url,host,label,epistemic,chef_text,restaurant_text,org_text,role_text,date_text,tenure_from,tenure_to,
+        cur = conn.execute("""INSERT OR IGNORE INTO extraction(extraction_id,fetch_id,canonical_url,host,label,epistemic,chef_text,restaurant_text,org_text,role_text,date_text,date_iso,tenure_from,tenure_to,
                               span_start,span_end,quote,extractor,extractor_version,ambiguity,resolved_chef_target,resolved_restaurant_target,resolved_org_target,resolve_note,published_at,created_at)
-                              VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)""",
+                              VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)""",
                            (r['extraction_id'], doc.fetch_id, doc.canonical_url, doc.host, r['label'], r['epistemic'], r.get('chef_text'), r.get('restaurant_text'), r.get('org_text'),
-                            r.get('role_text'), r.get('date_iso') or r.get('date_text'), r.get('tenure_from'), r.get('tenure_to'), r['span_start'], r['span_end'], r['quote'],
+                            r.get('role_text'), r.get('date_text'), r.get('date_iso'), r.get('tenure_from'), r.get('tenure_to'), r['span_start'], r['span_end'], r['quote'],
                             r['extractor'], r['extractor_version'], r.get('ambiguity'), r.get('resolved_chef_target'), r.get('resolved_restaurant_target'), r.get('resolved_org_target'),
                             r.get('resolve_note'), r.get('published_at'), now))
         conn.execute('INSERT OR IGNORE INTO article_extraction_fetch(extraction_id,fetch_id) VALUES (?,?)', (r['extraction_id'], doc.fetch_id))
@@ -96,7 +96,7 @@ def process_doc(conn, doc: Doc, gaz: Gazetteer, *, tier: str, ctx: dict | None =
                          dedupe_key='ai:extraction:' + r['extraction_id'])
         new += cur.rowcount
         labels[r['label']] = labels.get(r['label'], 0) + 1
-    if attempt and not doc.items and (rule_inspected or (model_adapter and not model_adapter.defer_extract and model_adapter.client.status == 'enabled')) and len(doc.text) <= 12000 and eligibility_for_recheck(gaz, doc.text):
+    if attempt and not doc.items and (rule_inspected or (model_adapter and not model_adapter.defer_extract and model_adapter.client.status == 'enabled')) and len(doc.text) <= 12000 and eligibility_for_recheck(gaz, doc.text, attempt):
         conn.execute('INSERT INTO restaurant_recheck_job(attempt_id,job_id,fetch_id) VALUES (?,?,?)', (attempt['attempt_id'],fr['job_id'],doc.fetch_id))
     for tid, n in mentions_of(gaz, doc.text or ' '.join(f"{i['title']} {i['summary']}" for i in doc.items)).items():
         conn.execute('INSERT OR IGNORE INTO doc_target(fetch_id,target_id,mentions) VALUES (?,?,?)', (doc.fetch_id, tid, n))
@@ -250,7 +250,10 @@ def fetch_regression_alert(conn, doc, now=None) -> dict | None:
     return {'kind': kind, 'url': doc.canonical_url}
 
 
-def eligibility_for_recheck(gaz, text):
+def eligibility_for_recheck(gaz, text, attempt):
     from .targets import eligibility
     from .deepseek import sanitize_before_store
-    return bool(eligibility(gaz, sanitize_before_store(text)[0] or '')['target_ids'])
+    target = gaz.conn.execute('SELECT target_id FROM restaurant_recheck WHERE restaurant_id=?', (attempt['restaurant_id'],)).fetchone()
+    # Job/search metadata and another registered chef are not evidence that the
+    # due restaurant was inspected. All its registered aliases are eligible.
+    return bool(target and target['target_id'] in eligibility(gaz, sanitize_before_store(text)[0] or '')['target_ids'])

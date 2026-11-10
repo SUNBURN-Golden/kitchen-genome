@@ -34,6 +34,16 @@ def active_for_job(conn, job_id):
                            WHERE l.job_id=? AND a.state IN ('queued','inspecting','review') ORDER BY a.queued_at LIMIT 1""", (job_id,)).fetchone()
 
 
+def active_for_fetch(conn, fetch):
+    """Only fetches made since admission belong to a coalesced job's attempt.
+
+    Use the same boundary during extraction and reconciliation. Historical
+    fetches remain ordinary work, including those awaiting extraction/replay.
+    """
+    attempt = active_for_job(conn, fetch['job_id']) if fetch['job_id'] else None
+    return attempt if attempt and fetch['fetched_at'] >= attempt['queued_at'] else None
+
+
 def admit(conn, seeds, budget, *, now=None):
     """Daily admission is atomic across reruns. A balance pause never creates new work."""
     now = now or dt.datetime.now(dt.timezone.utc)
@@ -94,16 +104,15 @@ def link_children(conn, parent):
                 conn.execute('INSERT INTO restaurant_recheck_job(attempt_id,job_id) VALUES (?,?)', (attempt['attempt_id'],j['job_id']))
 
 
-def hold_review(conn, attempt, budget, tokens):
+def hold_review(conn, attempt, budget, tokens, *, extraction_tokens=0):
     """Reserve review headroom before speculative extraction; holds are not billed usage."""
     conn.commit()
     try:
         conn.execute('BEGIN IMMEDIATE')
         old = conn.execute("SELECT * FROM ai_review_hold WHERE attempt_id=? AND day=? AND state='held'", (attempt,budget.day())).fetchone()
-        if old:
-            conn.commit()
-            return True
-        if tokens > budget.room_tokens():
+        old_tokens = old['units'] / budget.meter.unit_costs['llm_tokens_k'] * 1000 if old else 0
+        tokens = max(tokens, old_tokens)
+        if tokens - old_tokens + extraction_tokens > budget.room_tokens():
             conn.rollback()
             return False
         units = tokens / 1000 * budget.meter.unit_costs['llm_tokens_k']
@@ -113,6 +122,15 @@ def hold_review(conn, attempt, budget, tokens):
     except Exception:
         conn.rollback()
         raise
+
+
+def restore_review_hold(conn, attempt, previous_units):
+    """Undo speculative headroom when extraction produced no reviewable rows."""
+    if previous_units is None:
+        conn.execute("UPDATE ai_review_hold SET state='released' WHERE attempt_id=? AND state='held'", (attempt,))
+    else:
+        conn.execute("UPDATE ai_review_hold SET units=? WHERE attempt_id=? AND state='held'", (previous_units, attempt))
+    conn.commit()
 
 
 def finish(conn, aid, outcome, *, now=None, completed=False):
@@ -146,7 +164,8 @@ def reconcile(conn):
             conn.execute("UPDATE restaurant_recheck_attempt SET state='review' WHERE attempt_id=?", (aid,))
             continue
         prose = conn.execute("""SELECT DISTINCT f.* FROM fetch_record f JOIN restaurant_recheck_job l USING(job_id)
-                                WHERE l.attempt_id=? AND f.outcome='ok' AND f.method NOT IN ('feed','sitemap')""", (aid,)).fetchall()
+                                WHERE l.attempt_id=? AND f.fetched_at>=? AND f.outcome='ok'
+                                AND f.method NOT IN ('feed','sitemap')""", (aid,a['queued_at'])).fetchall()
         uninspected = [f for f in prose if not conn.execute(
             'SELECT 1 FROM restaurant_recheck_job WHERE attempt_id=? AND fetch_id=? AND extraction_id IS NULL',
             (aid,f['fetch_id'])).fetchone()]
