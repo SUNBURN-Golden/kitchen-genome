@@ -15,7 +15,7 @@ if [ "${KG_COLLECT:-1}" = 1 ] && [ -f "$KG_DB" ]; then
   PYTHONPATH=daemon timeout "${KG_COLLECT_TIMEOUT:-1500}" python3 -m kg_collect --db "$KG_DB" cycle \
     --units "${KG_COLLECT_UNITS:-60}" --cost-cap "${KG_COLLECT_COST_CAP:-78}" --no-browser "${AI_ARGS[@]}" >"$COLLECT_JSON" 2>/dev/null || COLLECT_RC=$?
   if [ "$COLLECT_RC" = 0 ]; then
-    COLLECT_OUT=$(python3 -c 'import json,sys; d=json.load(open(sys.argv[1])); s=d.get("ai_stats") or {}; print("COLLECT="+d["status"], "run="+str(d.get("run_id")), "ai="+d.get("ai","disabled"), "reason="+d.get("ai_reason","none"), "cost="+str(d.get("cost_used")), "ai_docs=%s/%s/%s/%s/%s" % (s.get("considered",0), s.get("skipped_filter",0), s.get("called",0), s.get("failed",0), s.get("findings",0)))' "$COLLECT_JSON") || COLLECT_OUT='COLLECT=failed reason=invalid_summary'
+    COLLECT_OUT=$(python3 -c 'import json,sys; d=json.load(open(sys.argv[1])); s=d.get("ai_stats") or {}; print("COLLECT="+d["status"], "run="+str(d.get("run_id")), "ai="+d.get("ai","disabled"), "reason="+d.get("ai_reason","none"), "cost="+str(d.get("cost_used")), "ai_docs=%s/%s/%s/%s/%s" % (s.get("considered",0), s.get("skipped_filter",0), s.get("called",0), s.get("failed",0), s.get("findings",0)), "ai_skipped_no_targets="+str(s.get("skipped_no_targets",0)), "ai_skipped_balance="+str(s.get("skipped_balance",0)))' "$COLLECT_JSON") || COLLECT_OUT='COLLECT=failed reason=invalid_summary'
   else
     COLLECT_OUT="COLLECT=failed reason=exit_$COLLECT_RC"
   fi
@@ -24,7 +24,7 @@ else
   COLLECT_OUT='COLLECT=skipped reason=disabled_or_missing_db ai=disabled'
 fi
 echo "$COLLECT_OUT"
-if [ "${KG_IG:-1}" = 1 ] && [ -f "$KG_DB" ]; then
+if [ "${KG_IG:-0}" = 1 ] && [ -f "$KG_DB" ]; then
   IG_RC=0
   IG_OUT=$(PYTHONPATH=daemon timeout --kill-after=15 900 python3 crawler/instagram_kg.py --db "$KG_DB" \
     --cost-cap "${KG_IG_COST_CAP:-20}" "${AI_ARGS[@]}" 2>/dev/null) || IG_RC=$?

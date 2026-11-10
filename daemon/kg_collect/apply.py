@@ -80,7 +80,7 @@ def apply_affiliation(conn, now: str | None = None, tier_of=lambda host: 'press'
                         published_at=e['published_at'], effective_from=(e['published_at'] or '')[:10] or None)
         # A single collected statement NEVER closes a tenure (and never with the fetch date as the end): the change is recorded and queued as a
         # candidate move; only the daemon's verified path (official/human source or 2 independent trusted sources, stated date) may move a chef.
-        cl.queue_review(conn, 'move_needs_verification', 'chef', chef_id, {'to_branch_id': branch, 'from': old_val, 'evidence': evidence, 'stated_date': e['date_text']},
+        cl.queue_review(conn, 'move_needs_verification', 'chef', chef_id, {'to_branch_id': branch, 'from': old_val, 'evidence': evidence, 'stated_date': e['date_iso'] or e['date_text']},
                         dedupe_key=f'move_needs_verification:collect:{e["extraction_id"]}')
         conn.execute("INSERT INTO field_history(subject_id,field,old_value,new_value,old_extraction,new_extraction,published_at,detected_at,latency_hours) VALUES (?,?,?,?,?,?,?,?,?)",
                      (e['resolved_chef_target'], 'affiliation', old_val, e['rest_name'], None, e['extraction_id'], e['published_at'], now, _latency_hours(e['published_at'], now)))
@@ -107,7 +107,8 @@ def apply_status(conn, now: str | None = None, tier_of=lambda host: 'press') -> 
         if conn.execute('SELECT 1 FROM restaurant_status_event WHERE event_id=?', (eid,)).fetchone():
             continue
         kind = STATUS_KIND[e['label']]
-        if kind in ('open', 'close') and conn.execute('SELECT 1 FROM restaurant_status_event WHERE branch_id=? AND kind=? AND COALESCE(effective_date,"")=COALESCE(?,"") AND state=\'active\'', (branch, kind, e['date_text'] or None)).fetchone():
+        d = e['date_iso'] or e['date_text'] or ''
+        if kind in ('open', 'close') and conn.execute('SELECT 1 FROM restaurant_status_event WHERE branch_id=? AND kind=? AND COALESCE(effective_date,"")=COALESCE(?,"") AND state=\'active\'', (branch, kind, d or None)).fetchone():
             out['skipped'] += 1                       # same event already on file (seed or an earlier source): corroboration, not a duplicate row
             continue
         status = 'unverified' if e['epistemic'] == 'unverified' else 'source_claim'
@@ -116,7 +117,6 @@ def apply_status(conn, now: str | None = None, tier_of=lambda host: 'press') -> 
         ev = cl.add_evidence(conn, source_id=src, source_url=e['canonical_url'], collected_at=now, quote=e['quote'][:200], published_at=e['published_at'],
                              locator={'extraction_id': e['extraction_id'], 'span': [e['span_start'], e['span_end']]})
         cl.link_evidence(conn, cid, ev)
-        d = e['date_text'] or ''
         prec = 'day' if len(d) == 10 else 'month' if len(d) == 7 else 'year' if len(d) == 4 else None
         conn.execute("""INSERT OR IGNORE INTO restaurant_status_event(event_id,branch_id,kind,effective_date,effective_precision,detail,claim_id,created_at) VALUES (?,?,?,?,?,?,?,?)""",
                      (eid, branch, kind if kind != 'move' else 'move', d or None, prec, e['quote'][:200], cid, now))

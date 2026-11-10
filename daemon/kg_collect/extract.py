@@ -6,6 +6,7 @@ Hard rules: guest events are 'collab', never employment. Co-working is 'collab/c
 Nothing is filled in from outside the sentence; a value we cannot read stays NULL."""
 import hashlib
 import re
+import datetime as dt
 
 from . import EXTRACTOR_VERSION
 
@@ -36,6 +37,7 @@ FUTURE = re.compile(r'예정|계획|앞두고|앞둔|할\s?것이다|할\s?전�
 DEMONSTRATIVE = re.compile(r'^\s*(?:이곳|이\s?식당|이\s?레스토랑|이\s?업장|해당\s?(?:식당|레스토랑|업장)|이\s?가게)')
 PRONOUN_SUBJ = re.compile(r'^\s*(?:그는|그녀는|그가|이\s?셰프는|해당\s?셰프는|그의)')
 DATE_RE = re.compile(r'(?:(20\d{2})\s?년\s?)?(\d{1,2})\s?월(?:\s?(\d{1,2})\s?일)?|(20\d{2})\s?년(?!\s?\d{1,2}\s?월)')
+ISO_DATE = re.compile(r'(?<![\d-])20\d{2}-\d{2}(?:-\d{2})?(?![\d-])')
 TENURE_RE = re.compile(r'(20\d{2})\s?(?:년)?\s?(?:[~\-–]|부터)\s?(20\d{2}|현재|지금)')
 DURATION_RE = re.compile(r'(\d{1,2})\s?년(?:\s?간|\s?동안|\s?가량|\s?여)')
 
@@ -412,6 +414,14 @@ def extract_text(text: str, *, gaz, host: str, published_at: str | None = None, 
             dm = None                              # '지난해 5월': the bare month must not borrow the publication year
         if not dm:
             date_txt, date_iso, date_note = relative_or_english_date(sent, pub_year)
+            im = ISO_DATE.search(sent) if not date_txt else None
+            if im:
+                try:
+                    dt.date.fromisoformat(im.group(0) + ('-01' if len(im.group(0)) == 7 else ''))
+                except ValueError:
+                    pass
+                else:
+                    date_txt = date_iso = im.group(0)
         tm = TENURE_RE.search(sent)
         role = re.search(ROLE_RE, sent)
 

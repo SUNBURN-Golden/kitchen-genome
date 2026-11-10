@@ -11,11 +11,23 @@ set -euo pipefail
 REPO="${1:-/tmp/kg}"; KG_HOME="${KG_HOME:-/workspace/kitchen-genome}"
 SCRIPT_DIR=$(cd "$(dirname "$0")" && pwd)
 CF_TOKEN="${KG_CF_TOKEN_FILE:-/home/box/.secrets/cloudflare_pages_token}"
-STAGE=resolve; FINAL=0
+STAGE=resolve; FINAL=0; AI_REASON=none
+export KG_IG="${KG_IG:-0}"
+record_ai_reason() {
+  local line="$1" reason=none token
+  for token in $line; do
+    case "$token" in reason=*|ai_reason=*) reason="${token#*=}";; esac
+  done
+  case "$reason" in
+    balance_low) AI_REASON=balance_low;;
+    balance_unavailable) [ "$AI_REASON" = balance_low ] || AI_REASON=balance_unavailable;;
+    missing_summary|invalid_summary) [ "$AI_REASON" != none ] || AI_REASON="$reason";;
+  esac
+}
 finish() {
   local rc=$?
   if [ "$FINAL" = 0 ]; then
-    echo "RESULT=FAILED stage=$STAGE reason=command_failed exit=$rc"
+    echo "RESULT=FAILED stage=$STAGE reason=command_failed exit=$rc ai_reason=$AI_REASON"
   fi
 }
 trap finish EXIT
@@ -41,7 +53,10 @@ ai_review() {
     local out
     out=$(PYTHONPATH=daemon timeout 600 python3 -m kg_ai --db "$KG_DB" --seed "$REPO/data/seed.json" --log "$REPO/data/ai_review_log.jsonl" 2>/dev/null) \
       || out="AI_REVIEW failed exit=$?"
-    printf '%s\n' "$out" | sed -n '/^AI_REVIEW/p' | tail -1
+    out=$(printf '%s\n' "$out" | sed -n '/^AI_REVIEW/p' | tail -1)
+    [ -n "$out" ] || out='AI_REVIEW skipped reason=missing_summary'
+    printf '%s\n' "$out"
+    record_ai_reason "$out"
   fi
 }
 STAGE=ai_review_backlog
@@ -57,6 +72,7 @@ IG_OUT=$(printf '%s\n' "$COLLECT_LOG" | sed -n '/^IG_/p' | tail -1)
 [ -n "$COLLECT_OUT" ] || COLLECT_OUT='COLLECT=failed reason=missing_summary'
 [ -n "$IG_OUT" ] || IG_OUT='IG_FAILED account=kitchen.genome reason=missing_summary'
 echo "$IG_OUT"
+record_ai_reason "$COLLECT_OUT"
 # Machine registry edits ship separately through human-reviewed PRs.
 git checkout -q -- sources 2>/dev/null || true
 STAGE=daemon
@@ -64,12 +80,22 @@ AI_ARGS=()
 [ "${KG_DEEPSEEK:-1}" != 1 ] || AI_ARGS=(--deepseek)
 if [ "${KG_COLLECT:-1}" = 1 ] && [ -f "$KG_DB" ]; then
   DAEMON_RC=0
+  DAEMON_JSON=$(mktemp)
   PYTHONPATH=daemon timeout 600 python3 -m kg_daemon --db "$KG_DB" run --collect-db "$KG_DB" \
-    --cost-cap "${KG_DAEMON_COST_CAP:-20}" "${AI_ARGS[@]}" >/dev/null 2>&1 || DAEMON_RC=$?
-  echo "DAEMON=finished exit=$DAEMON_RC"
+    --cost-cap "${KG_DAEMON_COST_CAP:-20}" "${AI_ARGS[@]}" >"$DAEMON_JSON" 2>/dev/null || DAEMON_RC=$?
+  if [ ! -s "$DAEMON_JSON" ]; then
+    DAEMON_OUT="DAEMON=finished exit=$DAEMON_RC reason=missing_summary"
+  else
+    DAEMON_OUT=$(python3 -c 'import json,sys; d=json.load(open(sys.argv[1])); s=d.get("ai_stats") or {}; print("DAEMON=finished exit="+sys.argv[2], "ai="+d.get("ai","disabled"), "reason="+d.get("ai_reason","none"), "ai_skipped_no_targets="+str(s.get("skipped_no_targets",0)), "ai_skipped_balance="+str(s.get("skipped_balance",0)))' "$DAEMON_JSON" "$DAEMON_RC" 2>/dev/null) || DAEMON_OUT="DAEMON=finished exit=$DAEMON_RC reason=invalid_summary"
+  fi
+  rm -f "$DAEMON_JSON"
+  echo "$DAEMON_OUT"
+  record_ai_reason "$DAEMON_OUT"
 fi
 STAGE=ai_review
 ai_review
+STAGE=digest
+python3 scripts/build_weekly_digest.py --repo "$REPO"
 STAGE=apply
 python3 crawler/apply.py
 python3 data/enrich_en.py
@@ -81,7 +107,7 @@ grep -q '^const SHOW_NEWSLETTER=false;' web/app.js
 if grep -rqi 'noindex' web; then echo "GUARD FAIL: noindex found"; exit 3; fi
 STAGE=pr
 git add -A data crawler web scripts .gitignore
-if git diff --cached --quiet; then git checkout -q main; git branch -D "$BR" -q; echo "$IG_OUT"; FINAL=1; echo "RESULT=NO_CHANGE"; exit 0; fi
+if git diff --cached --quiet; then git checkout -q main; git branch -D "$BR" -q; echo "$IG_OUT"; FINAL=1; echo "RESULT=NO_CHANGE reason=$AI_REASON"; exit 0; fi
 WEB_CHANGED=0; git diff --cached --quiet -- web || WEB_CHANGED=1
 SUM=$(python3 -c "import json;s=json.load(open('crawler/out/last_summary.json'));print('; '.join(f\"{a['name']}: {a['kind']} {a.get('new_name') or a.get('field') or ''}\" for a in s['applied']) or 'pending queue only', '| pending', s['pending_count'])")
 git commit -q -m "crawl $DAY: $SUM"
@@ -95,10 +121,10 @@ echo "$IG_OUT"
 FINAL=1
 if [ "$WEB_CHANGED" = 1 ]; then
   if [ -f "$CF_TOKEN" ]; then
-    ./deploy.sh main >/dev/null && echo "RESULT=DEPLOYED pr=$PR" || echo "RESULT=NEEDS_DEPLOY pr=$PR"
+    ./deploy.sh main >/dev/null && echo "RESULT=DEPLOYED pr=$PR reason=$AI_REASON" || echo "RESULT=NEEDS_DEPLOY pr=$PR reason=$AI_REASON"
   else
-    echo "RESULT=NEEDS_DEPLOY pr=$PR"
+    echo "RESULT=NEEDS_DEPLOY pr=$PR reason=$AI_REASON"
   fi
 else
-  echo "RESULT=MERGED_NO_DEPLOY pr=$PR"
+  echo "RESULT=MERGED_NO_DEPLOY pr=$PR reason=$AI_REASON"
 fi

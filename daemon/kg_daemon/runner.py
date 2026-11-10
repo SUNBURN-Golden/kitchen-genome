@@ -25,7 +25,7 @@ DEFAULT_CONFIG = {
     'max_attempts': 3,
     'backoff_base_sec': 2.0,
     'backoff_max_sec': 30.0,
-    'cost_cap_units': 200.0,
+    'cost_cap_units': 20.0,
     'unit_costs': {'http_request': 1.0, 'llm_tokens_k': 0.5, 'db_write': 0.0},
     'stale_open_employment_days': 180,
 }
@@ -92,6 +92,8 @@ class Daemon:
                  sleep=time.sleep, clock=utcnow, owner: str | None = None, stages=STAGES):
         self.conn, self.handlers, self.env, self.sleep, self.clock = conn, handlers, env or {}, sleep, clock
         self.config = {**DEFAULT_CONFIG, **(config or {})}
+        if self.config['daemon_name'] == 'kg-daemon':
+            self.config['cost_cap_units'] = max(0, min(20, self.config['cost_cap_units']))
         self.owner = owner or new_id('own')
         self.stages = stages
         missing = [s for s in stages if s not in handlers]

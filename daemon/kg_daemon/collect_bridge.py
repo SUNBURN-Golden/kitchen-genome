@@ -77,10 +77,12 @@ def _young(published_at, today) -> bool:
 
 def effective_date(x):
     """Date stated in the evidence text (year inferred from publication only for '10월 3일'-style dates). Never the fetch date."""
+    if x.get('date_iso'):
+        return x['date_iso']
     if not x.get('date_text'):
         # a stated tenure start ('2019년부터') is the effective date of a role
         return x.get('tenure_from') if x.get('label') in ('career', 'employment_claim') and x.get('tenure_from') else None
-    if re.fullmatch(r'\d{4}(-\d{2}(-\d{2})?)?', x['date_text'].strip()):     # the collector stores date_text already normalised to ISO
+    if re.fullmatch(r'\d{4}(-\d{2}(-\d{2})?)?', x['date_text'].strip()):
         return x['date_text'].strip()
     try:
         from kg_collect.extract import DATE_RE, EN_DATE, REL_DATE, iso_from_dateish, relative_or_english_date

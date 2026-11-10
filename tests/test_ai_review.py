@@ -1,3 +1,4 @@
+from tests_balance_fake import healthy_balance
 """DeepSeek review stage: approved AI findings publish with provenance + rollback log; rejected ones close; cap respected."""
 import json
 import os
@@ -51,11 +52,11 @@ def add(conn, xid, label, quote, **kw):
 def client_for(conn, decisions, calls):
     def transport(payload, key):
         body = json.loads(payload); calls.append(body)
-        data = json.loads(body['messages'][1]['content'])
+        data = json.loads(body['messages'][2]['content'])
         assert body['temperature'] == 0 and body['thinking'] == {'type': 'disabled'} and body['model'] == 'deepseek-chat'
         return response({'reviews': [{'id': f['id'], 'decision': decisions[f['id']], 'reason': 'ok' if decisions[f['id']] == 'approve' else 'fiction'}
                                      for f in data['findings']]})
-    return Client(Budget(meter(conn)), key='dummy', transport=transport)
+    return Client(Budget(meter(conn)), key='dummy', transport=transport, balance_transport=healthy_balance)
 
 
 def test_approve_publishes_with_badge_and_reject_closes(env):
@@ -68,7 +69,7 @@ def test_approve_publishes_with_badge_and_reject_closes(env):
     s = rv.review(conn, str(sp), str(log), raw, client=client_for(conn, {'x_open': 'approve', 'x_fic': 'reject', 'x_rep': 'approve'}, calls))
     assert (s['approved'], s['rejected'], s['prechecked_rejects'], s['remaining'], s['stopped']) == (2, 2, 1, 0, None)
     assert len(calls) == 1                                    # one batched request per source document
-    sent = json.loads(calls[0]['messages'][1]['content'])['findings']
+    sent = json.loads(calls[0]['messages'][2]['content'])['findings']
     rep = next(f for f in sent if f['id'] == 'x_rep')
     assert len(rep['occurrences']) == 2                       # repeated quote: reviewer sees every occurrence
     assert next(f for f in sent if f['id'] == 'x_open')['site_record']['name'] == '달빛정원'
@@ -83,7 +84,7 @@ def test_approve_publishes_with_badge_and_reject_closes(env):
     assert {l['extraction_id']: l['action'] for l in lines} == {'x_open': 'approve', 'x_rep': 'approve', 'x_fic': 'reject', 'x_bad': 'reject'}
     assert next(l for l in lines if l['extraction_id'] == 'x_bad')['reason'].startswith('quote_not_in_source')
     # cost is metered against the shared AI day ledger
-    assert conn.execute("SELECT COUNT(*) FROM ai_request WHERE task='ai-review-1' AND state='done'").fetchone()[0] == 1
+    assert conn.execute("SELECT COUNT(*) FROM ai_request WHERE task='ai-review-2' AND state='done'").fetchone()[0] == 1
     # rerun: nothing open, nothing re-sent, no duplicate entries
     s2 = rv.review(conn, str(sp), str(log), raw, client=client_for(conn, {}, calls))
     assert s2['remaining'] == 0 and len(calls) == 1

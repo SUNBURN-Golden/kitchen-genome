@@ -11,7 +11,7 @@ import urllib.parse
 from kg_daemon import runner
 from kg_daemon.db import DEFAULT_DB, ROOT, connect, migrate, new_id, utcnow
 
-from . import EXTRACTOR_VERSION, apply as apply_mod, booking, discover, evaluate, gaps, official, review, scheduler
+from . import EXTRACTOR_VERSION, apply as apply_mod, booking, discover, evaluate, gaps, official, review, scheduler, recheck
 from .fetch import Doc, Fetcher, parse_feed
 from .htmlx import parse_html
 from . import net as net_mod
@@ -119,6 +119,15 @@ def stage_plan(ctx):
             j['url'] = discover.search_url(seeds, j['query'])
             new['deepseek_gap'] += discover.enqueue(conn, **j, caps=caps)
     conn.commit()
+    seed = json.load(open(os.path.join(ROOT, 'data', 'seed.json'), encoding='utf-8'))
+    recheck.ensure_schedule(conn, seed)
+    recheck.reconcile(conn)
+    if bot.ai and bot.ai.client.status == 'enabled':
+        reason = bot.ai.client.balance.check(bot.ai.client.key)
+        if reason:
+            bot.ai.client.stopped = reason
+        else:
+            new['monthly_rechecks'] = recheck.admit(conn, seeds, bot.ai.client.budget)
     requeued = scheduler.requeue_due(conn, now_dt)
     model_allowance = 0
     if bot.ai and bot.ai.client.status == 'enabled':
@@ -285,6 +294,7 @@ def stage_fetch(ctx):
                 else:
                     att = job['attempts'] + 1
                     conn.execute('UPDATE crawl_job SET attempts=?, last_error=?, state=? WHERE job_id=?', (att, f'{last.outcome}: {last.error}', 'failed' if att >= 3 else 'queued', jid))
+        recheck.link_children(conn, jid)
         if job['gap_id']:
             gaps.bump_attempts(conn, job['gap_id'])
         conn.commit()
@@ -341,6 +351,9 @@ def stage_extract(ctx):
     rows = conn.execute("""SELECT * FROM fetch_record WHERE outcome='ok' AND (extracted_at IS NULL OR extractor_version<>?) ORDER BY fetched_at, rowid""", (EXTRACTOR_VERSION,)).fetchall()
     stats = {'docs': 0, 'new_extractions': 0, 'labels': {}, 'alerts': []}
     for f in rows:
+        attempt = recheck.active_for_fetch(conn, f)
+        if attempt and (not bot.ai or bot.ai.client.status != 'enabled'):
+            continue
         doc = load_doc(conn, bot.raw, f)
         job = conn.execute('SELECT target_id, url FROM crawl_job WHERE job_id=?', (f['job_id'],)).fetchone() if f['job_id'] else None
         jctx = None
@@ -365,6 +378,7 @@ def stage_extract(ctx):
             stats['labels'][k] = stats['labels'].get(k, 0) + v
     stats['host_alerts'] = reconcile_host_yield_alerts(conn, bot.raw, gaz)
     stats['profile'] = profile_scan(conn, bot.raw)
+    recheck.reconcile(conn)
     return runner.StageResult(stats)
 
 
@@ -373,6 +387,7 @@ def profile_scan(conn, raw) -> dict:
     out = {'scanned': 0, 'facts_new': 0}
     rows = conn.execute("""SELECT f.*, j.target_id AS tid FROM fetch_record f JOIN crawl_job j ON j.job_id=f.job_id JOIN target t ON t.target_id=j.target_id
                             WHERE f.outcome='ok' AND t.kind='restaurant' AND f.method NOT IN ('feed','sitemap')
+                            AND NOT EXISTS (SELECT 1 FROM restaurant_recheck_job l WHERE l.job_id=f.job_id)
                             AND NOT EXISTS (SELECT 1 FROM profile_scan s WHERE s.fetch_id=f.fetch_id AND s.version=?) ORDER BY f.fetched_at""", (official.OFFICIAL_VERSION,)).fetchall()
     for f in rows:
         t = conn.execute('SELECT * FROM target WHERE target_id=?', (f['tid'],)).fetchone()

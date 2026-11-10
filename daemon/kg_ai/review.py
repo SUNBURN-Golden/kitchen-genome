@@ -19,6 +19,9 @@ import re
 import sys
 import unicodedata
 
+from kg_ai.article import article_key, source, digest
+from kg_ai.balance import PAUSES
+from kg_collect.targets import Gazetteer, eligibility, load_seed_targets
 from kg_ai.budget import Budget
 from kg_ai.deepseek import RETRYABLE, Client, DeepSeekError, reservation_tokens
 from kg_daemon.db import ROOT, connect, migrate, new_id, utcnow
@@ -29,7 +32,7 @@ if _CRAWLER not in sys.path:
     sys.path.insert(0, _CRAWLER)
 from privacy_filter import sanitize_before_store  # noqa: E402
 
-TASK = 'ai-review-1'
+TASK = 'ai-review-2'
 DAEMON = 'kg-ai-review'
 BADGE = 'AI 검토'
 MAX_BATCH = 8
@@ -40,7 +43,7 @@ LABEL_KO = {'career': '경력', 'employment_claim': '근무', 'opening': '오픈
 UNIT_COSTS = {'http_request': 1.0, 'llm_tokens_k': 0.5, 'db_write': 0.0}
 INSTRUCTION = (
     'You review machine-extracted culinary findings before they are published on a Korean chef-lineage site. '
-    'Input: {"url","published_at","findings":[{"id","label","chef_text","restaurant_text","org_text","role_text","date_text","quote","occurrences":[source excerpts around each place the quote appears],"site_record"}]}. '
+    'Read the shared article context first. Input: {"url","published_at","findings":[{"id","label","chef_text","restaurant_text","org_text","role_text","date_text","quote","occurrences":[Unicode offsets for every quote occurrence in the shared article text],"site_record"}]}. '
     'For EACH finding return {"id","decision":"approve"|"reject","reason":"short English reason"}. Output exactly {"reviews":[...]} with one entry per input id. '
     'Approve ONLY when ALL hold: (1) the excerpts show the quote states this finding about real people and real restaurants '
     '(reject TV drama, film, novel, game, fictional characters, actors playing roles, or competition-show mock restaurants); '
@@ -49,7 +52,7 @@ INSTRUCTION = (
     '(3) the label fits what the quote says (opening means a restaurant opened, closure means it actually closed, collab is a real collaboration, '
     'menu is a dish/menu/program of that restaurant, employment_claim/career is a real job at that place); planned, rumoured, or "near closure" is not closure; '
     '(4) when the quote occurs more than once, every occurrence supports the same claim; '
-    '(5) nothing contradicts site_record (the already-published data); if site_record is null there is nothing to contradict. '
+    '(5) compare site_record with source dates: an explicit dated later closure, relocation or chef change may supersede an older record. Reject undated, ambiguous, speculative or conflicting changes. Approval annotates rather than overwrites the record. '
     'Shared employment is not mentorship. Judge only from the supplied text; never use outside knowledge to add facts. Reject when unsure.'
 )
 
@@ -71,12 +74,13 @@ def source_text(raw_dir, text_ref):
         return None, None
     raw = open(path, encoding='utf-8').read()
     clean, _ = sanitize_before_store(raw[:12000])
-    return unicodedata.normalize('NFC', clean or ''), unicodedata.normalize('NFC', raw)
+    full, _ = sanitize_before_store(raw)
+    return unicodedata.normalize('NFC', clean or ''), unicodedata.normalize('NFC', full or '')
 
 
-def occurrences(text, quote, limit=9):
+def occurrences(text, quote, limit=None):
     out, pos = [], 0
-    while len(out) < limit:
+    while limit is None or len(out) < limit:
         i = text.find(quote, pos)
         if i < 0:
             break
@@ -90,6 +94,8 @@ def precheck(f, text):
     if text is None:
         return 'source_unavailable: stored source text missing', []
     q = f['quote'] or ''
+    if f['label'] not in LABEL_KO:
+        return 'label_invalid', []
     occ = occurrences(text, q)
     if not q or not occ:
         return 'quote_not_in_source: quote is not verbatim in the stored source', []
@@ -149,11 +155,11 @@ class Site:
 
 def validate_reviews(ids):
     def check(obj):
-        if not isinstance(obj, dict) or not isinstance(obj.get('reviews'), list):
+        if not isinstance(obj, dict) or set(obj) != {'reviews'} or not isinstance(obj.get('reviews'), list) or len(obj['reviews']) > MAX_BATCH:
             raise ValueError()
         out = {}
         for r in obj['reviews']:
-            if not isinstance(r, dict) or r.get('id') not in ids or r['id'] in out:
+            if not isinstance(r, dict) or set(r) != {'id','decision','reason'} or r.get('id') not in ids or r['id'] in out:
                 raise ValueError()
             if r.get('decision') not in ('approve', 'reject') or not isinstance(r.get('reason'), str):
                 raise ValueError()
@@ -166,10 +172,25 @@ def validate_reviews(ids):
 
 def open_items(conn):
     """Open ai_inference extraction reviews (oldest first) joined with their source fetch."""
-    return conn.execute("""SELECT q.review_id, q.created_at q_created, e.*, f.text_ref, f.url fetch_url FROM review_queue q
-                           JOIN extraction e ON e.extraction_id=q.subject_id JOIN fetch_record f ON f.fetch_id=e.fetch_id
+    items = [dict(r) for r in conn.execute("""SELECT q.review_id, q.created_at q_created, e.*, f.text_ref, f.url fetch_url FROM review_queue q
+                           JOIN extraction e ON e.extraction_id=q.subject_id LEFT JOIN fetch_record f ON f.fetch_id=e.fetch_id
                            WHERE q.reason='ai_inference' AND q.subject_type='extraction' AND q.state='open'
-                           ORDER BY q.created_at, q.rowid""").fetchall()
+                           ORDER BY CASE e.workload WHEN 'fresh' THEN 0 ELSE 1 END,q.created_at,q.rowid""").fetchall()]
+    for row in conn.execute("""SELECT q.review_id,q.created_at q_created,c.*,d.raw_ref,d.canonical_url,d.url,d.published_at
+                              FROM review_queue q JOIN candidate_fact c ON c.candidate_id=q.subject_id
+                              LEFT JOIN document d USING(document_id)
+                              WHERE q.reason='ai_inference' AND q.subject_type='candidate_fact' AND q.state='open'
+                              AND NOT EXISTS (SELECT 1 FROM review_queue x WHERE x.subject_type='extraction'
+                                AND x.subject_id=json_extract(c.evidence_json,'$.locator.extraction_id'))""").fetchall():
+        r = dict(row)
+        p, ev = json.loads(r['payload_json']), json.loads(r['evidence_json'])
+        f = {k: p.get(k) for k in ('chef_text','restaurant_text','org_text','role_text','date_text')}
+        f.update({'review_id':r['review_id'],'q_created':r['q_created'],'candidate_id':r['candidate_id'],
+                  'extraction_id':r['candidate_id'],'fetch_id':r['document_id'],'canonical_url':r['canonical_url'] or ev.get('source_url'),
+                  'published_at':r['published_at'],'label':p.get('label',r['fact_type']), 'quote':ev.get('quote'),
+                  'text_ref':None,'_document_ref':r['raw_ref'],'workload':p.get('workload','fresh')})
+        items.append(f)
+    return sorted(items, key=lambda f:(f['workload'] != 'fresh',f['q_created'],f['extraction_id']))
 
 
 def _close(conn, review_id, decision, reason, meta, now):
@@ -235,16 +256,20 @@ def review(conn, seed_path, log_path, raw_dir, *, client=None, daily_cap=None, l
     daily_cap = float(os.environ.get('KG_AI_DAILY_COST_CAP', '20') if daily_cap is None else daily_cap)
     daily_cap = max(0.0, min(20.0, daily_cap))
     now = utcnow()
-    stats = {'approved': 0, 'rejected': 0, 'published': 0, 'prechecked_rejects': 0, 'calls': 0, 'stopped': None, 'candidates_closed': 0}
+    stats = {'approved': 0, 'rejected': 0, 'published': 0, 'prechecked_rejects': 0, 'calls': 0, 'stopped': None, 'candidates_closed': 0, 'skipped_no_targets': 0, 'skipped_balance': 0, 'considered': 0, 'eligible': 0}
     stats['candidates_closed'] += close_linked_candidates(conn, now)
     items = open_items(conn)
     if limit:
         items = items[:limit]
     if not items:
-        stats['remaining'] = 0
+        stats['remaining'] = conn.execute("SELECT COUNT(*) FROM review_queue WHERE reason='ai_inference' AND state='open'").fetchone()[0]
+        stats['unreviewed_candidate_findings'] = conn.execute("SELECT COUNT(*) FROM review_queue WHERE reason='ai_inference' AND subject_type='candidate_fact' AND state='open'").fetchone()[0]
+        stats['reason'] = 'none'
         return stats
     seed = json.load(open(seed_path, encoding='utf-8'))
     site = Site(seed)
+    load_seed_targets(conn, seed)
+    gaz = Gazetteer(conn)
     run_id = _start_run(conn, daily_cap)
     meter = CostMeter(conn, run_id, daily_cap, UNIT_COSTS)
     meter.stage = 'ai_review'
@@ -252,13 +277,14 @@ def review(conn, seed_path, log_path, raw_dir, *, client=None, daily_cap=None, l
         client = Client(Budget(meter, daily_cap=daily_cap))
     else:
         client.budget.meter, client.budget.conn = meter, conn
+        client.budget.daily_cap = daily_cap
     seed_changed = False
 
     def decide(f, decision, reason, meta):
         nonlocal seed_changed
         ts = utcnow()
         rec = {'at': ts, 'at_kst': kst_now(), 'action': decision, 'review_id': f['review_id'], 'extraction_id': f['extraction_id'],
-               'label': f['label'], 'quote': f['quote'], 'src': f['canonical_url'], 'reason': reason, 'model_meta': meta}
+               'label': f['label'], 'quote': sanitize_before_store(f['quote'] or '')[0], 'src': f['canonical_url'], 'reason': reason, 'model_meta': meta}
         if decision == 'approve':
             target, added = publish(seed, site, f, f['review_id'], ts)
             rec['target'] = target
@@ -270,29 +296,49 @@ def review(conn, seed_path, log_path, raw_dir, *, client=None, daily_cap=None, l
             stats['rejected'] += 1
         append_log(log_path, rec)
         _close(conn, f['review_id'], decision, reason, meta, ts)
+        if f.get('candidate_id'):
+            conn.execute('UPDATE candidate_fact SET resolution=? WHERE candidate_id=?', ('needs_review' if decision == 'approve' else 'rejected', f['candidate_id']))
         conn.commit()
 
     groups = {}
     for f in items:
         f = dict(f)
-        text, raw_full = source_text(raw_dir, f['text_ref'])
+        stats['considered'] += 1
+        if f.get('_document_ref'):
+            try:
+                body = json.load(open(f['_document_ref'], encoding='utf-8'))
+                text, _ = sanitize_before_store(body.get('title') or '')
+                text = unicodedata.normalize('NFC', text or '')
+            except (OSError, ValueError, TypeError):
+                text = None
+            raw_full = text
+        else:
+            text, raw_full = source_text(raw_dir, f['text_ref'])
+            if raw_full is not None:
+                text = raw_full
         why, ctx = precheck(f, text)
         if why and text is not None and raw_full is not None:
             alt_why, alt_ctx = precheck(f, raw_full)
             if not alt_why:
-                why, ctx = None, alt_ctx
+                why, ctx, text = None, alt_ctx, raw_full
+        if not why and not eligibility(gaz, text)['target_ids']:
+            why = 'skipped_no_targets'
+            stats['skipped_no_targets'] += 1
         if why:
             stats['prechecked_rejects'] += 1
             decide(f, 'reject', why, None)
             continue
-        f['_ctx'] = ctx
-        groups.setdefault(f['fetch_id'], []).append(f)
+        stats['eligible'] += 1
+        f['_ctx'] = [{'start': i, 'end': i + len(f['quote'])} for i in occurrences(text, f['quote'])]
+        f['_text'] = text
+        f['_source'] = source(f['canonical_url'], f['published_at'], text)
+        groups.setdefault((article_key(f['canonical_url'], text), f['workload']), []).append(f)
 
     def payload_for(batch):
-        return {'url': batch[0]['canonical_url'], 'published_at': batch[0]['published_at'],
+        return {'_article': batch[0]['_source'],
                 'findings': [{'id': f['extraction_id'], 'label': f['label'], 'chef_text': f['chef_text'], 'restaurant_text': f['restaurant_text'],
                               'org_text': f['org_text'], 'role_text': f['role_text'], 'date_text': f['date_text'], 'quote': f['quote'],
-                              'occurrences': f['_ctx'], 'site_record': Site.record(site.match(f))} for f in batch]}
+                              'occurrences': f['_ctx'], 'source_span': [f.get('span_start'),f.get('span_end')], 'site_record': Site.record(site.match(f))} for f in batch]}
 
     def max_tokens(batch):
         return 200 + 120 * len(batch)
@@ -302,8 +348,33 @@ def review(conn, seed_path, log_path, raw_dir, *, client=None, daily_cap=None, l
         payload = client._payload(INSTRUCTION, data, max_tokens(batch), None)[1]
         return reservation_tokens(payload, max_tokens(batch)) <= client.budget.room_tokens()
 
+    for fs in groups.values():
+        publication = min((f['published_at'] for f in fs if f['published_at']), default=None)
+        shared = source(fs[0]['canonical_url'],publication,fs[0]['_text'])
+        for f in fs:
+            f['_source'] = shared
+        if fits(fs[:MAX_BATCH]):
+            continue
+        text = fs[0]['_text']
+        intervals = [(max(0,m['start']-CONTEXT), min(len(text),m['end']+CONTEXT)) for m in eligibility(gaz,text)['spans']]
+        for f in fs:
+            intervals.extend((max(0,i-CONTEXT),min(len(text),i+len(f['quote'])+CONTEXT)) for i in occurrences(text,f['quote'],limit=len(text)))
+        merged = []
+        for start,end in sorted(intervals):
+            if merged and start <= merged[-1][1]:
+                merged[-1] = (merged[-1][0],max(end,merged[-1][1]))
+            else:
+                merged.append((start,end))
+        bounded = '\n[…]\n'.join(text[a:b] for a,b in merged)
+        if eligibility(gaz,bounded)['target_ids'] and all(precheck(f,bounded)[0] is None for f in fs):
+            for f in fs:
+                f['_source'] = {**shared, 'text':bounded, 'context_digest':digest(bounded), 'source_segments':merged}
+                f['_text'] = bounded
+                f['_ctx'] = [{'start':i,'end':i+len(f['quote'])} for i in occurrences(bounded,f['quote'],limit=len(bounded))]
+
     queue = []
     for fs in groups.values():
+        fs.sort(key=lambda f: f['extraction_id'])
         for i in range(0, len(fs), MAX_BATCH):
             queue.append(fs[i:i + MAX_BATCH])
     while queue and not stats['stopped']:
@@ -311,10 +382,18 @@ def review(conn, seed_path, log_path, raw_dir, *, client=None, daily_cap=None, l
         if not client.key:
             stats['stopped'] = 'missing_key'
             break
+        client.budget.workload = batch[0]['workload']
+        client.budget.hold_attempt = None
+        client.budget.hold_attempts = {r[0] for f in batch for r in conn.execute(
+            'SELECT DISTINCT attempt_id FROM restaurant_recheck_job WHERE extraction_id=?', (f['extraction_id'],))}
+        # Defer rechecks independently; they must never stop fresh review.
         if not fits(batch):
             if len(batch) > 1:
                 h = len(batch) // 2
                 queue[:0] = [batch[:h], batch[h:]]
+                continue
+            stats['deferred_budget'] = stats.get('deferred_budget',0) + len(batch)
+            if queue:
                 continue
             stats['stopped'] = 'cost_cap'
             break
@@ -337,18 +416,27 @@ def review(conn, seed_path, log_path, raw_dir, *, client=None, daily_cap=None, l
                     decide(batch[0], 'reject', 'review_unavailable: model returned no valid review (' + code + ')', None)
                 continue
             stats['stopped'] = code
+            if code in PAUSES:
+                stats['calls'] -= 1
+                stats['skipped_balance'] += len(batch)
             break
         meta = dict(client.last_meta)
         for f in batch:
             r = res[f['extraction_id']]
             decide(f, r['decision'], ('model: ' + r['reason']), meta)
+    if stats.get('deferred_budget') and not stats['stopped']:
+        stats['stopped'] = 'cost_cap'
     if seed_changed:
         json.dump(seed, open(seed_path, 'w', encoding='utf-8'), ensure_ascii=False, indent=1)
     stats['candidates_closed'] += close_linked_candidates(conn, utcnow())
+    from kg_collect.recheck import reconcile
+    reconcile(conn)
     stats['remaining'] = conn.execute("SELECT COUNT(*) FROM review_queue WHERE reason='ai_inference' AND state='open'").fetchone()[0]
+    stats['unreviewed_candidate_findings'] = conn.execute("SELECT COUNT(*) FROM review_queue WHERE reason='ai_inference' AND subject_type='candidate_fact' AND state='open'").fetchone()[0]
+    stats['reason'] = stats['stopped'] or 'none'
     stats['cost_used'] = round(conn.execute('SELECT cost_used_units FROM daemon_run WHERE run_id=?', (run_id,)).fetchone()[0], 3)
     conn.execute('UPDATE daemon_run SET status=?, finished_at=? WHERE run_id=?',
-                 ('paused_cost_cap' if stats['stopped'] == 'cost_cap' else 'failed' if stats['stopped'] else 'succeeded', utcnow(), run_id))
+                 ('paused_cost_cap' if stats['stopped'] == 'cost_cap' else 'succeeded' if stats['stopped'] in PAUSES else 'failed' if stats['stopped'] else 'succeeded', utcnow(), run_id))
     conn.commit()
     stats['run_id'] = run_id
     return stats
@@ -366,8 +454,8 @@ def main(argv=None):
     migrate(conn)
     raw_dir = a.raw_dir or os.path.join(os.path.dirname(os.path.abspath(a.db)), 'raw')
     s = review(conn, a.seed, a.log, raw_dir, limit=a.limit)
-    print('AI_REVIEW approved=%s rejected=%s published=%s prechecked=%s calls=%s remaining=%s stopped=%s cost=%s' % (
-        s['approved'], s['rejected'], s['published'], s['prechecked_rejects'], s['calls'], s.get('remaining'), s['stopped'] or 'none', s.get('cost_used', 0)))
+    print('AI_REVIEW approved=%s rejected=%s published=%s prechecked=%s calls=%s remaining=%s stopped=%s cost=%s reason=%s skipped_no_targets=%s skipped_balance=%s unreviewed_candidate_findings=%s' % (
+        s['approved'], s['rejected'], s['published'], s['prechecked_rejects'], s['calls'], s.get('remaining'), s['stopped'] or 'none', s.get('cost_used', 0), s.get('reason','none'), s['skipped_no_targets'], s['skipped_balance'], s.get('unreviewed_candidate_findings',0)))
     return 0
 
 

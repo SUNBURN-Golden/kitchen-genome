@@ -246,6 +246,9 @@ def extraction(ctx: StageContext) -> StageResult:
         if ai and not body.get('collect') and not body.get('instagram') and not pending(body):
             for ftype, payload, quote in ai(d, body):
                 _cand(ctx, d, ftype, payload, 'deepseek:local' if ctx.env.get('deepseek') else 'ai:hook', payload.get('evidence_locator') or {}, quote, asserted_by='ai_inference')
+        adapter = ctx.env.get('_deepseek')
+        if adapter and adapter.defer_extract:
+            continue
         ctx.conn.execute("UPDATE change_event SET state='extracted' WHERE change_id=?", (d['change_id'],))
         extracted += 1
     ctx.conn.commit()

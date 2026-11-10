@@ -14,7 +14,7 @@ REQUIRED = {
 }
 # Which extraction labels can fill which field, and what value they carry
 FILLERS = {
-    'opened': ('opening', lambda e: e['date_text']),
+    'opened': ('opening', lambda e: e.get('date_iso') or e['date_text']),
     'chef': (('opening', 'employment_claim'), lambda e: e['chef_text']),
     'status_recent': (('opening', 'closure', 'relocation', 'rename', 'employment_claim'), lambda e: e['label']),
     'origin_kitchen': ('career', lambda e: e['org_text']),
@@ -66,7 +66,7 @@ def _evidence_for(conn, gap):
     for r in rows:
         if gap['field'] == 'chef' and r['label'] == 'employment_claim' and not r['chef_text']:
             continue
-        if gap['field'] == 'opened' and not re.search(r'20\d{2}', r['date_text'] or ''):
+        if gap['field'] == 'opened' and not re.search(r'20\d{2}', r['date_iso'] or r['date_text'] or ''):
             continue                         # an opening without a year is not an opening DATE
         v = getter(dict(r))
         if not _is_empty(v):
