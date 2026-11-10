@@ -13,17 +13,32 @@ def kst_day():
 class Budget:
     def __init__(self, meter, daily_cap=20, day=kst_day):
         self.meter, self.conn, self.day = meter, meter.conn, day
+        self.workload = 'fresh'
+        self.hold_attempt = None
+        self.hold_attempts = set()
         self.daily_cap = max(0, min(20, float(daily_cap)))
 
     def lookup(self, key):
         return self.conn.execute('SELECT * FROM ai_request WHERE request_key=?', (key,)).fetchone()
+
+    def _held_units(self, day):
+        owned = set(self.hold_attempts)
+        if self.hold_attempt:
+            owned.add(self.hold_attempt)
+        return sum(r['units'] for r in self.conn.execute(
+            "SELECT attempt_id,units FROM ai_review_hold WHERE day=? AND state='held'", (day,))
+            if r['attempt_id'] not in owned)
 
     def room_tokens(self):
         """Tokens still reservable under both the run cap and the shared day cap."""
         m = self.meter
         run_left = m.cap - m.used
         daily = self.conn.execute('SELECT COALESCE(SUM(units),0) FROM ai_request WHERE day=?', (self.day(),)).fetchone()[0]
-        left = min(run_left, self.daily_cap - float(daily))
+        holds = self._held_units(self.day())
+        left = min(run_left, self.daily_cap - float(daily) - holds)
+        if self.workload == 'recheck':
+            used = self.conn.execute("SELECT COALESCE(SUM(units),0) FROM ai_request WHERE day=? AND workload='recheck'", (self.day(),)).fetchone()[0]
+            left = min(left, min(8, .4 * self.daily_cap) - used - holds)
         rate = m.unit_costs.get('llm_tokens_k') or 0
         if left <= 0 or rate <= 0:
             return 0
@@ -43,10 +58,16 @@ class Budget:
             used = c.execute('SELECT cost_used_units FROM daemon_run WHERE run_id=?', (m.run_id,)).fetchone()[0]
             day = self.day()
             daily = c.execute('SELECT COALESCE(SUM(units),0) FROM ai_request WHERE day=?', (day,)).fetchone()[0]
-            if used + units > m.cap or daily + units > self.daily_cap:
+            holds = self._held_units(day)
+            recheck_used = c.execute("SELECT COALESCE(SUM(units),0) FROM ai_request WHERE day=? AND workload='recheck'", (day,)).fetchone()[0]
+            if (used + units > m.cap or daily + units + holds > self.daily_cap
+                or (self.workload == 'recheck' and recheck_used + units + holds > min(8, .4 * self.daily_cap))):
                 raise CostCapExceeded('model reservation exceeds run/day cap')
-            c.execute('INSERT INTO ai_request(request_key,run_id,day,task,model,state,units,reserved_tokens,created_at) VALUES (?,?,?,?,?,?,?,?,?)',
-                      (key, m.run_id, day, task, model, 'unknown', units, tokens, utcnow()))
+            c.execute('INSERT INTO ai_request(request_key,run_id,day,task,model,state,units,reserved_tokens,created_at,workload) VALUES (?,?,?,?,?,?,?,?,?,?)',
+                      (key, m.run_id, day, task, model, 'unknown', units, tokens, utcnow(), self.workload))
+            owned = set(self.hold_attempts) | ({self.hold_attempt} if self.hold_attempt else set())
+            for attempt in owned:
+                c.execute("UPDATE ai_review_hold SET state='consumed',request_key=? WHERE attempt_id=? AND state='held'", (key, attempt))
             c.execute('INSERT INTO cost_ledger(run_id,stage,kind,units,at) VALUES (?,?,?,?,?)',
                       (m.run_id, m.stage or '?', 'llm_tokens_k', units, utcnow()))
             c.execute('UPDATE daemon_run SET cost_used_units=cost_used_units+? WHERE run_id=?', (units, m.run_id))
@@ -76,7 +97,7 @@ class Budget:
             c.execute('UPDATE daemon_run SET cost_used_units=cost_used_units+? WHERE run_id=?', (delta, row['run_id']))
             # Attribution only; ai_request/cost_ledger are the authoritative charged amounts.
             c.execute('INSERT INTO budget_ledger(cycle_id,pool,kind,units,at) VALUES (?,?,?,?,?)',
-                      (row['run_id'], 'discovery', 'llm_tokens_k', units, utcnow()))
+                      (row['run_id'], 'refresh' if row['workload'] == 'recheck' else 'discovery', 'llm_tokens_k', units, utcnow()))
             c.commit()
             m.used = c.execute('SELECT cost_used_units FROM daemon_run WHERE run_id=?', (m.run_id,)).fetchone()[0]
         except Exception:

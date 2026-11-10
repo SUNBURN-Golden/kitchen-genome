@@ -71,7 +71,9 @@ if 'crawler/instagram_kg.py' in args and os.environ.get('TEST_IG_TIMEOUT'): sys.
 sys.exit(subprocess.call(args))
 ''',
       'python3':f'''if args and args[0]=='-c': sys.exit(subprocess.call([{sys.executable!r}]+args))
-if 'kg_collect' in args: print(json.dumps({{'status':'succeeded','run_id':'fixture','ai':'enabled','cost_used':0.1}}))
+if 'kg_collect' in args: print(json.dumps({{'status':'succeeded','run_id':'fixture','ai':'enabled','cost_used':0.1,'ai_reason':os.environ.get('TEST_COLLECT_REASON','none')}}))
+elif 'kg_ai' in args: print('AI_REVIEW approved=0 rejected=0 published=0 reason='+os.environ.get('TEST_REVIEW_REASON','none'))
+elif 'kg_daemon' in args: print(json.dumps({{'status':'succeeded','ai':'enabled','ai_reason':os.environ.get('TEST_DAEMON_REASON','none')}}))
 elif 'crawler/instagram_kg.py' in args:
     if '--mark-timeout' in args: print('IG_FAILED account=kitchen.genome reason=timeout')
     else:
@@ -95,10 +97,10 @@ elif 'scripts/build_deploy.py' in args and os.environ.get('TEST_BUILD_FAIL'): sy
     return run
 
 
-@pytest.mark.parametrize('options,expected', [({},'IG_OK'),({'TEST_IG':'BLOCKED'},'IG_BLOCKED'),({'TEST_IG':'SKIPPED'},'IG_SKIPPED'),({'TEST_IG_TIMEOUT':'1'},'IG_FAILED'),({'TEST_COLLECT_RC':'124'},'COLLECT=failed'),({'KG_DEEPSEEK':'0'},'RESULT=NO_CHANGE')])
+@pytest.mark.parametrize('options,expected', [({},'IG_SKIPPED'),({'TEST_IG':'BLOCKED'},'IG_SKIPPED'),({'TEST_IG':'SKIPPED'},'IG_SKIPPED'),({'TEST_IG_TIMEOUT':'1'},'IG_SKIPPED'),({'TEST_COLLECT_RC':'124'},'COLLECT=failed'),({'KG_DEEPSEEK':'0'},'RESULT=NO_CHANGE')])
 def test_pipeline_nonfatal_steps_have_exact_result(pipeline,options,expected):
     p,commands=pipeline(**options)
-    assert p.returncode==0 and p.stdout.strip().splitlines()[-1]=='RESULT=NO_CHANGE'
+    assert p.returncode==0 and p.stdout.strip().splitlines()[-1]=='RESULT=NO_CHANGE reason=none'
     assert expected in p.stdout and 'gh pr create' not in commands and 'gh pr merge' not in commands
     if options.get('KG_DEEPSEEK')=='0': assert '--deepseek' not in commands
 
@@ -106,7 +108,7 @@ def test_pipeline_nonfatal_steps_have_exact_result(pipeline,options,expected):
 def test_pipeline_squash_merges_verified_crawl_without_deploy_when_web_is_unchanged(pipeline):
     p,commands=pipeline(TEST_CHANGE='1', TEST_WEB='unchanged')
     assert p.returncode==0
-    assert p.stdout.strip().splitlines()[-1]=='RESULT=MERGED_NO_DEPLOY pr=https://example.test/pr/1'
+    assert p.stdout.strip().splitlines()[-1]=='RESULT=MERGED_NO_DEPLOY pr=https://example.test/pr/1 reason=none'
     assert 'gh pr create' in commands and 'gh pr merge' in commands and '--squash' in commands
     assert '--force' in commands and 'deploy.sh' not in commands
 
@@ -114,7 +116,7 @@ def test_pipeline_squash_merges_verified_crawl_without_deploy_when_web_is_unchan
 def test_pipeline_needs_deploy_when_web_changed_without_token(pipeline):
     p,commands=pipeline(TEST_CHANGE='1')
     assert p.returncode==0
-    assert p.stdout.strip().splitlines()[-1]=='RESULT=NEEDS_DEPLOY pr=https://example.test/pr/1'
+    assert p.stdout.strip().splitlines()[-1]=='RESULT=NEEDS_DEPLOY pr=https://example.test/pr/1 reason=none'
     assert 'gh pr merge' in commands and 'deploy.sh' not in commands
 
 
@@ -125,13 +127,13 @@ def test_pipeline_deploys_only_after_squash_merge_when_token_exists(pipeline, tm
     script.chmod(0o755)
     p,commands=pipeline(TEST_CHANGE='1', KG_CF_TOKEN_FILE=str(token))
     assert p.returncode==0, p.stderr
-    assert p.stdout.strip().splitlines()[-1]=='RESULT=DEPLOYED pr=https://example.test/pr/1'
+    assert p.stdout.strip().splitlines()[-1]=='RESULT=DEPLOYED pr=https://example.test/pr/1 reason=none'
     assert 'gh pr merge' in commands and 'deploy' in commands.splitlines()
     script.write_text('#!/bin/sh\necho deploy-fail >> "$TEST_LOG"\nexit 1\n')
     (pipeline.repo/'.git'/'checks').unlink()
     p,commands=pipeline(TEST_CHANGE='1', KG_CF_TOKEN_FILE=str(token))
     assert p.returncode==0, p.stderr
-    assert p.stdout.strip().splitlines()[-1]=='RESULT=NEEDS_DEPLOY pr=https://example.test/pr/1'
+    assert p.stdout.strip().splitlines()[-1]=='RESULT=NEEDS_DEPLOY pr=https://example.test/pr/1 reason=none'
     assert 'deploy-fail' in commands.splitlines()
 
 
@@ -167,3 +169,25 @@ def test_collect_daily_runs_web_without_git_or_legacy_instagram(tmp_path):
 def test_build_failure_emits_one_failure_result(pipeline):
     p,commands=pipeline(TEST_BUILD_FAIL='1')
     assert p.returncode==3 and 'RESULT=FAILED stage=build' in p.stdout and 'git push' not in commands
+
+
+@pytest.mark.parametrize('phase',['COLLECT','REVIEW','DAEMON'])
+@pytest.mark.parametrize('changes',[{}, {'TEST_CHANGE':'1','TEST_WEB':'unchanged'}, {'TEST_CHANGE':'1'}])
+def test_balance_low_survives_all_result_branches(pipeline,phase,changes):
+    p,commands=pipeline(**{f'TEST_{phase}_REASON':'balance_low',**changes})
+    assert p.returncode==0 and p.stdout.strip().splitlines()[-1].endswith('reason=balance_low')
+    assert 'build_weekly_digest.py' in commands and 'argon_review.sh' not in commands
+    assert 'instagram_kg.py' not in commands
+
+
+def test_real_failure_keeps_primary_reason_and_ai_pause(pipeline):
+    p,commands=pipeline(TEST_BUILD_FAIL='1',TEST_COLLECT_REASON='balance_low')
+    assert p.returncode==3 and p.stdout.strip().splitlines()[-1].endswith('reason=command_failed exit=3 ai_reason=balance_low')
+
+
+def test_instagram_default_and_flag_files_are_untouched():
+    collect=(ROOT/'scripts/collect_daily.sh').read_text()
+    daily=SH.read_text()
+    assert '${KG_IG:-0}' in collect and '${KG_IG:-0}' in daily
+    for flag in ('ig_blocked.flag','ig_kg_blocked.flag'):
+        assert flag not in collect+daily

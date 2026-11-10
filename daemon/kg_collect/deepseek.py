@@ -4,6 +4,7 @@ import os
 import re
 import sys
 import unicodedata
+from types import SimpleNamespace
 
 from kg_ai.budget import Budget
 from kg_ai.deepseek import Client, DeepSeekError, TaskReject, reservation_tokens
@@ -16,7 +17,11 @@ if _CRAWLER not in sys.path:
 from privacy_filter import sanitize_before_store  # noqa: E402
 
 from . import gaps
+from .targets import eligibility
+from kg_ai.article import source, article_key
+from kg_ai.balance import PAUSES
 
+PLAN_INSTRUCTION = 'Return JSON {"queries":[{"gap_id":"known ID","target_id":"known ID","query":"search terms","reason":"short reason"}]}. At most 3 per gap. Seek independent permitted sources; never bypass blocked access.'
 MIN_MODEL_CHARS = 400
 LABELS = {'career', 'employment_claim', 'opening', 'closure', 'relocation', 'rename', 'menu', 'collab', 'mentorship_claim'}
 FIELDS = {'label', 'chef_text', 'restaurant_text', 'org_text', 'role_text', 'date_text', 'quote', 'span_start', 'span_end', 'ambiguity'}
@@ -142,6 +147,14 @@ def validate_extraction(obj, text):
     return rows
 
 
+def article_data(data, text):
+    article = source(data['url'], data.get('published_at'), text)
+    if data.get('snapshot_key'):
+        article['article_key'] = data['snapshot_key']
+    return {'_article': article,
+            **{k: v for k, v in data.items() if k not in ('url', 'published_at')}}
+
+
 def text_that_fits(client, instruction, data, max_tokens, text):
     """Longest prefix whose byte reservation fits the remaining run and day caps.
 
@@ -149,7 +162,7 @@ def text_that_fits(client, instruction, data, max_tokens, text):
     key stays stable. None means even a short excerpt cannot be reserved.
     """
     def bound(sample):
-        payload = client._payload(instruction, {**data, 'text': sample}, max_tokens, None)[1]
+        payload = client._payload(instruction, article_data(data, sample), max_tokens, None)[1]
         return reservation_tokens(payload, max_tokens)
 
     limit = client.budget.room_tokens()
@@ -172,9 +185,10 @@ class Adapters:
     def __init__(self, client):
         self.client = client
         self.defer_extract = False
+        self.article_results = {}
         # Observable extraction funnel: a production no-op must not hide behind ai=enabled.
         self.stats = {'considered': 0, 'skipped_filter': 0, 'skipped_no_targets': 0,
-                      'skipped_not_needed': 0, 'skipped_budget': 0, 'called': 0, 'failed': 0, 'findings': 0}
+                      'eligible': 0, 'plan_skipped_targets': 0, 'skipped_balance': 0, 'skipped_not_needed': 0, 'skipped_budget': 0, 'called': 0, 'failed': 0, 'findings': 0}
 
     def _budget_stop(self, exc=None):
         """A reservation that does not fit stops later model calls and lets deterministic stages finish.
@@ -192,6 +206,13 @@ class Adapters:
 
     def plan(self, conn):
         jobs = list({j['gap_id']: j for j in gaps.gap_jobs(conn, limit=20)}.values())
+        valid = []
+        for j in jobs:
+            if conn.execute("SELECT 1 FROM target t JOIN gap g ON g.target_id=t.target_id WHERE g.gap_id=? AND g.state='open' AND t.status='active' AND t.kind IN ('chef','restaurant') AND t.origin IN ('seed','discovered')", (j['gap_id'],)).fetchone():
+                valid.append(j)
+            else:
+                self.stats['plan_skipped_targets'] += 1
+        jobs = valid
         allowed = {j['gap_id']: j for j in jobs}
         if not jobs or self.client.status != 'enabled':
             return []
@@ -225,15 +246,70 @@ class Adapters:
                     out.append({'path': 'reverse_gap', 'pool': g['pool'], 'target_id': g['target_id'], 'gap_id': g['gap_id'], 'query': q, 'relevance': .7})
                     seen.add((row['gap_id'], q))
             return out
+        while data and reservation_tokens(self.client._payload(PLAN_INSTRUCTION, data, 4096, None)[1], 4096) > self.client.budget.room_tokens():
+            data = data[:len(data)//2]
+        if not data:
+            self.stats['skipped_budget'] += 1
+            return []
+        allowed = {row['gap_id']: allowed[row['gap_id']] for row in data}
         try:
-            return self.client.call('gap-plan-1', 'Return JSON {"queries":[{"gap_id":"known ID","target_id":"known ID","query":"search terms","reason":"short reason"}]}. At most 3 per gap. Seek independent permitted sources; never bypass blocked access.', data, validate, max_tokens=4096)
+            return self.client.call('gap-plan-2', PLAN_INSTRUCTION, data, validate, max_tokens=4096)
         except DeepSeekError:
+            if self.client.stopped in PAUSES:
+                self.stats['skipped_balance'] += 1
             return []
         except CostCapExceeded as exc:
             return self._budget_stop(exc)
 
-    def extract(self, doc, recs, gaz, context=None):
+    def extract(self, doc, recs, gaz, context=None, workload='fresh', attempt_id=None):
+        full = unicodedata.normalize('NFC', sanitize_before_store(doc.text)[0] or '')
+        if len(full) <= 12000:
+            return self._extract_window(doc, recs, gaz, context, workload, attempt_id)
+        # Overlap preserves boundary quotes (the evidence schema caps quotes at 200).
+        # An incomplete window defers the remaining article, never claims full coverage.
+        before = dict(self.stats)
+        results, seen, start, deferred = [], set(), 0, False
+        snapshot = article_key(getattr(doc, 'canonical_url', None) or doc.url, full)
+        while start < len(full):
+            end = min(start + 12000, len(full))
+            fragment = full[start:end]
+            offset = start + len(fragment) - len(fragment.lstrip())
+            window = SimpleNamespace(**vars(doc))
+            window.text = fragment.strip()
+            window.snapshot_key, window.source_start = snapshot, offset
+            rows = self._extract_window(window, recs, gaz, context, workload, attempt_id)
+            for r in rows:
+                r['span_start'] += offset
+                r['span_end'] += offset
+                key = tuple(r.get(k) for k in ('label','quote','chef_text','restaurant_text','org_text','role_text','date_text'))
+                if key not in seen:
+                    results.append(r)
+                    seen.add(key)
+            if self.defer_extract or self.client.stopped:
+                deferred = True
+                break
+            if getattr(self, 'window_partial', False):
+                deferred = True
+                break
+            if end == len(full):
+                break
+            start = end - 200
+        self.defer_extract = deferred
+        # The funnel counts documents; request/finding counts remain separate.
+        for name in ('considered','eligible','skipped_filter','skipped_no_targets','skipped_not_needed','skipped_budget','skipped_balance'):
+            self.stats[name] = before[name] + int(self.stats[name] > before[name])
+        if self.stats['eligible'] > before['eligible']:
+            self.stats['skipped_no_targets'] = before['skipped_no_targets']
+        self.stats['findings'] = before['findings'] + len(results)
+        return results
+
+    def _extract_window(self, doc, recs, gaz, context=None, workload='fresh', attempt_id=None):
+        self.window_partial = False
         self.defer_extract = False
+        if self.client.stopped in PAUSES:
+            self.defer_extract = True
+            self.stats['skipped_balance'] += 1
+            return []
         if self.client.stopped not in (None, 'cost_cap') or not self.client.key:
             return []
         self.stats['considered'] += 1
@@ -245,37 +321,74 @@ class Adapters:
         if not text:
             self.stats['skipped_filter'] += 1
             return []
-        mentions = gaz.find(text)
-        options = {m['target_id'] for m in mentions if m.get('target_id')}
-        if context:
-            options.update(v['target_id'] for v in context.values() if isinstance(v, dict) and v.get('target_id'))
+        gate = eligibility(gaz, text)
+        mentions, options = gate['spans'], gate['target_ids']
         if not options:
             self.stats['skipped_no_targets'] += 1
             return []
-        if not recs and not gaz.conn.execute("SELECT 1 FROM gap WHERE state='open' AND target_id IN (%s) LIMIT 1" % ','.join('?' * len(options)), tuple(options)).fetchone():
+        self.stats['eligible'] += 1
+        if workload != 'recheck' and not recs and not gaz.conn.execute("SELECT 1 FROM gap WHERE state='open' AND target_id IN (%s) LIMIT 1" % ','.join('?' * len(options)), tuple(options)).fetchone():
             self.stats['skipped_not_needed'] += 1
             return []
         from .extract import needs_model
-        if recs and not any(needs_model(r) for r in recs):
+        if workload != 'recheck' and recs and not any(needs_model(r) for r in recs):
             self.stats['skipped_not_needed'] += 1
             return []
         targets = list({m['target_id']: {k: m.get(k) for k in ('target_id', 'kind', 'name_ko', 'name_en')} for m in mentions if m.get('target_id')}.values())
-        body = {'url': doc.url, 'published_at': doc.published_at, 'known_targets': targets,
-                'rule_ambiguities': [r.get('ambiguity') for r in recs]}
-        fitted = text_that_fits(self.client, EXTRACT_INSTRUCTION, body, 4096, text)
+        body = {'url': getattr(doc, 'canonical_url', None) or doc.url, 'published_at': doc.published_at, 'known_targets': targets,
+                'snapshot_key': getattr(doc, 'snapshot_key', None), 'source_start': getattr(doc, 'source_start', 0),
+                'workload': workload, 'rule_ambiguities': sorted({r.get('ambiguity') or '' for r in recs})}
+        max_output = 1024 if workload == 'recheck' else 4096
+        if workload == 'recheck':
+            body['finding_limit'] = 2
+        self.client.budget.workload = workload
+        cache_key = (article_key(body['url'], text), workload, body['snapshot_key'], body['source_start'])
+        cached = self.article_results.get(cache_key)
+        if workload == 'recheck' and cached is None:
+            reason = self.client.balance.check(self.client.key)
+            if reason:
+                self.client.stopped = reason
+                self.defer_extract = True
+                self.stats['skipped_balance'] += 1
+                return []
+            from .recheck import hold_review
+            # Reserve for at most two recheck findings; the extraction validator enforces that ceiling.
+            review_tokens = len(text.encode()) + 4096 + 440 + 2400
+            if not hold_review(gaz.conn, attempt_id, self.client.budget, review_tokens):
+                self.defer_extract = True
+                self.stats['skipped_budget'] += 1
+                return []
+        fitted = cached[2] if cached else text_that_fits(self.client, EXTRACT_INSTRUCTION, body, max_output, text)
         if fitted is None or self.client.stopped == 'cost_cap':
             self.defer_extract = True
             self.stats['skipped_budget'] += 1
             self.client.stopped = 'cost_cap'
             return []
+        self.window_partial = len(fitted) < len(text)
         text = fitted
+        if not eligibility(gaz, text)['target_ids']:
+            self.stats['skipped_no_targets'] += 1
+            return []
 
         def validate(obj):
-            return validate_extraction(obj, text)
-        self.stats['called'] += 1
+            rows = validate_extraction(obj, text)
+            if workload == 'recheck' and len(rows) > 2:
+                raise TaskReject('too_many_findings')
+            return rows
+        self.stats['called'] += int(cached is None)
         try:
-            rows = self.client.call('web-extract-1', EXTRACT_INSTRUCTION, {**body, 'text': text}, validate, max_tokens=4096)
+            if cached is None:
+                rows = self.client.call('web-extract-2', EXTRACT_INSTRUCTION, article_data(body, text), validate, max_tokens=max_output)
+                self.article_results[cache_key] = (rows, dict(self.client.last_meta), text)
+            else:
+                rows, meta, text = cached
+                self.client.last_meta = meta
         except DeepSeekError:
+            if self.client.stopped in PAUSES:
+                self.defer_extract = True
+                self.stats['skipped_balance'] += 1
+                self.stats['called'] -= 1
+                return []
             self.stats['failed'] += 1
             return []
         except CostCapExceeded as exc:
@@ -285,13 +398,15 @@ class Adapters:
         result = []
         for row in rows:
             r = {**row, 'epistemic': 'inference', 'asserted_by': 'ai_inference', 'pending_only': True, 'extractor': 'deepseek:web',
-                 'extractor_version': 'web-extract-1', 'published_at': doc.published_at,
-                 'model_meta_json': json.dumps(self.client.last_meta, sort_keys=True),
-                 'extraction_id': stable_id('ext', doc.content_hash or doc.url, self.client.last_meta['request_id'], json.dumps(row, sort_keys=True))}
+                 'extractor_version': 'web-extract-2', 'published_at': doc.published_at,
+                 'model_meta_json': json.dumps({**self.client.last_meta, 'workload': workload, 'partial': self.window_partial, 'source_start': body['source_start'], 'snapshot_key': body['snapshot_key']}, sort_keys=True),
+                 'extraction_id': stable_id('ext', body['url'], self.client.last_meta['request_id'], json.dumps(row, sort_keys=True))}
             # Exact known matches only. Never create targets from inference.
             for field, kind in (('chef', 'chef'), ('restaurant', 'restaurant'), ('org', 'restaurant')):
                 matches = [m for m in gaz.lookup(r.get(field + '_text') or '') if m.get('kind') == kind]
                 r['resolved_' + field + '_target'] = matches[0]['target_id'] if len(matches) == 1 else None
             result.append(r)
+        if workload == 'recheck' and len(text) < len(unicodedata.normalize('NFC', sanitize_before_store(doc.text[:12000])[0] or '')):
+            self.defer_extract = True
         self.stats['findings'] += len(result)
         return result

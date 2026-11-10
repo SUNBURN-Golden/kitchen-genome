@@ -1,5 +1,39 @@
 # DeepSeek web and Kitchen Genome Instagram collection
 
+Current owner policy (2026-11-10): **no spend; `KG_IG=0`**. Do not run the live
+smoke examples below or Argon while this order holds. The current platform
+balance is zero; verification uses injected HTTP only. The balance endpoint is
+also mocked in tests. `balance_low` / `balance_unavailable` pauses model work
+without charging a reservation or failing deterministic stages; `reason=` is
+preserved through COLLECT, AI_REVIEW, DAEMON and final RESULT summaries. Review
+work awaiting a provider decision remains open with a visible reason.
+
+AI findings publish only after the common DeepSeek review approves an exact
+source quote. Publication adds `ai_reviewed`, the `AI 검토` badge, source URL,
+review IDs and `data/ai_review_log.jsonl`. Rejection closes with a reason.
+Rollback: `scripts/ai_review_rollback.py`; core seed fields are not overwritten.
+This supersedes older pending-only/publication descriptions in this runbook.
+
+Unknown-only pages skip AI (`skipped_no_targets`). A known restaurant with a new
+chef, or known chef with a new restaurant, may pass; no model output promotes a
+target. The gate uses active seed/discovered Gazetteer aliases in the submitted
+sanitized context. Plan requests instead validate active open-gap metadata.
+
+Monthly rechecks bootstrap and stagger published targets over 30 days in the
+private service DB. Daily admission, a 20% fetch share and an AI sublimit of
+`min(8, 0.4 * shared_daily_cap)` protect fresh work. All changed-state candidates,
+including rules, use the same DeepSeek review. Failed/partial inspections and
+balance/budget deferrals do not advance last-checked time. Full inspections with
+no changed-state candidates mean “no change observed,” not confirmed open.
+
+After the last daily review, the offline weekly writer generates completed KST
+weeks beneath `marketing/drafts/`. Drafts MUST pass Gemini Argon review via
+`marketing/argon_review.sh` before any human/VIRAL publishes. The pipeline never
+runs Argon or posts drafts. Keep revised copy separate; regenerated input needs
+a fresh Argon pass. See [draft guidance](../../marketing/drafts/README.md) and
+[implementation design](DEEPSEEK_IMPROVE_DESIGN.md).
+
+
 Implemented on `feat/deepseek-collect-ig-daemon` from main, following
 [the collection design](DEEPSEEK_COLLECT_DESIGN.md). Runtime work is local Python;
 there are no Grok Bot chat calls or Cursor CloudAgent jobs.
@@ -129,7 +163,7 @@ Default pipeline controls:
 | `KG_COLLECT_COST_CAP` | `78` | Web run internal cost cap |
 | `KG_DEEPSEEK` | `1` | Pass `--deepseek` to all three callers |
 | `KG_AI_DAILY_COST_CAP` | `20` | Shared KST-day model allowance, clamped to 0–20 |
-| `KG_IG` | `1` | Run dedicated Instagram read collector |
+| `KG_IG` | `0` | Disabled by default; owner order keeps it off |
 | `KG_IG_COST_CAP` | `20` | IG run internal cost cap |
 | `KG_DAEMON_COST_CAP` | `20` | Local-document daemon cap |
 | `KG_IG_FOLLOW` | `0` | Optional follow gate; read backend cannot follow |

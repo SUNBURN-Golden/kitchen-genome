@@ -84,7 +84,8 @@ def plan(conn, total_units: float, now: dt.datetime | None = None, max_attempts:
         conn.execute('UPDATE crawl_job SET priority=? WHERE job_id=?', (pr, j['job_id']))
         ranked[j['pool']].append((pr, j, comp))
     for p in ranked:
-        ranked[p].sort(key=lambda x: -x[0])
+        from .recheck import active_for_job
+        ranked[p].sort(key=lambda x: (bool(active_for_job(conn,x[1]['job_id'])), -x[0]))
     chosen: dict = {p: [] for p in SHARES}
     left = dict(budgets)
     # The same URL can sit in several pools (e.g. a refresh keyword job and a backfill reverse-gap job for the same query); fetching it twice in one
@@ -121,6 +122,18 @@ def plan(conn, total_units: float, now: dt.datetime | None = None, max_attempts:
                 spill -= c
                 if k:
                     taken_urls.add(k)
+    from .recheck import active_for_job
+    fresh = sum(1 for ids in chosen.values() for jid in ids if not active_for_job(conn,jid))
+    recheck_slots = fresh // 4
+    for pool in chosen:
+        kept = []
+        for jid in chosen[pool]:
+            if active_for_job(conn, jid):
+                if recheck_slots <= 0:
+                    continue
+                recheck_slots -= 1
+            kept.append(jid)
+        chosen[pool] = kept
     conn.commit()
     return {'budgets': {k: round(v, 2) for k, v in budgets.items()}, 'chosen': chosen, 'queued_by_pool': {p: len(ranked[p]) for p in ranked},
             'discovery_reserved_share': DISCOVERY_RESERVED, 'skipped_same_url': skipped_same_url}
@@ -132,6 +145,9 @@ def requeue_due(conn, now: dt.datetime | None = None) -> int:
     now = now or dt.datetime.now(dt.timezone.utc)
     n = 0
     for j in conn.execute("SELECT * FROM crawl_job WHERE state='done' AND url IS NOT NULL AND path IN ('feed','sitemap','official_chain','directory','keyword_search','entity_followup','reverse_gap')").fetchall():
+        from .recheck import active_for_job
+        if active_for_job(conn, j['job_id']) or conn.execute('SELECT 1 FROM restaurant_recheck_job WHERE job_id=? AND dedicated_root=1', (j['job_id'],)).fetchone():
+            continue
         f = conn.execute("SELECT fetch_id, fetched_at, method, host FROM fetch_record WHERE canonical_url=? AND outcome='ok' ORDER BY fetched_at DESC LIMIT 1", (j['url'],)).fetchone()
         if j['path'] in ('keyword_search', 'entity_followup', 'reverse_gap') and not f:
             f = conn.execute('SELECT fetch_id, fetched_at, method, host FROM fetch_record WHERE job_id=? ORDER BY fetched_at DESC LIMIT 1', (j['job_id'],)).fetchone()

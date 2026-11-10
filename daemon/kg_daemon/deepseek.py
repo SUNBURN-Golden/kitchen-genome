@@ -19,7 +19,7 @@ def extract(ctx, doc, body):
     for r in adapter.extract(d, [], Gazetteer(ctx.conn)):
         # All rows including unmapped labels have already-valid quotes. They must reach review.
         out.append(('menu' if r['label'] in ('menu', 'collab') else {'career': 'employment', 'employment_claim': 'employment', 'mentorship_claim': 'mentorship'}.get(r['label'], r['label']),
-                    {'label': r['label'], 'target_id': body.get('target_id'), 'effective_date': r.get('date_text'),
+                    {**{k: r.get(k) for k in ('chef_text','restaurant_text','org_text','role_text','date_text')}, 'label': r['label'], 'target_id': body.get('target_id'), 'effective_date': r.get('date_text'),
                      'pending_only': True, 'asserted_by': 'ai_inference', 'model_meta': adapter.client.last_meta,
                      'evidence_locator': {'span_start': r['span_start'], 'span_end': r['span_end'], 'extractor_version': r['extractor_version']}}, r['quote']))
     return out

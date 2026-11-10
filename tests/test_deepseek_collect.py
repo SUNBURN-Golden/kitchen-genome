@@ -1,3 +1,4 @@
+from tests_balance_fake import healthy_balance
 """Source-backed fixtures exercise planning -> inference -> review isolation and web limits."""
 import json
 import sys
@@ -41,7 +42,7 @@ def finding(text, **extra):
 
 
 def adapter(conn, data):
-    return Adapters(Client(Budget(meter(conn)), key='dummy', transport=lambda *a: response(data)))
+    return Adapters(Client(Budget(meter(conn)), key='dummy', transport=lambda *a: response(data), balance_transport=healthy_balance))
 
 
 def test_gap_planner_validates_ids_and_returns_search_jobs(world):
@@ -50,7 +51,7 @@ def test_gap_planner_validates_ids_and_returns_search_jobs(world):
         data = json.loads(json.loads(payload)['messages'][1]['content']); g=data[0]
         assert len(data)<=20 and 'failed_queries' in g
         return response({'queries':[{'gap_id':g['gap_id'],'target_id':g['target_id'],'query':'달빛정원 공식 소개', 'reason':'missing biography'}]})
-    a = Adapters(Client(Budget(meter(c)), key='dummy', transport=transport))
+    a = Adapters(Client(Budget(meter(c)), key='dummy', transport=transport, balance_transport=healthy_balance))
     jobs = a.plan(c)
     assert len(jobs)==1 and jobs[0]['path']=='reverse_gap'
     job = jobs[0]; job['url']=discover.search_url(discover.load_seeds(),job['query'])
@@ -90,10 +91,10 @@ def test_invalid_model_fields_quotes_and_dates_are_rejected(world, extra, code):
     def transport(payload, key):
         calls.append(json.loads(payload))
         return response({'findings': [finding(text, **extra)]})
-    a = Adapters(Client(Budget(meter(world)), key='dummy', transport=transport))
+    a = Adapters(Client(Budget(meter(world)), key='dummy', transport=transport, balance_transport=healthy_balance))
     assert a.extract(doc(text), [], Gazetteer(world)) == []
     assert len(calls) == 2 and a.client.stopped == code and a.stats['failed'] == 1 and a.stats['findings'] == 0
-    assert code in calls[1]['messages'][0]['content']
+    assert code in calls[1]['messages'][-1]['content']
     assert 'Previous output was rejected' not in calls[0]['messages'][0]['content']
     rows = world.execute("SELECT error, result_json FROM ai_request WHERE state='failed'").fetchall()
     assert len(rows) == 2 and all(r['result_json'] is None and r['error'].startswith(code) for r in rows)
@@ -141,7 +142,7 @@ def test_realistic_exact_quotes_stay_pending_and_wrong_unique_offsets_are_repair
     def transport(payload_bytes, key):
         calls.append(json.loads(payload_bytes))
         return response(payload)
-    a = Adapters(Client(Budget(meter(c)), key='dummy', transport=transport))
+    a = Adapters(Client(Budget(meter(c)), key='dummy', transport=transport, balance_transport=healthy_balance))
     result = process_doc(c, doc(PAGE), Gazetteer(c), tier='official', model_adapter=a)
     assert result['new'] >= 2 and a.client.stopped is None and a.stats['failed'] == 0 and len(calls) == 1
     sent = calls[0]['messages'][0]['content']
@@ -168,7 +169,7 @@ def test_realistic_extraction_misses_are_categorized_without_storing_source_text
     a = adapter(c, payload)
     assert a.extract(doc(text), [], Gazetteer(c)) == []
     assert a.client.stopped == 'quote_not_exact' and a.stats['findings'] == 0
-    error = c.execute("SELECT error, result_json FROM ai_request WHERE task='web-extract-1' AND state='failed' ORDER BY rowid").fetchone()
+    error = c.execute("SELECT error, result_json FROM ai_request WHERE task='web-extract-2' AND state='failed' ORDER BY rowid").fetchone()
     assert error['result_json'] is None
     assert error['error'].startswith('quote_not_exact ')
     for token in ('0:quote_not_exact', '1:date_not_iso', '2:name_absent', '3:mentorship_unsupported'):
@@ -222,12 +223,12 @@ def test_category_is_kept_when_the_retry_cannot_be_reserved(world):
         usage = {'prompt_tokens': total - 1182, 'completion_tokens': 1182, 'total_tokens': total, 'prompt_cache_hit_tokens': 0}
         return response({'findings': [{'label': 'opening', 'quote': 'not on the page', 'date_text': '2021-05'}]}, usage=usage)
 
-    client = Client(Budget(m, daily_cap=20, day=lambda: '2026-11-07'), key='dummy', transport=transport)
+    client = Client(Budget(m, daily_cap=20, day=lambda: '2026-11-07'), key='dummy', transport=transport, balance_transport=healthy_balance)
     text = LEAD + ('가' * 12000)
     a = Adapters(client)
     assert a.extract(doc(text), [], Gazetteer(conn)) == []
     assert len(calls) == 1 and a.client.stopped == 'quote_not_exact' and a.stats['called'] == 1 and a.stats['failed'] == 1
-    row = conn.execute("SELECT state, error, result_json, completion_tokens FROM ai_request WHERE task='web-extract-1'").fetchone()
+    row = conn.execute("SELECT state, error, result_json, completion_tokens FROM ai_request WHERE task='web-extract-2'").fetchone()
     assert row['state'] == 'failed' and row['result_json'] is None and row['completion_tokens'] == 1182
     assert row['error'].startswith('quote_not_exact ') and 'not on the page' not in row['error'] and '2021-05' not in row['error']
     assert conn.execute('SELECT COUNT(*) FROM extraction').fetchone()[0] == 0
@@ -243,7 +244,7 @@ def test_billed_blank_content_pauses_ai_and_publishes_nothing(world):
         body = {'usage': usage, 'choices': [{'finish_reason': 'stop', 'message': {
             'content': ' ', 'reasoning_content': 'REASONING-NOT-TASK ' + json.dumps({'findings': [finding(text)]})}}]}
         return 200, json.dumps(body).encode()
-    a = Adapters(Client(Budget(meter(c)), key='dummy', transport=transport))
+    a = Adapters(Client(Budget(meter(c)), key='dummy', transport=transport, balance_transport=healthy_balance))
     before = c.execute('SELECT COUNT(*) FROM claim').fetchone()[0]
     assert process_doc(c, doc(text), Gazetteer(c), tier='official', model_adapter=a)['new'] == 0
     assert len(calls) == 2 and a.client.stopped == 'json_blank'
@@ -355,7 +356,7 @@ def test_whitespace_pii_document_is_sent_and_offsets_use_filtered_text(world):
         assert data['text'] == clean and 'me@example.test' not in data['text']
         return response({'findings': [finding(quote)]})
 
-    a = Adapters(Client(Budget(meter(c)), key='dummy', transport=transport))
+    a = Adapters(Client(Budget(meter(c)), key='dummy', transport=transport, balance_transport=healthy_balance))
     r = process_doc(c, doc(raw), Gazetteer(c), tier='official', model_adapter=a)
     assert r['new'] == 1 and seen
     assert a.stats['considered'] == 1 and a.stats['skipped_filter'] == 0
@@ -380,7 +381,7 @@ def test_smoke_cap_fits_another_model_call_after_the_billed_plan(world):
     _gap(conn)
     m = meter(conn, cap=23)
     budget = Budget(m, daily_cap=20, day=lambda: '2026-11-07')
-    planner = Client(budget, key='dummy', transport=lambda payload, key: response({'ok': True}, usage=SMOKE_PLAN_USAGE))
+    planner = Client(budget, key='dummy', transport=lambda payload, key: response({'ok': True}, usage=SMOKE_PLAN_USAGE), balance_transport=healthy_balance)
     assert planner.call('gap-plan-1', 'JSON', {'n': 1}, lambda o: o, max_tokens=4096) == {'ok': True}
     assert m.used == pytest.approx(2.1825)
     calls = []
@@ -391,7 +392,7 @@ def test_smoke_cap_fits_another_model_call_after_the_billed_plan(world):
         assert LEAD in sent and reservation_tokens(payload, 4096) <= room
         return response({'findings': [finding(LEAD.strip())]}, usage={'prompt_tokens': 1000, 'completion_tokens': 100, 'total_tokens': 1100, 'prompt_cache_hit_tokens': 0})
 
-    client = Client(budget, key='dummy', transport=transport)
+    client = Client(budget, key='dummy', transport=transport, balance_transport=healthy_balance)
     full = (LEAD + ('가' * 12000))[:12000]
     oversized = client._payload(EXTRACT_INSTRUCTION, {'url': 'https://official.test/1', 'text': full}, 4096, None)[1]
     room = client.budget.room_tokens()
@@ -421,7 +422,7 @@ def test_exhausted_daily_budget_defers_extract_and_a_later_day_retries(world, tm
         calls.append(payload)
         return response({'findings': [finding(LEAD.strip())]})
 
-    client = Client(Budget(m, daily_cap=20, day=lambda: '2026-11-07'), key='dummy', transport=transport)
+    client = Client(Budget(m, daily_cap=20, day=lambda: '2026-11-07'), key='dummy', transport=transport, balance_transport=healthy_balance)
     text = LEAD + ('가' * 800)
     adapter = Adapters(client)
     assert adapter.extract(doc(text), [], Gazetteer(conn)) == []
@@ -438,7 +439,7 @@ def test_exhausted_daily_budget_defers_extract_and_a_later_day_retries(world, tm
     cycle.stage_extract(ctx)
     assert conn.execute('SELECT extracted_at FROM fetch_record WHERE fetch_id=?', ('f',)).fetchone()[0] is None
     assert conn.execute("SELECT COUNT(*) FROM extraction WHERE extractor='deepseek:web'").fetchone()[0] == 0
-    later = Adapters(Client(Budget(m, daily_cap=20, day=lambda: '2026-11-08'), key='dummy', transport=transport))
+    later = Adapters(Client(Budget(m, daily_cap=20, day=lambda: '2026-11-08'), key='dummy', transport=transport, balance_transport=healthy_balance))
     bot.ai = later
     cycle.stage_extract(ctx)
     assert calls and conn.execute('SELECT extracted_at FROM fetch_record WHERE fetch_id=?', ('f',)).fetchone()[0]
@@ -483,7 +484,7 @@ def test_planner_history_lists_only_non_yielding_queries(world):
                 seen.update(row)
         return response({'queries': []})
 
-    assert Adapters(Client(Budget(meter(c)), key='dummy', transport=transport)).plan(c) == []
+    assert Adapters(Client(Budget(meter(c)), key='dummy', transport=transport, balance_transport=healthy_balance)).plan(c) == []
     assert seen['failed_queries'] == ['bad query']
 
 
