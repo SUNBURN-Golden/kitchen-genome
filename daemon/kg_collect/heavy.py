@@ -126,6 +126,7 @@ class HeavyCrawler:
         self.caps = self.cfg['caps']
         self.q = sqlite3.connect(queue_path, timeout=30, check_same_thread=False)
         self.q.row_factory = sqlite3.Row
+        self.q.execute('PRAGMA journal_mode=WAL')     # status readers never wait on the running block
         self.q.executescript(SCHEMA)
         self.svc = service_conn
         self.clock, self.sleep = clock, sleep
@@ -146,8 +147,10 @@ class HeavyCrawler:
 
     def daily(self) -> dict:
         d = self.day()
-        self.q.execute('INSERT OR IGNORE INTO daily(day) VALUES (?)', (d,))
-        return dict(self.q.execute('SELECT * FROM daily WHERE day=?', (d,)).fetchone())
+        r = self.q.execute('SELECT * FROM daily WHERE day=?', (d,)).fetchone()
+        if r is None:
+            return {'day': d, 'requests': 0, 'bytes_in': 0, 'bytes_out': 0, 'candidates': 0, 'content': 0, 'items': 0, 'not_modified': 0}
+        return dict(r)
 
     def bump(self, **kw):
         d = self.day()
@@ -535,8 +538,10 @@ class HeavyCrawler:
                         if not any(v > self.clock() for v in self.next_ok.values()):
                             halt = 'nothing_ready'          # only paused / robots-cached-denied hosts left
                             break
+                        self.q.commit()
                         self.sleep(1)
                         continue
+                    self.q.commit()                         # never hold the write lock while waiting on the network
                     done, _ = cf.wait(list(inflight), timeout=1, return_when=cf.FIRST_COMPLETED)
                     for f in done:
                         task = inflight.pop(f)

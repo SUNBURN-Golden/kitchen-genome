@@ -292,3 +292,14 @@ def test_crash_still_writes_traffic_log(world):
     rep = hc.run(clock() + 3600)
     assert rep['outcome'] == 'halted' and rep['reason'] == 'crash:RuntimeError'
     assert json.loads(open(tmp / 'crawl_traffic.jsonl').read().splitlines()[-1])['reason'] == 'crash:RuntimeError'
+
+
+def test_status_reader_is_not_blocked_by_a_running_block(world):
+    conn, tmp, clock, sleep, t = world
+    hc, web = _crawler(world, default_routes)
+    hc.seed()
+    hc.bump(requests=1)                     # uncommitted write in the crawler connection
+    import sqlite3
+    r = sqlite3.connect(str(tmp / 'q.db'), timeout=0.5)
+    assert r.execute('SELECT COUNT(*) FROM frontier').fetchone()[0] > 0
+    hc.q.commit()
