@@ -18,6 +18,7 @@ run_one() {
                 ANTHROPIC_MODEL="$model" ANTHROPIC_SMALL_FAST_MODEL="$model" ANTHROPIC_DEFAULT_HAIKU_MODEL="$model" API_TIMEOUT_MS=600000 \
                 claude -p --dangerously-skip-permissions --model "$model" ;;
     glm)      printf "%s\n" "$prompt" | env -u CLAUDE_CONFIG_DIR claude -p --dangerously-skip-permissions --effort xhigh ;;
+    qwen)     ( source /workspace/qwen_env.sh && printf "%s\n" "$prompt" | claude -p --dangerously-skip-permissions --model "$model" ) ;;
     devin|swe2) local pf; pf="$(mktemp)"; printf "%s\n" "$prompt" > "$pf"
               devin -p --prompt-file "$pf" --model "$model" --permission-mode dangerous --respect-workspace-trust false; local rc=$?; rm -f "$pf"; return $rc ;;
     *) echo "unknown runner $1"; return 2 ;;
@@ -29,4 +30,14 @@ for lane in "${lanes[@]}"; do
   echo "[fallback] $lane failed (rc=$?)" >> "$log"
 done
 [ -n "${DEEPSEEK_API_KEY:-}" ] && sed -i "s|$DEEPSEEK_API_KEY|***|g" "$log"
+# Redact the Qwen token the same way. Never print it.
+if [ -r /home/box/.qwen/token_plan_key ]; then
+  python3 -c 'import pathlib,sys
+p=pathlib.Path(sys.argv[1]); k=pathlib.Path("/home/box/.qwen/token_plan_key").read_text().strip()
+if k:
+    text=p.read_text()
+    if k in text:
+        p.write_text(text.replace(k,"***"))
+' "$log" || true
+fi
 exit 1
