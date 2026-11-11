@@ -119,7 +119,7 @@ def incremental_fetch(ctx: StageContext) -> StageResult:
         new = dup = 0
         for rec in records:
             content = json.dumps(rec['body'], ensure_ascii=False, sort_keys=True)
-            h = _sha(content)
+            h = _sha(json.dumps(rec['hash_body'], ensure_ascii=False, sort_keys=True)) if rec.get('hash_body') is not None else _sha(content)
             fetched = rec.get('collected_at') or ctx.env.get('today') or utcnow()[:10]
             canon = canonicalize_url(rec['url']) + rec.get('doc_key', '')
             did = stable_id('doc', sid, canon, h)
@@ -147,6 +147,23 @@ def incremental_fetch(ctx: StageContext) -> StageResult:
 
 
 # ───────────── 3. change detection ─────────────
+def _content_view(raw_ref):
+    try:
+        body = json.load(open(raw_ref, encoding='utf-8'))
+    except (TypeError, OSError, ValueError):
+        return None
+    if isinstance(body, dict) and isinstance(body.get('collect'), dict):
+        body = dict(body, collect={k: v for k, v in body['collect'].items() if k not in collect_bridge._NON_CONTENT_COLLECT_KEYS})
+    return body
+
+
+def _same_content(ctx, doc, prev_id) -> bool:
+    """True when two stored versions differ only in non-content columns (both raw bodies must still be on disk)."""
+    prev = ctx.conn.execute('SELECT raw_ref FROM document WHERE document_id=?', (prev_id,)).fetchone()
+    a, b = _content_view(doc['raw_ref']), _content_view(prev['raw_ref'] if prev else None)
+    return a is not None and a == b
+
+
 def change_detection(ctx: StageContext) -> StageResult:
     docs = ctx.conn.execute("""SELECT d.* FROM document d LEFT JOIN change_event c ON c.document_id=d.document_id
                                WHERE c.document_id IS NULL ORDER BY d.fetched_at, d.rowid""").fetchall()
@@ -160,6 +177,8 @@ def change_detection(ctx: StageContext) -> StageResult:
         if prev:
             n_mod += 1
             applied = ctx.conn.execute('SELECT 1 FROM candidate_fact WHERE document_id=? AND applied_claim_id IS NOT NULL LIMIT 1', (prev['document_id'],)).fetchone()
+            if applied and _same_content(ctx, d, prev['document_id']):
+                applied = None   # only bookkeeping/derived columns differ (see collect_bridge._NON_CONTENT_COLLECT_KEYS): not a source edit
             if applied:   # source text changed after we applied facts from it: re-extract AND let a human see it
                 queue_review(ctx.conn, 'source_modified', 'document', d['document_id'], {'previous': prev['document_id'], 'url': d['url']},
                              dedupe_key=f'source_modified:{d["document_id"]}')
