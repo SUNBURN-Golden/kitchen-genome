@@ -8,6 +8,7 @@ from kg_daemon.db import stable_id, utcnow
 from kg_ai import pending
 from kg_daemon.claims import queue_review
 from . import EXTRACTOR_VERSION
+from .entertainment import entertainment_detail, entertainment_reason
 from .extract import extract_text, needs_model
 from .fetch import Doc
 from .resolve import resolve_extractions
@@ -49,12 +50,22 @@ def process_doc(conn, doc: Doc, gaz: Gazetteer, *, tier: str, ctx: dict | None =
     attempt = active_for_fetch(conn, fr) if fr else None
     workload = 'recheck' if attempt else 'fresh'
     now = now or utcnow()
-    texts = [(doc.text, doc.published_at)]
+    texts = [(doc.text, doc.published_at, None)]
     if doc.items:                                  # feed/sitemap: every item is its own short document with its own date
-        texts = [(f"{i['title']}. {i['summary']}", i.get('date')) for i in doc.items if i.get('title')]
+        texts = [(f"{i['title']}. {i['summary']}", i.get('date'), i) for i in doc.items if i.get('title')]
     recs_all = []
     off_hosts = official_hosts(conn)
-    for text, pub in texts:
+    skipped = 0
+    skipped_detail = None
+    kept_items = []
+    for text, pub, item in texts:
+        if entertainment_reason(doc.canonical_url or doc.url, text):   # fiction never enters extraction; one audit row per fetch below
+            skipped += 1
+            if skipped_detail is None:
+                skipped_detail = entertainment_detail(doc.canonical_url or doc.url, text)
+            continue
+        if item is not None:
+            kept_items.append(item)
         recs = extract_text(text, gaz=gaz, host=doc.host, published_at=pub or doc.published_at, tier=tier, ctx=ctx, ocr_conf=ocr_conf or doc.ocr_conf,
                             official_hosts=off_hosts, content_hash=(doc.content_hash or '') + (pub or ''))
         if attempt:
@@ -64,6 +75,11 @@ def process_doc(conn, doc: Doc, gaz: Gazetteer, *, tier: str, ctx: dict | None =
                           'model_meta_json': json.dumps({'workload': 'recheck', 'rule_extractor': r['extractor']})})
         resolve_extractions(conn, recs, gaz, doc.url, via or doc.url)
         recs_all.extend(recs)
+    if skipped:
+        rid = queue_review(conn, 'skipped_entertainment', 'fetch', doc.fetch_id,
+                           {'url': doc.canonical_url or doc.url, 'detail': skipped_detail, 'skipped_texts': skipped},
+                           dedupe_key='ent:fetch:' + doc.fetch_id, now=now)
+        conn.execute("UPDATE review_queue SET state='dismissed', resolved_at=? WHERE review_id=?", (now, rid))
     if model_hook and not attempt:                                 # ambiguous only; output is epistemic=inference and never applied
         for r in list(recs_all):
             if needs_model(r):
@@ -98,10 +114,13 @@ def process_doc(conn, doc: Doc, gaz: Gazetteer, *, tier: str, ctx: dict | None =
         labels[r['label']] = labels.get(r['label'], 0) + 1
     if attempt and not doc.items and (rule_inspected or (model_adapter and not model_adapter.defer_extract and model_adapter.client.status == 'enabled')) and len(doc.text) <= 12000 and eligibility_for_recheck(gaz, doc.text, attempt):
         conn.execute('INSERT INTO restaurant_recheck_job(attempt_id,job_id,fetch_id) VALUES (?,?,?)', (attempt['attempt_id'],fr['job_id'],doc.fetch_id))
-    for tid, n in mentions_of(gaz, doc.text or ' '.join(f"{i['title']} {i['summary']}" for i in doc.items)).items():
+    # Mentions count kept texts only: a skipped entertainment text must not feed gap classification or host yield alerts.
+    mention_text = (doc.text if not skipped else '') or ' '.join(f"{i['title']} {i['summary']}" for i in kept_items)
+    mention_counts = mentions_of(gaz, mention_text)
+    for tid, n in mention_counts.items():
         conn.execute('INSERT OR IGNORE INTO doc_target(fetch_id,target_id,mentions) VALUES (?,?,?)', (doc.fetch_id, tid, n))
     conn.commit()
-    return {'new': new, 'total': len(recs_all), 'labels': labels, 'mentions': len(mentions_of(gaz, doc.text or ''))}
+    return {'new': new, 'total': len(recs_all), 'labels': labels, 'mentions': len(mention_counts), 'skipped_entertainment': skipped}
 
 
 # ───────────── extractor health: a broken extractor must be detected, not silently produce empty output ─────────────
@@ -169,9 +188,12 @@ def host_yield_window(conn, host, raw_store=None, gaz=None) -> dict:
     """Last HOST_WINDOW prose docs on the host. A mention whose surrounding text recurs in >= half of the window is site boilerplate
     (sidebar / most-read / related-articles widgets), not something the article says, so it does not count. Without gaz/raw_store the
     stored doc_target counts are used as before."""
+    # Entertainment-skipped fetches are not evidence of a broken extractor: exclude them from the window
+    # (the gaz/raw path recomputes m from mention contexts, so the exclusion must live in the SQL).
     rows = conn.execute(f"""SELECT f.fetch_id, f.canonical_url, f.text_ref, (SELECT COUNT(*) FROM extraction e WHERE e.fetch_id=f.fetch_id) n,
                            (SELECT COALESCE(SUM(mentions),0) FROM doc_target d WHERE d.fetch_id=f.fetch_id) m
                            FROM fetch_record f WHERE f.host=? AND f.outcome='ok' AND f.method NOT IN ({','.join('?' * len(NON_PROSE_METHODS))})
+                           AND NOT EXISTS (SELECT 1 FROM review_queue q WHERE q.reason='skipped_entertainment' AND q.subject_type='fetch' AND q.subject_id=f.fetch_id)
                            ORDER BY f.fetched_at DESC, f.rowid DESC LIMIT ?""", (host, *NON_PROSE_METHODS, HOST_WINDOW)).fetchall()
     docs = [{'fetch_id': r['fetch_id'], 'url': r['canonical_url'], 'n': r['n'], 'm': r['m']} for r in rows]
     if gaz is not None and raw_store is not None and docs:

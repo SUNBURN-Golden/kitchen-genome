@@ -352,7 +352,7 @@ def stage_extract(ctx):
     rows = conn.execute("""SELECT f.* FROM fetch_record f LEFT JOIN fetch_priority p ON p.fetch_id=f.fetch_id
                            WHERE f.outcome='ok' AND (f.extracted_at IS NULL OR f.extractor_version<>?)
                            ORDER BY COALESCE(p.score, 0.75) DESC, f.fetched_at, f.rowid""", (EXTRACTOR_VERSION,)).fetchall()
-    stats = {'docs': 0, 'new_extractions': 0, 'labels': {}, 'alerts': []}
+    stats = {'docs': 0, 'new_extractions': 0, 'labels': {}, 'alerts': [], 'skipped_entertainment': 0}
     for f in rows:
         attempt = recheck.active_for_fetch(conn, f)
         if attempt and (not bot.ai or bot.ai.client.status != 'enabled'):
@@ -366,9 +366,13 @@ def stage_extract(ctx):
         if bot.ai:
             bot.ai.defer_extract = False
         r = process_doc(conn, doc, gaz, tier=tier_of(doc.host), ctx=jctx, via=f['url'], model_hook=bot.model_hook, model_adapter=bot.ai)
-        n_all = conn.execute('SELECT COUNT(*) FROM extraction WHERE fetch_id=?', (f['fetch_id'],)).fetchone()[0]
-        for a in check_extractor_health(conn, doc, n_all, bot.raw, gaz=gaz):
-            stats['alerts'].append(a)
+        stats['skipped_entertainment'] += r.get('skipped_entertainment', 0)
+        # A fully skipped entertainment prose doc must not fire per-URL yield_drop/structure_change alerts;
+        # feeds keep their checks (partial skips still extract real items). Host coverage stays via reconcile.
+        if not (r.get('skipped_entertainment') and not doc.items):
+            n_all = conn.execute('SELECT COUNT(*) FROM extraction WHERE fetch_id=?', (f['fetch_id'],)).fetchone()[0]
+            for a in check_extractor_health(conn, doc, n_all, bot.raw, gaz=gaz):
+                stats['alerts'].append(a)
         # A document the model could not afford stays unextracted so a later run can retry it.
         # Deterministic rows already committed are idempotent. Other documents still finish.
         if bot.ai and bot.ai.defer_extract:

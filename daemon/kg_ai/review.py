@@ -21,6 +21,7 @@ import unicodedata
 
 from kg_ai.article import article_key, source, digest
 from kg_ai.balance import PAUSES
+from kg_collect.entertainment import entertainment_reason
 from kg_collect.targets import Gazetteer, eligibility, load_seed_targets
 from kg_ai.budget import Budget
 from kg_ai.deepseek import RETRYABLE, Client, DeepSeekError, reservation_tokens
@@ -256,7 +257,7 @@ def review(conn, seed_path, log_path, raw_dir, *, client=None, daily_cap=None, l
     daily_cap = float(os.environ.get('KG_AI_DAILY_COST_CAP', '20') if daily_cap is None else daily_cap)
     daily_cap = max(0.0, min(20.0, daily_cap))
     now = utcnow()
-    stats = {'approved': 0, 'rejected': 0, 'published': 0, 'prechecked_rejects': 0, 'calls': 0, 'stopped': None, 'candidates_closed': 0, 'skipped_no_targets': 0, 'skipped_balance': 0, 'considered': 0, 'eligible': 0}
+    stats = {'approved': 0, 'rejected': 0, 'published': 0, 'prechecked_rejects': 0, 'calls': 0, 'stopped': None, 'candidates_closed': 0, 'skipped_no_targets': 0, 'skipped_entertainment': 0, 'skipped_balance': 0, 'considered': 0, 'eligible': 0}
     stats['candidates_closed'] += close_linked_candidates(conn, now)
     items = open_items(conn)
     if limit:
@@ -321,6 +322,10 @@ def review(conn, seed_path, log_path, raw_dir, *, client=None, daily_cap=None, l
             alt_why, alt_ctx = precheck(f, raw_full)
             if not alt_why:
                 why, ctx, text = None, alt_ctx, raw_full
+        if not why:
+            why = entertainment_reason(f['canonical_url'], text)   # deterministic reject: no model call, model_meta null, zero cost
+            if why:
+                stats['skipped_entertainment'] += 1
         if not why and not eligibility(gaz, text)['target_ids']:
             why = 'skipped_no_targets'
             stats['skipped_no_targets'] += 1
@@ -454,8 +459,8 @@ def main(argv=None):
     migrate(conn)
     raw_dir = a.raw_dir or os.path.join(os.path.dirname(os.path.abspath(a.db)), 'raw')
     s = review(conn, a.seed, a.log, raw_dir, limit=a.limit)
-    print('AI_REVIEW approved=%s rejected=%s published=%s prechecked=%s calls=%s remaining=%s stopped=%s cost=%s reason=%s skipped_no_targets=%s skipped_balance=%s unreviewed_candidate_findings=%s' % (
-        s['approved'], s['rejected'], s['published'], s['prechecked_rejects'], s['calls'], s.get('remaining'), s['stopped'] or 'none', s.get('cost_used', 0), s.get('reason','none'), s['skipped_no_targets'], s['skipped_balance'], s.get('unreviewed_candidate_findings',0)))
+    print('AI_REVIEW approved=%s rejected=%s published=%s prechecked=%s calls=%s remaining=%s stopped=%s cost=%s reason=%s skipped_no_targets=%s skipped_entertainment=%s skipped_balance=%s unreviewed_candidate_findings=%s' % (
+        s['approved'], s['rejected'], s['published'], s['prechecked_rejects'], s['calls'], s.get('remaining'), s['stopped'] or 'none', s.get('cost_used', 0), s.get('reason','none'), s['skipped_no_targets'], s['skipped_entertainment'], s['skipped_balance'], s.get('unreviewed_candidate_findings',0)))
     return 0
 
 
