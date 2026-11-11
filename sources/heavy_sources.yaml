@@ -1,0 +1,71 @@
+# Heavy continuous collector (kg_collect.heavy). Human-edited; the bot never rewrites this file.
+# Owner approval 2026-11-11 10:33 KST: run in blocks 00:00-03:00 and 11:00-14:00 KST (22:00-24:00 only when the backlog needs it),
+# all public web through the zecbot SOCKS tunnel, no browser, DeepSeek review stays in the 07:00 pipeline (AI cap unchanged at 20).
+version: "2026-11-11.1"
+
+caps:
+  daily_candidates: 4000        # new frontier URLs admitted per KST day
+  daily_content: 1200           # documents handed to the 07:00 extractor (kg_service fetch_record) per KST day
+  daily_requests: 6000          # HTTP requests per KST day (robots included)
+  daily_bytes: 400000000        # 400 MB/day wire cap
+  monthly_bytes: 10000000000    # 10 GB/month wire cap (zecbot is billed over 20 GB/month and shared with other bots)
+  max_concurrency: 6            # requests in flight (= domains in flight; one request per domain at a time)
+  per_domain_delay_sec: 5
+  max_depth: 3
+  max_queries: 500
+  max_links_per_page: 15
+  relevance_floor: 0.3
+  lookback_days: 365
+  block_pause_days: 7           # a domain that answered 403/429/503/challenge is left alone this long (never bypassed)
+  backlog_for_optional_block: 800   # the 22:00 block runs only when at least this many URLs are due
+
+search:
+  - id: bing_news
+    endpoint: "https://www.bing.com/news/search?format=rss&setlang=ko&q={q}"
+    revisit_hours: 24
+
+query_modifiers:
+  chef: ["셰프", "셰프 인터뷰", "셰프 레스토랑 오픈", "출신 셰프", "셰프 이직"]
+  restaurant: ["레스토랑", "오픈", "이전", "폐업", "미쉐린", "셰프"]
+  general:
+    - 파인다이닝 셰프 오픈
+    - 수셰프 독립 레스토랑
+    - 헤드셰프 새 레스토랑
+    - 미쉐린 가이드 서울 셰프
+    - 블루리본 서베이 셰프
+    - 흑백요리사 셰프 레스토랑
+    - 셰프 인터뷰 파인다이닝
+    - 레스토랑 폐업 셰프
+    - 셰프 팝업 레스토랑 서울
+    - 한식 파인다이닝 셰프 출신
+
+feeds:     # Korean press RSS (robots checked at run time; a disallowed or blocked feed is simply skipped)
+  - {url: "https://www.hotelrestaurant.co.kr/rss/allArticle.xml", revisit_hours: 6}
+  - {url: "https://www.foodbank.co.kr/rss/allArticle.xml", revisit_hours: 6}
+  - {url: "https://www.yna.co.kr/rss/culture.xml", revisit_hours: 6}
+  - {url: "https://www.khan.co.kr/rss/rssdata/culture_news.xml", revisit_hours: 6}
+  - {url: "https://www.hankyung.com/feed/life", revisit_hours: 6}
+  - {url: "https://www.chosun.com/arc/outboundfeeds/rss/category/culture-life/?outputType=xml", revisit_hours: 6}
+  - {url: "https://www.mk.co.kr/rss/30000023/", revisit_hours: 6}
+  - {url: "https://www.newsis.com/RSS/culture.xml", revisit_hours: 6}
+  - {url: "https://www.sedaily.com/rss/life", revisit_hours: 6}
+  - {url: "https://www.seoul.co.kr/xml/rss/rss_life.xml", revisit_hours: 6}
+  - {url: "https://www.hani.co.kr/rss/lifestyle", revisit_hours: 6}
+
+guides:    # guide / interview index pages (HTML, links followed to depth 3 when relevant)
+  - {url: "https://ko.wikipedia.org/wiki/%EB%AF%B8%EC%89%90%EB%A6%B0_%EA%B0%80%EC%9D%B4%EB%93%9C_%EC%84%9C%EC%9A%B8", revisit_hours: 168}
+  - {url: "https://www.hotelrestaurant.co.kr/news/articleList.html?sc_section_code=S1N2", revisit_hours: 24}
+  - {url: "https://www.foodbank.co.kr/news/articleList.html", revisit_hours: 24}
+
+exclude_hosts:   # never fetched by this collector
+  - guide.michelin.com        # robots/legal notice forbid automated access (manual_only in discovery_seeds.yaml)
+  - bluer.co.kr               # robots.txt answers 403 -> treated as disallow
+  - news.google.com           # robots disallows /rss/search
+  - instagram.com             # Instagram is never collected through the proxy (KG_IG stays 0)
+  - facebook.com
+  - youtube.com
+  - tiktok.com
+  - x.com
+  - twitter.com
+  - catchtable.co.kr
+  - catchtable.net

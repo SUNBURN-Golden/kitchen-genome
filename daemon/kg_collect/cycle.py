@@ -348,7 +348,10 @@ def stage_extract(ctx):
         bot.ai = bot.ai or Adapters.for_meter(ctx.cost)
         bot.ai.client.budget.meter = ctx.cost
     tier_of = _tier_of(conn)
-    rows = conn.execute("""SELECT * FROM fetch_record WHERE outcome='ok' AND (extracted_at IS NULL OR extractor_version<>?) ORDER BY fetched_at, rowid""", (EXTRACTOR_VERSION,)).fetchall()
+    # Highest priority first (heavy collector scores; unscored rows weigh 0.75) so the fixed DeepSeek budget reaches the most promising pages.
+    rows = conn.execute("""SELECT f.* FROM fetch_record f LEFT JOIN fetch_priority p ON p.fetch_id=f.fetch_id
+                           WHERE f.outcome='ok' AND (f.extracted_at IS NULL OR f.extractor_version<>?)
+                           ORDER BY COALESCE(p.score, 0.75) DESC, f.fetched_at, f.rowid""", (EXTRACTOR_VERSION,)).fetchall()
     stats = {'docs': 0, 'new_extractions': 0, 'labels': {}, 'alerts': []}
     for f in rows:
         attempt = recheck.active_for_fetch(conn, f)

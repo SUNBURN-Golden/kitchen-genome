@@ -100,14 +100,15 @@ class NoRedirect(urllib.request.HTTPRedirectHandler):
 
 
 def default_transport(url, headers, timeout):
-    req = urllib.request.Request(url, headers=headers)
+    """Public web leaves ONLY through the zecbot SOCKS tunnel (proxynet). Tunnel down -> error 'proxy_down', never a direct request."""
+    from . import proxynet
     try:
-        with urllib.request.build_opener(NoRedirect()).open(req, timeout=timeout) as r:
-            return Response(url, r.status, dict(r.headers), r.read(8_000_000), final_url=r.geturl())
-    except urllib.error.HTTPError as e:
-        return Response(url, e.code, dict(e.headers or {}), e.read(200_000) if e.fp else b'', final_url=url)
-    except Exception as e:  # noqa: BLE001
-        return Response(url, 0, {}, b'', error=type(e).__name__)
+        st, hd, body, err = proxynet.request(url, headers, timeout=timeout, text_only=False, max_body=8_000_000)
+    except proxynet.ProxyDown:
+        return Response(url, 0, {}, b'', error='proxy_down')
+    if st == 0:
+        return Response(url, 0, {}, b'', error=err or 'network')
+    return Response(url, st, hd, body, final_url=url)
 
 
 class PoliteNet:
