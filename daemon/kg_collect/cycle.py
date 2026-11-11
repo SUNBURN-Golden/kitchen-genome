@@ -513,7 +513,7 @@ def stage_extract(ctx):
                            ORDER BY COALESCE(p.score, 0.75) DESC, f.fetched_at, f.rowid""", (EXTRACTOR_VERSION,
                                bool(bot.ai and hasattr(bot.ai, 'extract_lineage') and bot.ai.client.configured),
                                lineage_version, michelin.VERSION)).fetchall()
-    stats = {'docs': 0, 'new_extractions': 0, 'labels': {}, 'alerts': []}
+    stats = {'docs': 0, 'new_extractions': 0, 'labels': {}, 'alerts': [], 'skipped_entertainment': 0}
     for f in rows:
         if bot.expired(bot.extract_deadline):
             stats['deferred_deadline'] = True
@@ -534,13 +534,17 @@ def stage_extract(ctx):
         if bot.ai:
             bot.ai.defer_extract = False
         r = process_doc(conn, doc, gaz, tier=tier_of(doc.host), ctx=jctx, via=f['url'], model_hook=bot.model_hook, model_adapter=bot.ai)
-        if doc.links and doc.method in ('html', 'browser'):
+        stats['skipped_entertainment'] += r.get('skipped_entertainment', 0)
+        if doc.links and doc.method in ('html', 'browser') and not (r.get('skipped_entertainment') and not doc.items):
             original_job = conn.execute('SELECT * FROM crawl_job WHERE job_id=?', (f['job_id'],)).fetchone()
             if original_job and original_job['path'] != 'official_chain':
                 _article_site_leads(conn, doc, original_job, bot.gaz() if r['new'] else gaz, bot.seeds)
-        n_all = conn.execute('SELECT COUNT(*) FROM extraction WHERE fetch_id=?', (f['fetch_id'],)).fetchone()[0]
-        for a in check_extractor_health(conn, doc, n_all, bot.raw, gaz=gaz):
-            stats['alerts'].append(a)
+        # A fully skipped entertainment prose doc must not fire per-URL yield_drop/structure_change alerts;
+        # feeds keep their checks (partial skips still extract real items). Host coverage stays via reconcile.
+        if not (r.get('skipped_entertainment') and not doc.items):
+            n_all = conn.execute('SELECT COUNT(*) FROM extraction WHERE fetch_id=?', (f['fetch_id'],)).fetchone()[0]
+            for a in check_extractor_health(conn, doc, n_all, bot.raw, gaz=gaz):
+                stats['alerts'].append(a)
         # A temporarily unavailable model can resume after deterministic rows commit.
         if not r['lineage_complete'] or bot.ai and bot.ai.defer_extract:
             continue

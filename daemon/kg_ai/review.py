@@ -22,6 +22,7 @@ import unicodedata
 from kg_ai import promotion
 from kg_ai.article import article_key, source, digest
 from kg_ai.balance import PAUSES
+from kg_collect.entertainment import entertainment_reason
 from kg_ai.budget import Budget
 from kg_ai.deepseek import RETRYABLE, Client, DeepSeekError, MAX_INPUT_BYTES
 from kg_collect.global_queue import write
@@ -318,7 +319,7 @@ def _start_run(conn):
 
 def review(conn, seed_path, log_path, raw_dir, *, client=None, limit=None):
     now = utcnow()
-    stats = {'approved': 0, 'rejected': 0, 'published': 0, 'prechecked_rejects': 0, 'calls': 0, 'stopped': None, 'candidates_closed': 0, 'skipped_no_targets': 0, 'skipped_balance': 0, 'considered': 0, 'eligible': 0}
+    stats = {'approved': 0, 'rejected': 0, 'published': 0, 'prechecked_rejects': 0, 'calls': 0, 'stopped': None, 'candidates_closed': 0, 'skipped_no_targets': 0, 'skipped_entertainment': 0, 'skipped_balance': 0, 'considered': 0, 'eligible': 0}
     stats.update(promoted=0, unlinked_remaining=0)
     with open(seed_path, encoding='utf-8') as stream:
         seed = json.load(stream)
@@ -379,6 +380,10 @@ def review(conn, seed_path, log_path, raw_dir, *, client=None, limit=None):
             alt_why, alt_ctx = precheck(f, raw_full)
             if not alt_why:
                 why, ctx, text = None, alt_ctx, raw_full
+        if not why:
+            why = entertainment_reason(f['canonical_url'], text)   # deterministic reject: no model call, model_meta null, zero cost
+            if why:
+                stats['skipped_entertainment'] += 1
         if not why and not eligibility(gaz, text)['target_ids']:
             why = 'skipped_no_targets'
             stats['skipped_no_targets'] += 1
@@ -527,8 +532,8 @@ def main(argv=None):
     raw_dir = a.raw_dir or os.path.join(os.path.dirname(os.path.abspath(a.db)), 'raw')
     with seed_lock(a.seed):
         s = review(conn, a.seed, a.log, raw_dir, limit=a.limit)
-    print('AI_REVIEW approved=%s rejected=%s published=%s prechecked=%s calls=%s remaining=%s stopped=%s cost=%s reason=%s skipped_no_targets=%s skipped_balance=%s unreviewed_candidate_findings=%s bundle_approved=%s bundle_rejected=%s bundle_remaining=%s promoted=%s unlinked_remaining=%s promotion_skips=%s' % (
-        s['approved'], s['rejected'], s['published'], s['prechecked_rejects'], s['calls'], s.get('remaining'), s['stopped'] or 'none', s.get('cost_used', 0), s.get('reason','none'), s['skipped_no_targets'], s['skipped_balance'], s.get('unreviewed_candidate_findings',0),
+    print('AI_REVIEW approved=%s rejected=%s published=%s prechecked=%s calls=%s remaining=%s stopped=%s cost=%s reason=%s skipped_no_targets=%s skipped_entertainment=%s skipped_balance=%s unreviewed_candidate_findings=%s bundle_approved=%s bundle_rejected=%s bundle_remaining=%s promoted=%s unlinked_remaining=%s promotion_skips=%s' % (
+        s['approved'], s['rejected'], s['published'], s['prechecked_rejects'], s['calls'], s.get('remaining'), s['stopped'] or 'none', s.get('cost_used', 0), s.get('reason','none'), s['skipped_no_targets'], s.get('skipped_entertainment', 0), s['skipped_balance'], s.get('unreviewed_candidate_findings',0),
         s.get('bundle_approved', 0), s.get('bundle_rejected', 0), s.get('bundle_remaining', 0), s.get('promoted', 0), s.get('unlinked_remaining', 0),
         json.dumps(s.get('promotion_skips', {}), sort_keys=True, separators=(',', ':'))))
     return 0
