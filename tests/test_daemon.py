@@ -476,3 +476,35 @@ def test_reingesting_pre_provenance_vault_record_is_not_source_modified(world):
     daemon(c, env).run()
     assert c.execute("SELECT COUNT(*) FROM document WHERE url=?", (rec['url'],)).fetchone()[0] == 1
     assert c.execute("SELECT COUNT(*) FROM review_queue WHERE reason='source_modified'").fetchone()[0] == before
+
+
+def test_collect_hash_ignores_non_content_columns():
+    """#83 added extraction.workload (and date_iso) columns; they rode into every collector body and
+    changed the content hash of 722 unchanged extractions, queueing false source_modified reviews."""
+    from kg_daemon.collect_bridge import _NON_CONTENT_COLLECT_KEYS
+    assert set(_NON_CONTENT_COLLECT_KEYS) >= {'workload', 'date_iso'}
+
+
+def test_same_content_guard_skips_bookkeeping_only_changes(tmp_path):
+    import sqlite3
+    from kg_daemon.stages import _same_content
+    old = {'collect': {'extraction_id': 'e1', 'chef_text': 'A', 'date_text': '2025-03'}, 'tier': 'search_lead'}
+    new = {'collect': {**old['collect'], 'workload': 'fresh', 'date_iso': '2025-03'}, 'tier': 'search_lead'}
+    edited = {'collect': {**old['collect'], 'chef_text': 'B', 'workload': 'fresh'}, 'tier': 'search_lead'}
+    paths = {}
+    for name, body in (('old', old), ('new', new), ('edited', edited)):
+        p = tmp_path / f'{name}.json'
+        p.write_text(json.dumps(body), encoding='utf-8')
+        paths[name] = str(p)
+    conn = sqlite3.connect(':memory:')
+    conn.row_factory = sqlite3.Row
+    conn.execute('CREATE TABLE document(document_id TEXT, raw_ref TEXT)')
+    conn.execute("INSERT INTO document VALUES ('d_old', ?)", (paths['old'],))
+
+    class Ctx:
+        pass
+    ctx = Ctx()
+    ctx.conn = conn
+    assert _same_content(ctx, {'raw_ref': paths['new']}, 'd_old')
+    assert not _same_content(ctx, {'raw_ref': paths['edited']}, 'd_old')
+    assert not _same_content(ctx, {'raw_ref': None}, 'd_old')     # raw purged: fall back to queueing the review

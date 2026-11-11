@@ -39,6 +39,11 @@ def tier_of(c, host, official_hosts) -> str:
     return (r['tier_guess'] if r and r['tier_guess'] else 'press')
 
 
+# extraction columns that are not source content: which AI budget pool ran it (workload) and the ISO form
+# derived from date_text + published_at (date_iso). They stay in the body but are left out of the content hash.
+_NON_CONTENT_COLLECT_KEYS = ('workload', 'date_iso')
+
+
 def collector_records(path, tier_to_source) -> dict:
     """-> {source_id: [record,...]} one record per extraction row (doc identity: url + extraction id)."""
     c = _open(path)
@@ -58,8 +63,10 @@ def collector_records(path, tier_to_source) -> dict:
         sid = tier_to_source.get(tier, 'search_leads')
         body = {'collect': {k: e[k] for k in e.keys() if k not in ('created_at',)}, 'tier': tier,
                 'chef': tgt.get(e['resolved_chef_target']), 'restaurant': tgt.get(e['resolved_restaurant_target']), 'org': tgt.get(e['resolved_org_target'])}
+        # hash only source content: bookkeeping/derived columns added later (workload, date_iso) must not make an unchanged extraction look edited
+        hash_body = dict(body, collect={k: v for k, v in body['collect'].items() if k not in _NON_CONTENT_COLLECT_KEYS})
         out.setdefault(sid, []).append({'url': e['url'], 'doc_key': f'#ext={e["extraction_id"]}', 'published_at': e['published_at'], 'body': body,
-                                        'collected_at': (e['fetched_at'] or '')[:19] or None})
+                                        'hash_body': hash_body, 'collected_at': (e['fetched_at'] or '')[:19] or None})
     c.close()
     return out
 
