@@ -127,16 +127,16 @@ class Traffic:
 TRAFFIC = Traffic()
 
 
-def _decode(body: bytes, enc: str) -> bytes:
+def _decode(body: bytes, enc: str, cap: int = MAX_BODY) -> bytes:
     enc = (enc or '').lower()
     if enc == 'gzip':
         d = zlib.decompressobj(16 + zlib.MAX_WBITS)
     elif enc == 'deflate':
         d = zlib.decompressobj()
     else:
-        return body[:MAX_BODY]
+        return body[:cap]
     try:
-        return d.decompress(body, MAX_BODY)
+        return d.decompress(body, cap)
     except zlib.error:
         return b''
 
@@ -182,7 +182,7 @@ def request(url: str, headers: dict | None = None, timeout: float = 20, method: 
         truncated = len(raw) > wire_cap
         raw = raw[:wire_cap]
         traffic.add(requests=1, bytes_in=head_bytes + len(raw), bytes_out=out_bytes, skipped_large=1 if truncated else 0)
-        body = _decode(raw, rh.get('content-encoding'))
+        body = _decode(raw, rh.get('content-encoding'), cap)
         rh.pop('content-encoding', None)
         return r.status, rh, body, ('truncated' if truncated else None)
     except ProxyDown:

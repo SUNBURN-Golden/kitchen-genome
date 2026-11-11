@@ -11,6 +11,7 @@ Output: pages that mention a registered active chef/restaurant are handed to the
 (raw store + fetch_priority score). The 07:00 extract stage reads the highest scores first, so the fixed DeepSeek budget (cap 20)
 goes to the most promising pages. This module never calls DeepSeek, never commits, merges or deploys."""
 import argparse
+import ipaddress
 import concurrent.futures as cf
 import datetime as dt
 import json
@@ -42,6 +43,8 @@ SOURCES_PATH = os.path.join(ROOT, 'sources', 'heavy_sources.yaml')
 HEAVY_FETCHER = FETCHER_VERSION + '+heavy1'
 REVISIT_KINDS = ('search', 'feed', 'guide')
 HARD = {'max_concurrency': 6, 'per_domain_delay_sec': 5, 'max_depth': 3}      # ceilings the yaml cannot loosen
+CEIL = {'daily_candidates': 5000, 'daily_content': 1500, 'daily_requests': 8000, 'daily_bytes': 500_000_000, 'monthly_bytes': 15_000_000_000}
+MAX_CRAWL_DELAY = 60                                                         # a robots Crawl-delay longer than this: host is skipped
 
 SCHEMA = """
 CREATE TABLE IF NOT EXISTS frontier(
@@ -69,6 +72,8 @@ def load_cfg(path=SOURCES_PATH) -> dict:
     caps['max_concurrency'] = max(1, min(HARD['max_concurrency'], int(caps.get('max_concurrency', 6))))
     caps['per_domain_delay_sec'] = max(HARD['per_domain_delay_sec'], float(caps.get('per_domain_delay_sec', 5)))
     caps['max_depth'] = min(HARD['max_depth'], int(caps.get('max_depth', 3)))
+    for k, v in CEIL.items():
+        caps[k] = min(v, int(caps.get(k, v)))
     return cfg
 
 
@@ -83,14 +88,35 @@ def deadline_for(until: str, clock=time.time) -> float:
     return end.timestamp() if (end - now) <= dt.timedelta(hours=4) else 0.0
 
 
+def _private_host(h: str) -> bool:
+    h = (h or '').split(':')[0].strip('[]')
+    if h in ('localhost', '') or h.endswith('.local') or h.endswith('.internal'):
+        return True
+    try:
+        ip = ipaddress.ip_address(h)
+    except ValueError:
+        return False
+    return ip.is_private or ip.is_loopback or ip.is_link_local or ip.is_reserved or ip.is_multicast
+
+
 def excluded(url: str, cfg) -> bool:
-    h = host_of(url)
+    try:
+        h = host_of(url)
+        urllib.parse.urlsplit(url).port
+    except ValueError:
+        return True
+    if _private_host(h):
+        return True                                   # never fetch box-local / private addresses (redirect or link)
     ex = tuple(cfg.get('exclude_hosts') or ())
     if any(h == b or h.endswith('.' + b) for b in ex) or any(h == b or h.endswith('.' + b) or b in h for b in BANNED):
         return True
     low = url.lower()
     path = urllib.parse.urlsplit(low).path
     return path.endswith(proxynet.SKIP_EXT) or any(t in low for t in TRAP)
+
+
+class Terminated(Exception):
+    """SIGTERM (cron timeout): unwind the loop so the run and traffic records are still written."""
 
 
 class HeavyCrawler:
@@ -151,7 +177,10 @@ class HeavyCrawler:
 
     # ── frontier ──
     def add(self, url, kind, depth=0, score=0.5, query=None, target_id=None, parent=None, revisit_hours=None, count=True) -> bool:
-        url = to_uri(url)
+        try:
+            url = to_uri(url)
+        except ValueError:
+            return False
         if not url.startswith(('http://', 'https://')) or excluded(url, self.cfg) or depth > self.caps['max_depth']:
             return False
         if count and self.daily()['candidates'] >= self.caps['daily_candidates']:
@@ -222,8 +251,8 @@ class HeavyCrawler:
         rp = urllib.robotparser.RobotFileParser()
         if status == 200:
             rp.parse(text.splitlines())
-        elif status in (401, 403, 429, 503):
-            rp.disallow_all = True
+        elif status in (401, 403, 429) or status == 0 or (status or 0) >= 500:
+            rp.disallow_all = True                  # forbidden, or unreachable/5xx (RFC 9309 2.3.1.4): do not crawl now
         else:
             rp.allow_all = True                     # missing robots.txt (404/5xx) = allowed (RFC 9309)
         return rp
@@ -244,8 +273,18 @@ class HeavyCrawler:
                 if st in (403, 429, 503):
                     out['blocked'] = f'robots_{st}'
                     return out
-                self.sleep(max(self.caps['per_domain_delay_sec'], rp.crawl_delay(UA) or rp.crawl_delay('*') or 0))
+                if st == 0 or st >= 500:
+                    out['robots_unavailable'] = st
+                    return out
+                d = max(self.caps['per_domain_delay_sec'], rp.crawl_delay(UA) or rp.crawl_delay('*') or 0)
+                if d > MAX_CRAWL_DELAY or self.clock() + d + 20 > task.get('stop_at', float('inf')):
+                    out['deferred'] = 'crawl_delay' if d > MAX_CRAWL_DELAY else 'block_end'
+                    return out
+                self.sleep(d)
             out['delay'] = max(self.caps['per_domain_delay_sec'], rp.crawl_delay(UA) or rp.crawl_delay('*') or 0)
+            if out['delay'] > MAX_CRAWL_DELAY:
+                out['deferred'] = 'crawl_delay'
+                return out
             if not rp.can_fetch(UA, url):
                 out['robots_denied'] = True
                 return out
@@ -276,14 +315,22 @@ class HeavyCrawler:
             self.stats['robots_requests'] += 1
             self.stats['requests'] += 1
             self.bump(requests=1)
-            self.q.execute("""INSERT INTO host_state(host,robots,robots_status,robots_at) VALUES (?,?,?,?) ON CONFLICT(host) DO UPDATE SET robots=excluded.robots,
-                              robots_status=excluded.robots_status, robots_at=excluded.robots_at""", (base, txt[:200_000], st, self.clock()))
-            self.robots[base] = self._parse_robots(st, txt)
+            if st and st < 500:                     # transient robots failures are not cached
+                self.q.execute("""INSERT INTO host_state(host,robots,robots_status,robots_at) VALUES (?,?,?,?) ON CONFLICT(host) DO UPDATE SET robots=excluded.robots,
+                                  robots_status=excluded.robots_status, robots_at=excluded.robots_at""", (base, txt[:200_000], st, self.clock()))
+                self.robots[base] = self._parse_robots(st, txt)
         if res.get('proxy_down'):
             return 'proxy_lost'
         if res.get('blocked'):
             self.pause_host(host, res['blocked'])
-            self._finish(url, t['kind'], t['revisit_hours'], state='queued', next_due=self.clock() + 86400 * 7, error=res['blocked'])
+            self._finish(url, t['kind'], t['revisit_hours'], state='queued', next_due=self.clock() + 86400 * float(self.caps.get('block_pause_days', 7)), error=res['blocked'])
+            return None
+        if res.get('robots_unavailable') is not None or res.get('deferred'):
+            why = res.get('deferred') or f"robots_unavailable:{res['robots_unavailable']}"
+            if why == 'block_end':
+                return None                          # stays queued for the next block
+            att = t['attempts'] + 1
+            self._finish(url, 'article', None, state='queued' if att < 3 else 'failed', attempts=att, next_due=self.clock() + 3600 * att, error=why)
             return None
         if res.get('robots_denied'):
             self.stats['robots_denied'] += 1
@@ -430,6 +477,7 @@ class HeavyCrawler:
             task = dict(r)
             task['base'] = base
             task['rp'] = self._robots_cached(base)
+            task['stop_at'] = self.stop_at
             hosts.add(h)
             out.append(task)
         return out
@@ -437,6 +485,7 @@ class HeavyCrawler:
     def run(self, deadline: float, block: str = 'manual', max_requests: int | None = None, optional: bool = False) -> dict:
         run_id = 'hv_' + uuid.uuid4().hex[:10]
         started = self.clock()
+        self.started = started
         rep = {'run_id': run_id, 'block': block, 'started_kst': kst_now(self.clock).isoformat(timespec='seconds')}
         if deadline <= started + 60:
             return self._end(rep, 'skipped', 'block_over')
@@ -451,52 +500,59 @@ class HeavyCrawler:
         if optional and self.backlog() < int(self.caps.get('backlog_for_optional_block', 800)):
             return self._end(rep, 'skipped', 'backlog_small')
         self.next_ok: dict = {}
-        stop_at = deadline - 25                       # leave room for the 20 s request timeout before the hard stop
+        self.stop_at = stop_at = deadline - 25                       # leave room for the 20 s request timeout before the hard stop
         halt, inflight = None, {}
-        last_ip_check = self.clock()
-        with cf.ThreadPoolExecutor(max_workers=self.caps['max_concurrency']) as ex:
-            while True:
-                now = self.clock()
-                self.flush_traffic()
-                if halt is None:
-                    if now >= stop_at:
-                        halt = 'deadline'
-                    elif max_requests is not None and self.stats['requests'] >= max_requests:
-                        halt = 'max_requests'
-                    elif (c := self.cap_reason()):
-                        halt = c
-                    elif now - last_ip_check > 900:
-                        last_ip_check = now
-                        ok, info = self.egress()
-                        if not ok:
-                            halt = info
-                if halt is None:
-                    free = self.caps['max_concurrency'] - len(inflight)
-                    if free > 0:
-                        busy = {t['host'] for t in inflight.values()}
-                        for task in self.pick(busy, free):
-                            inflight[ex.submit(self.work, task)] = task
-                if not inflight:
-                    if halt:
-                        break
-                    if self.backlog() == 0:
-                        halt = 'queue_empty'
-                        break
-                    if not any(v > self.clock() for v in self.next_ok.values()):
-                        halt = 'nothing_ready'          # only paused / robots-cached-denied hosts left
-                        break
-                    self.sleep(1)
-                    continue
-                done, _ = cf.wait(list(inflight), timeout=1, return_when=cf.FIRST_COMPLETED)
-                for f in done:
-                    task = inflight.pop(f)
-                    res = f.result()
-                    self.next_ok[task['host']] = self.clock() + res.get('delay', self.caps['per_domain_delay_sec'])
-                    lost = self.handle(res)
-                    if lost:
-                        halt = lost                     # tunnel gone: start nothing new, let in-flight requests fail on their own
-                self.q.commit()
+        try:
+            last_ip_check = self.clock()
+            with cf.ThreadPoolExecutor(max_workers=self.caps['max_concurrency']) as ex:
+                while True:
+                    now = self.clock()
+                    self.flush_traffic()
+                    if halt is None:
+                        if now >= stop_at:
+                            halt = 'deadline'
+                        elif max_requests is not None and self.stats['requests'] >= max_requests:
+                            halt = 'max_requests'
+                        elif (c := self.cap_reason()):
+                            halt = c
+                        elif now - last_ip_check > 900:
+                            last_ip_check = now
+                            ok, info = self.egress()
+                            if not ok:
+                                halt = info
+                    if halt is None:
+                        free = self.caps['max_concurrency'] - len(inflight)
+                        if free > 0:
+                            busy = {t['host'] for t in inflight.values()}
+                            for task in self.pick(busy, free):
+                                inflight[ex.submit(self.work, task)] = task
+                    if not inflight:
+                        if halt:
+                            break
+                        if self.backlog() == 0:
+                            halt = 'queue_empty'
+                            break
+                        if not any(v > self.clock() for v in self.next_ok.values()):
+                            halt = 'nothing_ready'          # only paused / robots-cached-denied hosts left
+                            break
+                        self.sleep(1)
+                        continue
+                    done, _ = cf.wait(list(inflight), timeout=1, return_when=cf.FIRST_COMPLETED)
+                    for f in done:
+                        task = inflight.pop(f)
+                        res = f.result()
+                        self.next_ok[task['host']] = self.clock() + res.get('delay', self.caps['per_domain_delay_sec'])
+                        lost = self.handle(res)
+                        if lost:
+                            halt = lost                     # tunnel gone: start nothing new, let in-flight requests fail on their own
+                    self.q.commit()
+        except Exception as e:  # noqa: BLE001
+            halt = f'crash:{type(e).__name__}'
+            import traceback
+            traceback.print_exc(file=sys.stderr)
         reason = halt or 'idle'
+        if halt and halt.startswith('crash:'):
+            return self._end(rep, 'halted', halt)
         return self._end(rep, 'stopped' if reason in ('deadline', 'queue_empty', 'nothing_ready', 'max_requests', 'idle') else 'halted', reason)
 
     def _end(self, rep, outcome, reason) -> dict:
@@ -509,7 +565,7 @@ class HeavyCrawler:
                     'queue': {r['state']: r['n'] for r in self.q.execute('SELECT state, COUNT(*) n FROM frontier GROUP BY state')},
                     'max_rss_mb': round(resource.getrusage(resource.RUSAGE_SELF).ru_maxrss / 1024, 1)})
         self.q.execute('INSERT OR REPLACE INTO run(run_id,started,ended,block,outcome,stats) VALUES (?,?,?,?,?,?)',
-                       (rep['run_id'], None, self.clock(), rep['block'], f'{outcome}:{reason}', json.dumps(rep, ensure_ascii=False)))
+                       (rep['run_id'], getattr(self, 'started', None), self.clock(), rep['block'], f'{outcome}:{reason}', json.dumps(rep, ensure_ascii=False)))
         self.q.commit()
         line = {k: rep.get(k) for k in ('run_id', 'block', 'started_kst', 'ended_kst', 'outcome', 'reason', 'egress', 'traffic', 'stats', 'day_totals', 'month_bytes', 'max_rss_mb')}
         line['day'] = self.day()
@@ -544,6 +600,11 @@ def main(argv=None) -> int:
         print(json.dumps({'backlog_due': hc.backlog(), 'today': hc.daily(), 'month_bytes': hc.month_bytes(),
                           'queue': {x['state']: x['n'] for x in hc.q.execute('SELECT state, COUNT(*) n FROM frontier GROUP BY state')}}, ensure_ascii=False))
         return 0
+    import signal
+
+    def _term(*_):
+        raise Terminated()
+    signal.signal(signal.SIGTERM, _term)
     rep = hc.run(deadline_for(a.until), block=a.block, max_requests=a.max_requests, optional=a.optional)
     s, tr = rep.get('stats') or {}, rep.get('traffic') or {}
     print(f"HEAVY={rep['outcome']} reason={rep['reason']} block={a.block} egress={rep.get('egress')} requests={s.get('requests', 0)} items={s.get('items_seen', 0)} "

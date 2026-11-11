@@ -171,7 +171,7 @@ def test_blocked_domain_is_paused_not_bypassed(world):
 
 def test_excluded_hosts_never_enter_the_frontier(world):
     hc, web = _crawler(world, default_routes)
-    for u in ('https://www.instagram.com/x', 'https://guide.michelin.com/kr/ko', 'https://a.test/file.pdf', 'https://a.test/v.mp4'):
+    for u in ('http://127.0.0.1:8080/x', 'http://localhost/a', 'http://10.0.0.5/a', 'http://[::1/x', 'https://www.instagram.com/x', 'https://guide.michelin.com/kr/ko', 'https://a.test/file.pdf', 'https://a.test/v.mp4'):
         assert not hc.add(u, 'article', 1, 0.9)
 
 
@@ -261,3 +261,34 @@ def test_cron_script_is_plain_and_ig_free():
     assert 'flock -n' in s and 'KG_IG=0' in s and 'kg_collect.heavy' in s
     for bad in ('deepseek', 'instagram', 'git ', 'deploy', 'ig_blocked'):
         assert bad not in s.lower().replace('never touches deepseek, git, deploy or instagram', '')
+
+
+def test_robots_unreachable_is_not_cached_and_url_retries_later(world):
+    def routes(url, headers):
+        if url == 'https://press.test/robots.txt':
+            return 502, {'content-type': 'text/html'}, b'bad gateway', None
+        return default_routes(url, headers)
+    hc, web = _crawler(world, routes)
+    hc.run(world[2]() + 3600)
+    assert not any(u.startswith('https://press.test/') and not u.endswith('robots.txt') for u, _ in web.calls)
+    row = hc.q.execute("SELECT state, error FROM frontier WHERE url='https://press.test/rss.xml'").fetchone()
+    assert row['state'] == 'queued' and row['error'].startswith('robots_unavailable')
+    assert hc.q.execute("SELECT 1 FROM host_state WHERE host='https://press.test' AND robots_at IS NOT NULL").fetchone() is None
+
+
+def test_caps_cannot_be_loosened_by_yaml():
+    cfg = heavy.load_cfg()
+    for k, v in heavy.CEIL.items():
+        assert cfg['caps'][k] <= v
+    assert cfg['caps']['max_concurrency'] <= 6 and cfg['caps']['per_domain_delay_sec'] >= 5 and cfg['caps']['max_depth'] <= 3
+
+
+def test_crash_still_writes_traffic_log(world):
+    conn, tmp, clock, sleep, t = world
+    hc, web = _crawler(world, default_routes)
+    def boom(*a, **k):
+        raise RuntimeError('x')
+    hc.handle = boom
+    rep = hc.run(clock() + 3600)
+    assert rep['outcome'] == 'halted' and rep['reason'] == 'crash:RuntimeError'
+    assert json.loads(open(tmp / 'crawl_traffic.jsonl').read().splitlines()[-1])['reason'] == 'crash:RuntimeError'

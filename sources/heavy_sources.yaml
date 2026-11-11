@@ -42,7 +42,6 @@ query_modifiers:
 feeds:     # Korean press RSS (robots checked at run time; a disallowed or blocked feed is simply skipped)
   - {url: "https://www.hotelrestaurant.co.kr/rss/allArticle.xml", revisit_hours: 6}
   - {url: "https://www.foodbank.co.kr/rss/allArticle.xml", revisit_hours: 6}
-  - {url: "https://www.yna.co.kr/rss/culture.xml", revisit_hours: 6}
   - {url: "https://www.khan.co.kr/rss/rssdata/culture_news.xml", revisit_hours: 6}
   - {url: "https://www.hankyung.com/feed/life", revisit_hours: 6}
   - {url: "https://www.chosun.com/arc/outboundfeeds/rss/category/culture-life/?outputType=xml", revisit_hours: 6}

@@ -108,7 +108,7 @@ def default_transport(url, headers, timeout):
         return Response(url, 0, {}, b'', error='proxy_down')
     if st == 0:
         return Response(url, 0, {}, b'', error=err or 'network')
-    return Response(url, st, hd, body, final_url=url)
+    return Response(url, st, hd, body, final_url=url, error=err)          # skipped_large / skipped_type / truncated stay visible
 
 
 class PoliteNet:
