@@ -1,0 +1,4 @@
+# Box crontab lines for the heavy collector (restore after a box reset: (crontab -l; cat scripts/heavy_crawl.crontab) | crontab -)
+0 0 * * * timeout -k 60 10740 /workspace/kitchen-genome/scripts/heavy_crawl.sh 02:59 night >> /workspace/kitchen-genome/data_store/logs/heavy_crawl.log 2>&1 # kg-heavy
+0 11 * * * timeout -k 60 10740 /workspace/kitchen-genome/scripts/heavy_crawl.sh 13:59 midday >> /workspace/kitchen-genome/data_store/logs/heavy_crawl.log 2>&1 # kg-heavy
+0 22 * * * timeout -k 60 7140 /workspace/kitchen-genome/scripts/heavy_crawl.sh 23:59 evening --optional >> /workspace/kitchen-genome/data_store/logs/heavy_crawl.log 2>&1 # kg-heavy
