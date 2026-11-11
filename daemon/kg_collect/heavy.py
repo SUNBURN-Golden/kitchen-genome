@@ -254,7 +254,7 @@ class HeavyCrawler:
         elif status in (401, 403, 429) or status == 0 or (status or 0) >= 500:
             rp.disallow_all = True                  # forbidden, or unreachable/5xx (RFC 9309 2.3.1.4): do not crawl now
         else:
-            rp.allow_all = True                     # missing robots.txt (404/5xx) = allowed (RFC 9309)
+            rp.allow_all = True                     # missing robots.txt (404/410 etc. 4xx) = allowed (RFC 9309)
         return rp
 
     # ── worker (thread): robots (if needed) + one GET; no DB access here ──
