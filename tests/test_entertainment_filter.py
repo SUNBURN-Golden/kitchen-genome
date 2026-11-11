@@ -154,6 +154,46 @@ def test_drama_metaphor_is_not_a_cue(text):
     assert entertainment_reason(None, text) is None
 
 
+@pytest.mark.parametrize('text', [
+    '비드라마 출연자 화제성 순위 1위에 올랐다.',
+    '비-드라마 출연자 화제성 순위 1위에 올랐다.',
+])
+def test_drama_negation_prefix_is_not_a_cue(text):
+    # 비(非)드라마 = "non-drama": the semantic opposite of a drama cue (PR #90 review §1).
+    assert core_cues(text) == []
+    assert entertainment_reason(None, text) is None
+
+
+def test_drama_negation_does_not_mask_a_real_drama_cue():
+    # only the 비-prefixed token is excluded; a genuine 드라마 elsewhere still counts.
+    assert core_cues('비드라마 화제성 1위. 새 드라마가 첫 방송된다.') == ['드라마', '첫방송']
+
+
+# Production false positive (PR #90 review §1), verbatim stored body: real career news about tracked
+# chef 손종원 (이타닉가든/라망시크레). The late "비드라마 출연자 화제성" must not add a 드라마 cue; with only
+# the early 예능 cue (1 family) the article passes to extraction instead of being silently dropped.
+FNNEWS_SON = """\
+(서울=뉴스1) 배지윤 기자 = 넷플릭스 예능 '흑백요리사2'와 JTBC '냉장고를 부탁해'에 출연하며 인기를 얻은 손종원 셰프가 신세계그룹 임원으로 승진했다. 올해 신규 임원 승진자 36명 가운데 유일한 전문임원으로, 두 레스토랑을 미쉐린 1스타에 올려놓은 요리 전문성과 성과를 인정받았다.
+23일 신세계그룹의 2027년도 정기 임원인사에 따르면 손 셰프는 조선호텔앤리조트 전문임원으로 선임됐다.
+손 셰프는 현재 조선 팰리스의 한식 파인다이닝 '이타닉가든'과 레스케이프 호텔의 프렌치 레스토랑 '라망시크레'를 총괄하고 있다.
+신세계그룹의 전문임원은 특정 분야에서 전문성과 성과를 인정받은 인재에게 부여하는 직책이다. 이번 신규 임원 승진자 36명 중 전문임원으로 발탁된 인물은 손 셰프가 유일하다.
+손 셰프는 미국 유명 레스토랑 '코아'(COI)와 '퀸스'(Quince) 등에서 경력을 쌓았다. 2018년 레스케이프 호텔 개관 당시 라망시크레 총괄 셰프로 합류하며 신세계그룹과 인연을 맺었다. 2022년부터는 이타닉가든도 총괄하고 있다.
+그가 이끄는 라망시크레는 2021년 처음 미쉐린 1스타를 받았으며, 이타닉가든은 2023년 1스타를 획득했다.
+두 레스토랑은 올해 발표된 '미쉐린 가이드 서울 2026'에서도 나란히 1스타를 유지했다. 라망시크레는 6년 연속, 이타닉가든은 4년 연속 1스타를 기록했다.
+손 셰프는 한식과 양식 레스토랑 두 곳에서 동시에 미쉐린 스타를 유지하며 '쌍별 셰프'라는 별칭을 얻었다.
+방송 출연을 통해 대중적 인지도도 높아졌다. '흑백요리사2' 방영 이후 이타닉가든과 라망시크레가 캐치테이블 매장 검색 순위 1·2위에 오르는 등 높은 관심을 받았다.
+'냉장고를 부탁해' 출연 이후에는 비드라마 출연자 화제성 순위 1위에 오르기도 했다.
+이번 전문임원 선임은 손 셰프가 호텔 다이닝의 경쟁력을 높이는 데 기여한 요리 전문성과 성과를 인정받은 인사로 풀이된다.
+※ 저작권자 © 뉴스1코리아, 무단전재-재배포 금지"""
+
+
+def test_review_regression_fnnews_chef_promotion_not_skipped():
+    url = 'https://fnnews.com/news/202610231343319658'
+    assert url_cue(url) is None
+    assert entertainment_detail(None, FNNEWS_SON)['cues'] == ['예능']
+    assert entertainment_reason(url, FNNEWS_SON) is None
+
+
 def test_boilerplate_cut():
     body = '달빛정원은 2026-10-01 문을 열었다. 한도윤 셰프가 총괄 셰프를 맡는다. '
     for chrome in ('관련기사 드라마 예능 화제', '많이 본 뉴스 드라마 예능 화제', "bnt's Pick 드라마 예능", 'bnt’s Pick 드라마 예능'):

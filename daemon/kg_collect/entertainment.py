@@ -16,7 +16,10 @@ REASON = 'skipped_entertainment'
 URL_SEGMENTS = {'tv', 'entertainment', 'entertain', 'drama', '연예'}   # whole path segments, never host/query substrings
 
 CORE_CUES = {
-    '드라마': r'드라마(?!\s?같은)',   # "드라마 같은 인생" is a metaphor, not a cue
+    # "드라마 같은 인생" is a metaphor, not a cue. The 비(非) negation prefix is also excluded:
+    # "비드라마"/"비-드라마" ("non-drama", e.g. 비드라마 출연자 화제성) is the semantic opposite of a
+    # drama cue and must not count — it fired on a real chef-promotion article (PR #90 review §1).
+    '드라마': r'(?<!비)(?<!비-)드라마(?!\s?같은)',
     '극중': r'극\s?중',
     '첫방송': r'첫\s?방송',
     '서바이벌': r'서바이벌',
