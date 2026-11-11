@@ -9,7 +9,12 @@ export KG_SERVICE_DB="$KG_DB"
 cd "$REPO"
 AI_ARGS=()
 [ "${KG_DEEPSEEK:-1}" != 1 ] || AI_ARGS=(--deepseek)
-if [ "${KG_COLLECT:-1}" = 1 ] && [ -f "$KG_DB" ]; then
+EGRESS=
+if [ "${KG_COLLECT:-1}" = 1 ] && [ -f "$KG_DB" ]; then EGRESS=$(PYTHONPATH=daemon timeout 60 python3 -m kg_collect.heavy egress 2>/dev/null) || true; fi
+if [ "${KG_COLLECT:-1}" = 1 ] && [ -f "$KG_DB" ] && [ "${EGRESS%% *}" != "EGRESS=ok" ] && [ "${KG_EGRESS_GATE:-1}" = 1 ]; then
+  # Public web leaves only through the zecbot tunnel. Tunnel down -> skip web collection (never the box IP).
+  COLLECT_OUT="COLLECT=skipped reason=proxy_down ai=disabled egress=${EGRESS:-none}"
+elif [ "${KG_COLLECT:-1}" = 1 ] && [ -f "$KG_DB" ]; then
   COLLECT_JSON=$(mktemp)
   COLLECT_RC=0
   PYTHONPATH=daemon timeout "${KG_COLLECT_TIMEOUT:-1500}" python3 -m kg_collect --db "$KG_DB" cycle \

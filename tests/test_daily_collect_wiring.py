@@ -71,7 +71,8 @@ if 'crawler/instagram_kg.py' in args and os.environ.get('TEST_IG_TIMEOUT'): sys.
 sys.exit(subprocess.call(args))
 ''',
       'python3':f'''if args and args[0]=='-c': sys.exit(subprocess.call([{sys.executable!r}]+args))
-if 'kg_collect' in args: print(json.dumps({{'status':'succeeded','run_id':'fixture','ai':'enabled','cost_used':0.1,'ai_reason':os.environ.get('TEST_COLLECT_REASON','none')}}))
+if 'kg_collect.heavy' in args: print(os.environ.get('TEST_EGRESS','EGRESS=ok ip=49.50.131.207'))
+elif 'kg_collect' in args: print(json.dumps({{'status':'succeeded','run_id':'fixture','ai':'enabled','cost_used':0.1,'ai_reason':os.environ.get('TEST_COLLECT_REASON','none')}}))
 elif 'kg_ai' in args: print('AI_REVIEW approved=0 rejected=0 published=0 reason='+os.environ.get('TEST_REVIEW_REASON','none'))
 elif 'kg_daemon' in args: print(json.dumps({{'status':'succeeded','ai':'enabled','ai_reason':os.environ.get('TEST_DAEMON_REASON','none')}}))
 elif 'crawler/instagram_kg.py' in args:
@@ -152,7 +153,7 @@ def test_collect_daily_runs_web_without_git_or_legacy_instagram(tmp_path):
         with open(os.environ['TEST_LOG'],'a') as f: f.write(tool+' '+' '.join(args)+'\\n')
     ''')
     (bindir / 'timeout').write_text(common + 'import subprocess,sys\nwhile args and args[0].startswith("--"): args.pop(0)\nargs.pop(0)\nsys.exit(subprocess.call(args))\n')
-    (bindir / 'python3').write_text(common + 'import json,subprocess,sys\nif args and args[0]=="-c": raise SystemExit(subprocess.call([sys.executable]+args))\nif "kg_collect" in args:\n print(json.dumps({"status":"succeeded","run_id":"fixture","ai":"paused","ai_reason":"json_blank","cost_used":1,"ai_stats":{"considered":1,"skipped_filter":0,"called":1,"failed":1,"findings":0}}))\nelif "instagram_kg.py" in args: raise SystemExit("instagram was invoked")\n')
+    (bindir / 'python3').write_text(common + 'import json,subprocess,sys\nif args and args[0]=="-c": raise SystemExit(subprocess.call([sys.executable]+args))\nif "kg_collect.heavy" in args:\n print(os.environ.get("TEST_EGRESS","EGRESS=ok ip=49.50.131.207"))\nelif "kg_collect" in args:\n print(json.dumps({"status":"succeeded","run_id":"fixture","ai":"paused","ai_reason":"json_blank","cost_used":1,"ai_stats":{"considered":1,"skipped_filter":0,"called":1,"failed":1,"findings":0}}))\nelif "instagram_kg.py" in args: raise SystemExit("instagram was invoked")\n')
     (bindir / 'git').write_text(common + 'raise SystemExit("git invoked")\n')
     for path in bindir.iterdir():
         path.chmod(0o755)
@@ -164,6 +165,12 @@ def test_collect_daily_runs_web_without_git_or_legacy_instagram(tmp_path):
     assert 'COLLECT=succeeded' in p.stdout and 'ai=paused' in p.stdout and 'reason=json_blank' in p.stdout
     assert 'ai_docs=1/0/1/1/0' in p.stdout and 'IG_SKIPPED' in p.stdout
     assert '--deepseek' in commands and '--no-browser' in commands and 'instagram' not in commands and 'git ' not in commands
+
+    # zecbot tunnel down: web collection is skipped (never the box IP) and the reason is reported
+    log.write_text('')
+    p = subprocess.run(['bash', str(script), str(repo)], env=dict(env, TEST_EGRESS='EGRESS=skip reason=proxy_down'), capture_output=True, text=True)
+    assert p.returncode == 0 and 'COLLECT=skipped reason=proxy_down' in p.stdout
+    assert 'kg_collect --db' not in log.read_text() and 'cycle' not in log.read_text()
 
 
 def test_build_failure_emits_one_failure_result(pipeline):
