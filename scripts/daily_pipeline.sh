@@ -45,6 +45,16 @@ if ! git diff --quiet || ! git diff --cached --quiet; then echo 'FATAL: tracked 
 DAY=$(date +%Y%m%d); BR="crawl/$DAY"
 git checkout -q main && git pull -q --ff-only
 git branch -D "$BR" >/dev/null 2>&1 || true; git checkout -q -b "$BR"
+BASE_SHA=$(git rev-parse HEAD)
+# Another process sharing this working tree (e.g. a dev/review-fix session) can switch branches mid-run;
+# on 2026-11-12 07:33 that put the crawl commit on feat/ai-entertainment-prefilter and the PR stage failed
+# with "No commits between main and crawl/…". Refuse to commit or push unless HEAD is still our branch.
+assert_branch() {
+  local cur; cur=$(git symbolic-ref -q --short HEAD || echo DETACHED)
+  if [ "$cur" != "$BR" ] || ! git merge-base --is-ancestor "$BASE_SHA" HEAD; then
+    FINAL=1; echo "RESULT=FAILED stage=$STAGE reason=branch_switched head=$cur expected=$BR ai_reason=$AI_REASON"; exit 4
+  fi
+}
 KG_DB="${KG_SERVICE_DB:-$KG_HOME/data_store/kg_service.db}"
 export KG_SERVICE_DB="$KG_DB" KG_HOME
 ai_review() {
@@ -106,11 +116,14 @@ grep -q '^const SHOW_VERDICTS=false;' web/app.js
 grep -q '^const SHOW_NEWSLETTER=false;' web/app.js
 if grep -rqi 'noindex' web; then echo "GUARD FAIL: noindex found"; exit 3; fi
 STAGE=pr
+assert_branch
 git add -A data crawler web scripts .gitignore
 if git diff --cached --quiet; then git checkout -q main; git branch -D "$BR" -q; echo "$IG_OUT"; FINAL=1; echo "RESULT=NO_CHANGE reason=$AI_REASON"; exit 0; fi
 WEB_CHANGED=0; git diff --cached --quiet -- web || WEB_CHANGED=1
 SUM=$(python3 -c "import json;s=json.load(open('crawler/out/last_summary.json'));print('; '.join(f\"{a['name']}: {a['kind']} {a.get('new_name') or a.get('field') or ''}\" for a in s['applied']) or 'pending queue only', '| pending', s['pending_count'])")
 git commit -q -m "crawl $DAY: $SUM"
+assert_branch
+[ "$(git rev-list --count "$BASE_SHA"..HEAD)" = 1 ] || { FINAL=1; echo "RESULT=FAILED stage=pr reason=unexpected_commits expected=$BR ai_reason=$AI_REASON"; exit 4; }
 git push -q -u origin "$BR" --force
 PR=$(gh pr create --repo SUNBURN-Golden/kitchen-genome --base main --head "$BR" --title "crawl $DAY: $SUM" \
   --body "Automated daily crawl (scripts/daily_pipeline.sh). Applied only with >=2 independent reliable sources; see crawler/applied.json. Review queue: crawler/pending.json. AI findings are published only after the DeepSeek review stage approves them (badged 'AI 검토', source URL, data/ai_review_log.jsonl; rollback: scripts/ai_review_rollback.py); rejected ones are closed with a reason. SHOW_VERDICTS/SHOW_NEWSLETTER=false, no noindex (guards passed).")

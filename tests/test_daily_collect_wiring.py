@@ -54,6 +54,11 @@ def pipeline(tmp_path):
     ''')
     scripts={
       'git':'''if args[:2]==['rev-parse','--git-common-dir']: print('.git')
+if args[:2]==['rev-parse','HEAD']: print('basesha')
+if args[:1]==['symbolic-ref']:
+    import datetime; print(os.environ.get('TEST_HEAD') or 'crawl/'+datetime.date.today().strftime('%Y%m%d'))
+if args[:2]==['merge-base','--is-ancestor']: sys.exit(0)
+if args[:2]==['rev-list','--count']: print(os.environ.get('TEST_COMMITS','1'))
 if args[:2]==['diff','--quiet']:
     sys.exit(1 if os.environ.get('TEST_DIRTY')=='1' else 0)
 if args[:3]==['diff','--cached','--quiet']:
@@ -198,3 +203,19 @@ def test_instagram_default_and_flag_files_are_untouched():
     assert '${KG_IG:-0}' in collect and '${KG_IG:-0}' in daily
     for flag in ('ig_blocked.flag','ig_kg_blocked.flag'):
         assert flag not in collect+daily
+
+
+def test_pipeline_refuses_to_commit_when_shared_tree_switched_branch(pipeline):
+    # 2026-11-12: a dev session checked out a feature branch in the same tree mid-run;
+    # the crawl commit landed there and gh failed with "No commits between main and crawl/...".
+    p,commands=pipeline(TEST_CHANGE='1', TEST_HEAD='feat/ai-entertainment-prefilter')
+    assert p.returncode==4
+    assert 'RESULT=FAILED stage=pr reason=branch_switched head=feat/ai-entertainment-prefilter' in p.stdout
+    assert 'git add' not in commands and 'git commit' not in commands and 'git push' not in commands
+    assert 'gh pr create' not in commands
+
+
+def test_pipeline_refuses_to_push_unexpected_commits(pipeline):
+    p,commands=pipeline(TEST_CHANGE='1', TEST_COMMITS='2')
+    assert p.returncode==4 and 'RESULT=FAILED stage=pr reason=unexpected_commits' in p.stdout
+    assert 'git commit' in commands and 'git push' not in commands and 'gh pr create' not in commands
