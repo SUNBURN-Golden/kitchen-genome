@@ -159,6 +159,10 @@ class Client:
                 'temperature': 0, 'stream': False, 'max_tokens': max_tokens}
         if provider == 'deepseek':
             body['thinking'] = {'type': 'disabled'}
+        else:
+            # qwen4-max-preview is a hybrid model; thinking is on by default and
+            # consumes max_tokens, which showed up as truncated_json on even a 1-finding review.
+            body['enable_thinking'] = False
         return messages, json.dumps(body, ensure_ascii=False).encode()
 
     def _request_key(self, task, payload):
