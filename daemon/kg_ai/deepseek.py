@@ -216,8 +216,9 @@ class Client:
         if self.stopped:
             raise DeepSeekError(self.stopped)
         canonical = self.budget.lookup(self._request_key(task, self._payload(instruction, data, max_tokens, None, provider=provider)[1]))
-        if canonical and canonical['state'] == 'failed' and failure_code(canonical['error']) in RETRYABLE:
-            # The rejected attempt stays charged and is not replayed. Other documents may continue.
+        if canonical and canonical['state'] == 'failed':
+            # A billed failure stays charged and is not replayed. Other documents may continue.
+            # truncated_json / incomplete_output used to take the unknown-attempt path and halt the run.
             raise DeepSeekError('task_previously_rejected')
         correction = None
         for attempt in range(MAX_TASK_ATTEMPTS):
@@ -254,7 +255,7 @@ class Client:
                 # Retention may purge cached IG results after 30 days. That must not disable the
                 # model for every other request in this run; this one request simply has no cache.
                 raise DeepSeekError('cached_result_purged')
-            if old['state'] == 'failed' and failure_code(old['error']) in RETRYABLE:
+            if old['state'] == 'failed':
                 raise DeepSeekError('task_previously_rejected')
             self.stopped = 'previous_attempt_unknown_or_failed'
             raise DeepSeekError(self.stopped)
