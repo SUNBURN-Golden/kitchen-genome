@@ -161,12 +161,110 @@ def test_qwen_http_endpoint_auth_timeout_and_sanitized_exception(monkeypatch):
     with pytest.raises(DeepSeekError, match='^transport_unknown$'):
         qwen_http_transport(b'{}', 'fixture-token')
 
-def test_lost_primary_response_is_not_replayed_or_fallen_back(conn):
+def test_transport_unknown_falls_back_to_qwen_and_is_never_replayed(conn):
+    assert 'transport_unknown' in FALLBACK_CODES
+    dcalls, qcalls = [], []
+    def lost(payload, key):
+        dcalls.append(1)
+        raise DeepSeekError('transport_unknown')
+    def qwen(payload, key):
+        body = json.loads(payload)
+        qcalls.append(body)
+        assert body['model'] == QWEN_MODEL and 'thinking' not in body
+        assert body['temperature'] == 0 and body['response_format'] == {'type': 'json_object'}
+        return response({'ok': True})
+    first = fallback_client(conn, lost, qwen)
+    assert first.call('task', 'JSON', {}, lambda o: o) == {'ok': True}
+    assert len(dcalls) == 1 and len(qcalls) == 1
+    assert first.stopped is None and first.last_meta['provider'] == 'qwen'
+    row = conn.execute("SELECT state,error FROM ai_request WHERE model='deepseek-chat'").fetchone()
+    assert row['state'] == 'unknown' and row['error'] == 'transport_unknown'
+    # A later run must not resend the lost payload to DeepSeek; the cached backup result answers.
+    later = fallback_client(conn, lambda *a: pytest.fail('lost primary replayed'),
+                            lambda *a: pytest.fail('cached qwen result replayed'))
+    assert later.call('task', 'JSON', {}, lambda o: o) == {'ok': True}
+    assert len(dcalls) == 1 and later.last_meta['provider'] == 'qwen'
+
+
+def test_http_transport_timeout_falls_back_to_qwen(conn, monkeypatch):
+    import urllib.request
+    from kg_ai.deepseek import http_transport
+    class Lost:
+        def open(self, *a, **kw):
+            raise TimeoutError('lost response')
+    monkeypatch.setattr(urllib.request, 'build_opener', lambda *handlers: Lost())
+    qcalls = []
+    def qwen(payload, key):
+        body = json.loads(payload)
+        qcalls.append(body)
+        assert body['model'] == QWEN_MODEL and 'thinking' not in body
+        return response({'ok': True})
+    client = fallback_client(conn, http_transport, qwen)
+    assert client.call('task', 'JSON', {}, lambda o: o) == {'ok': True}
+    assert len(qcalls) == 1 and client.stopped is None and client.last_meta['provider'] == 'qwen'
+
+
+def test_previous_unknown_attempt_routes_to_qwen_without_primary_replay(conn):
+    # A prior run reserved and lost the response with no backup configured.
     def lost(*a):
-        raise TimeoutError('synthetic-password')
-    first = fallback_client(conn, lost, lambda *a: pytest.fail('qwen after lost primary'))
-    with pytest.raises(DeepSeekError, match='invalid_response_or_usage'):
-        first.call('task', 'JSON', {}, lambda o: o)
-    later = fallback_client(conn, lambda *a: pytest.fail('unknown attempt replayed'), lambda *a: pytest.fail('qwen after lost primary'))
-    with pytest.raises(DeepSeekError, match='previous_attempt'):
+        raise DeepSeekError('transport_unknown')
+    prior = Client(Budget(meter(conn)), key='ds-key', transport=lost, balance_transport=healthy_balance)
+    with pytest.raises(DeepSeekError, match='transport_unknown'):
+        prior.call('task', 'JSON', {}, lambda o: o)
+    qcalls = []
+    def qwen(payload, key):
+        body = json.loads(payload)
+        qcalls.append(body)
+        assert body['model'] == QWEN_MODEL and 'thinking' not in body
+        return response({'ok': True})
+    later = fallback_client(conn, lambda *a: pytest.fail('unknown primary replayed'), qwen)
+    assert later.call('task', 'JSON', {}, lambda o: o) == {'ok': True}
+    assert len(qcalls) == 1 and later.stopped is None and later.last_meta['provider'] == 'qwen'
+    rows = list(conn.execute('SELECT model,state,error FROM ai_request ORDER BY rowid'))
+    assert [(r['model'], r['state']) for r in rows] == [('deepseek-chat', 'unknown'), (QWEN_MODEL, 'done')]
+    assert rows[0]['error'] == 'transport_unknown'
+
+
+def test_previous_unclassifiable_attempt_still_tries_qwen(conn):
+    def lost(*a):
+        raise DeepSeekError('transport_unknown')
+    prior = Client(Budget(meter(conn)), key='ds-key', transport=lost, balance_transport=healthy_balance)
+    with pytest.raises(DeepSeekError, match='transport_unknown'):
+        prior.call('task', 'JSON', {}, lambda o: o)
+    # A crash between reserve and fail leaves no classifiable error; the backup still answers.
+    conn.execute("UPDATE ai_request SET error=NULL WHERE state='unknown'"); conn.commit()
+    later = fallback_client(conn, lambda *a: pytest.fail('unknown primary replayed'), lambda *a: response({'ok': True}))
+    assert later.call('task', 'JSON', {}, lambda o: o) == {'ok': True}
+    assert later.last_meta['provider'] == 'qwen'
+
+
+def test_previous_definite_rejection_does_not_fall_back(conn):
+    prior = Client(Budget(meter(conn)), key='ds-key', transport=lambda *a: (400, b''), balance_transport=healthy_balance)
+    with pytest.raises(DeepSeekError, match='model_or_request_rejected'):
+        prior.call('task', 'JSON', {}, lambda o: o)
+    later = fallback_client(conn, lambda *a: pytest.fail('rejected primary replayed'),
+                            lambda *a: pytest.fail('qwen after definite rejection'))
+    with pytest.raises(DeepSeekError, match='previous_attempt_unknown_or_failed'):
         later.call('task', 'JSON', {}, lambda o: o)
+    assert later.stopped == 'previous_attempt_unknown_or_failed'
+
+
+def test_review_approves_via_qwen_after_primary_timeout(env):
+    conn, sp, log, raw = env
+    add(conn, 'x_open', 'opening', '서울 한남동의 달빛정원은 2026-10-01 문을 열었다', rest='달빛정원', date='2026-10-01')
+    dcalls = []
+    def lost(payload, key):
+        dcalls.append(1)
+        raise DeepSeekError('transport_unknown')
+    def qwen(payload, key):
+        body = json.loads(payload)
+        assert body['model'] == QWEN_MODEL and 'thinking' not in body
+        data = json.loads(body['messages'][2]['content'])
+        return response({'reviews': [{'id': f['id'], 'decision': 'approve', 'reason': 'ok'} for f in data['findings']]})
+    client = fallback_client(conn, lost, qwen)
+    stats = rv.review(conn, str(sp), str(log), raw, client=client)
+    assert stats['approved'] == 1 and stats['published'] == 1 and stats['stopped'] is None
+    assert len(dcalls) == 1 and stats['calls'] == 1
+    rec = json.loads(log.read_text().splitlines()[0])
+    assert rec['model_meta']['provider'] == 'qwen' and rec['model_meta']['model'] == QWEN_MODEL
+    assert SECRET not in log.read_text()

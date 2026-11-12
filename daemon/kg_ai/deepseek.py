@@ -25,7 +25,7 @@ MAX_BODY = 256 * 1024
 VERSION = 'json-2'
 FALLBACK_CODES = (
     'provider_failed', 'rate_limited', 'auth_failed', 'model_unavailable',
-    'balance_low', 'balance_unavailable',
+    'balance_low', 'balance_unavailable', 'transport_unknown',
 )
 # Chat-template overhead. Added to the UTF-8 payload length and max_tokens.
 # Token count is at most one per payload byte, so this remains an upper bound.
@@ -39,6 +39,10 @@ SCHEMA_CODES = (
 RETRYABLE = ('json_blank', 'invalid_task_json') + SCHEMA_CODES
 # These leave the client enabled: one document is skipped, other requests may continue.
 NONSTOP = {'cached_result_purged', 'task_previously_rejected', 'missing_key', 'input_limit', 'concurrent_attempt'}
+# Definite primary rejections: the provider refused the request or answered invalidly.
+# A stored one of these never routes to the backup on a later attempt.
+NON_FALLBACK_CODES = ('model_or_request_rejected', 'response_limit', 'invalid_response_or_usage',
+                      'truncated_json', 'incomplete_output') + RETRYABLE
 
 
 class DeepSeekError(NonRetryable):
@@ -180,10 +184,11 @@ class Client:
         if code in FALLBACK_CODES:
             return True
         # A prior primary attempt may have reserved and failed. Replay is forbidden, but
-        # a configured backup may still answer — only when that earlier error was fallback-worthy.
+        # a configured backup may still answer — unless the stored error is a definite
+        # non-fallback rejection. A missing or unclassifiable error still tries the backup.
         if code == 'previous_attempt_unknown_or_failed':
             row = self.budget.lookup(self._request_key(task, self._payload(instruction, data, max_tokens, None)[1]))
-            return failure_code(row['error'] if row else '') in FALLBACK_CODES
+            return failure_code(row['error'] if row else '') not in NON_FALLBACK_CODES
         return False
 
     def call(self, task, instruction, data, validate, *, max_tokens=2048):

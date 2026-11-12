@@ -17,6 +17,7 @@ from kg_collect import cycle
 from kg_collect.deepseek import normalize_finding
 from kg_daemon import db
 from kg_daemon.claims import queue_review
+from kg_daemon.runner import CostCapExceeded
 from test_deepseek_client import meter, response
 
 TEXT = ('서울 한남동의 달빛정원은 2026-10-01 문을 열었다. 한도윤 셰프가 총괄 셰프를 맡는다. '
@@ -115,6 +116,28 @@ def test_daily_cap_is_clamped_to_20(env):
     s = rv.review(conn, str(sp), str(log), raw, client=client_for(conn, {'x1': 'approve'}, []), daily_cap=500)
     run = conn.execute('SELECT cost_cap_units FROM daemon_run WHERE run_id=?', (s['run_id'],)).fetchone()[0]
     assert run == 20
+
+
+def test_daily_cap_override_env_bypasses_clamp(env, monkeypatch):
+    conn, sp, log, raw = env
+    add(conn, 'x1', 'opening', '서울 한남동의 달빛정원은 2026-10-01 문을 열었다', rest='달빛정원')
+    monkeypatch.setenv('KG_AI_DAILY_COST_CAP_OVERRIDE', '500')
+    s = rv.review(conn, str(sp), str(log), raw, client=client_for(conn, {'x1': 'approve'}, []), daily_cap=500)
+    run = conn.execute('SELECT cost_cap_units FROM daemon_run WHERE run_id=?', (s['run_id'],)).fetchone()[0]
+    assert run == 500 and s['approved'] == 1 and s['stopped'] is None
+    # Budget must honor the override too, or reservations would still stop at 20.
+    b = Budget(meter(conn, cap=500), daily_cap=500)
+    assert b.daily_cap == 500
+    assert b.reserve('over20', 'task', 'deepseek-chat', 50_000) is True   # 25 units: impossible under the clamp
+    monkeypatch.setenv('KG_AI_DAILY_COST_CAP_OVERRIDE', '')
+    assert Budget(meter(conn), daily_cap=500).daily_cap == 20
+    monkeypatch.delenv('KG_AI_DAILY_COST_CAP_OVERRIDE')
+    b2 = Budget(meter(conn, cap=500), daily_cap=500)
+    assert b2.daily_cap == 20
+    with pytest.raises(CostCapExceeded):
+        b2.reserve('over20b', 'task', 'deepseek-chat', 50_000)
+    monkeypatch.setenv('KG_AI_DAILY_COST_CAP_OVERRIDE', '-5')
+    assert Budget(meter(conn), daily_cap=500).daily_cap == 0
 
 
 def test_repeated_identical_quote_no_longer_aborts_extraction():
