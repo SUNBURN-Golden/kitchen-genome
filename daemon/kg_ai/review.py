@@ -408,7 +408,7 @@ def review(conn, seed_path, log_path, raw_dir, *, client=None, daily_cap=None, l
             break
         except DeepSeekError as exc:
             code = getattr(exc, 'code', str(exc)).split(' ')[0]
-            if code in RETRYABLE + ('task_previously_rejected',):
+            if code in RETRYABLE + ('task_previously_rejected', 'truncated_json', 'incomplete_output'):
                 # A batch the model cannot answer validly is split; a single finding it cannot review is closed, not left pending.
                 client.stopped = None
                 if len(batch) > 1:

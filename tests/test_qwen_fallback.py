@@ -268,3 +268,48 @@ def test_review_approves_via_qwen_after_primary_timeout(env):
     rec = json.loads(log.read_text().splitlines()[0])
     assert rec['model_meta']['provider'] == 'qwen' and rec['model_meta']['model'] == QWEN_MODEL
     assert SECRET not in log.read_text()
+
+
+def test_failed_truncated_row_is_not_replayed_and_does_not_halt(conn):
+    """A billed truncated_json failure is not an unknown in-flight request."""
+    from test_deepseek_client import response as resp
+    first = fallback_client(conn, lambda *a: (503, b''), lambda *a: resp(finish='length'))
+    with pytest.raises(DeepSeekError, match='truncated_json'):
+        first.call('task', 'JSON', {}, lambda o: o)
+    assert first.stopped == 'truncated_json'
+    row = conn.execute("SELECT state,error,result_json FROM ai_request WHERE model=?", (QWEN_MODEL,)).fetchone()
+    assert row['state'] == 'failed' and row['error'] == 'truncated_json' and row['result_json'] is None
+    later = fallback_client(conn, lambda *a: pytest.fail('primary replayed after billed truncation'),
+                            lambda *a: pytest.fail('truncated qwen request replayed'))
+    with pytest.raises(DeepSeekError, match='^task_previously_rejected$'):
+        later.call('task', 'JSON', {}, lambda o: o)
+    assert later.stopped is None
+
+
+def test_truncated_qwen_batch_is_split_and_review_continues(env):
+    """The 2026-11-12 cleanup blocker: a 2-finding Qwen batch hit truncated_json and halted the queue."""
+    from test_ai_review import add, TEXT
+    from test_deepseek_client import response as resp
+    conn, sp, log, raw = env
+    add(conn, 'x_open', 'opening', '서울 한남동의 달빛정원은 2026-10-01 문을 열었다', rest='달빛정원', date='2026-10-01')
+    add(conn, 'x_rep', 'employment_claim', '한도윤 셰프가 총괄 셰프를 맡는다', chef='한도윤', role='총괄 셰프')
+    sizes = []
+    def lost(*a):
+        raise DeepSeekError('transport_unknown')
+    def qwen(payload, key):
+        body = json.loads(payload)
+        assert body['model'] == QWEN_MODEL and 'thinking' not in body
+        data = json.loads(body['messages'][2]['content'])
+        sizes.append(len(data['findings']))
+        if len(data['findings']) > 1:
+            return resp(finish='length')
+        return resp({'reviews': [{'id': f['id'], 'decision': 'approve', 'reason': 'ok'} for f in data['findings']]})
+    client = fallback_client(conn, lost, qwen)
+    stats = rv.review(conn, str(sp), str(log), raw, client=client)
+    assert sizes[0] == 2 and set(sizes[1:]) == {1}
+    assert stats['approved'] == 2 and stats['published'] == 2 and stats['stopped'] is None
+    assert stats['remaining'] == 0
+    # The truncated 2-finding request stays charged and is not replayed.
+    rows = list(conn.execute('SELECT model,state,error FROM ai_request WHERE model=? ORDER BY rowid', (QWEN_MODEL,)))
+    assert rows[0]['state'] == 'failed' and rows[0]['error'] == 'truncated_json'
+    assert all(r['state'] == 'done' for r in rows[1:])
