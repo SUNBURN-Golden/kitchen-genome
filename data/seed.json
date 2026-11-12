@@ -1127,7 +1127,23 @@
    "chef_en": "Jun Lee",
    "chef_en_src": "https://guide.michelin.com/kr/en/seoul-capital-area/kr-seoul/restaurant/soigne",
    "chef_en_official": true,
-   "chef_en_type": "official"
+   "chef_en_type": "official",
+   "ai_reviewed": [
+    {
+     "label": "collab",
+     "label_ko": "협업",
+     "quote": "미쉐린 2스타 레스토랑 '스와니예(SOIGNÉ)'의 이준 셰프가 10월 3일 단 하루 갈라 디너를 선보인다",
+     "src": "https://digitalchosun.dizzo.com/site/data/html_dir/2026/09/07/2026090780197.html",
+     "date": null,
+     "chef": "이준",
+     "restaurant": "스와니예",
+     "provenance": "ai_reviewed",
+     "badge": "AI 검토",
+     "extraction_id": "ext_b843e2e0e2ea",
+     "review_id": "rev_35010dbcd248",
+     "reviewed_at": "2026-11-12T00:48:32Z"
+    }
+   ]
   },
   {
    "id": "evett_r",
@@ -2685,6 +2701,20 @@
    "extraction_id": "ext_5f9547ace77e",
    "review_id": "rev_c8c0ca164903",
    "reviewed_at": "2026-11-10T22:28:16Z"
+  },
+  {
+   "label": "collab",
+   "label_ko": "협업",
+   "quote": "'더 플라잉 호그' 김정석 셰프와 미쉐린 2스타 레스토랑 '스와니예(SOIGNÉ)'의 이준 셰프가 10월 3일 단 하루 갈라 디너를 선보인다",
+   "src": "https://digitalchosun.dizzo.com/site/data/html_dir/2026/09/07/2026090780197.html",
+   "date": null,
+   "chef": "김정석",
+   "restaurant": "더 플라잉 호그",
+   "provenance": "ai_reviewed",
+   "badge": "AI 검토",
+   "extraction_id": "ext_e38b49fb8664",
+   "review_id": "rev_9db3c9c4e50d",
+   "reviewed_at": "2026-11-12T00:48:32Z"
   }
  ]
 }
