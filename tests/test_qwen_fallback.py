@@ -46,7 +46,7 @@ def test_provider_errors_fall_back_to_qwen(conn, status, code):
     def qwen(payload, key):
         body = json.loads(payload)
         seen.append(('qwen', key, body))
-        assert body['model'] == QWEN_MODEL and 'thinking' not in body
+        assert body['model'] == QWEN_MODEL and 'thinking' not in body and body.get('enable_thinking') is False
         assert body['temperature'] == 0 and body['response_format'] == {'type': 'json_object'}
         return response({'ok': True})
     client = fallback_client(conn, deepseek, qwen)
@@ -123,7 +123,7 @@ def test_review_logs_qwen_provider_after_balance_pause(env):
     add(conn, 'x_open', 'opening', '서울 한남동의 달빛정원은 2026-10-01 문을 열었다', rest='달빛정원', date='2026-10-01')
     def qwen(payload, key):
         body = json.loads(payload)
-        assert body['model'] == QWEN_MODEL and 'thinking' not in body
+        assert body['model'] == QWEN_MODEL and 'thinking' not in body and body.get('enable_thinking') is False
         data = json.loads(body['messages'][2]['content'])
         return response({'reviews': [{'id': f['id'], 'decision': 'approve', 'reason': 'ok'} for f in data['findings']]})
     client = fallback_client(conn, lambda *a: pytest.fail('primary completion'), qwen,
@@ -170,7 +170,7 @@ def test_transport_unknown_falls_back_to_qwen_and_is_never_replayed(conn):
     def qwen(payload, key):
         body = json.loads(payload)
         qcalls.append(body)
-        assert body['model'] == QWEN_MODEL and 'thinking' not in body
+        assert body['model'] == QWEN_MODEL and 'thinking' not in body and body.get('enable_thinking') is False
         assert body['temperature'] == 0 and body['response_format'] == {'type': 'json_object'}
         return response({'ok': True})
     first = fallback_client(conn, lost, qwen)
@@ -197,7 +197,7 @@ def test_http_transport_timeout_falls_back_to_qwen(conn, monkeypatch):
     def qwen(payload, key):
         body = json.loads(payload)
         qcalls.append(body)
-        assert body['model'] == QWEN_MODEL and 'thinking' not in body
+        assert body['model'] == QWEN_MODEL and 'thinking' not in body and body.get('enable_thinking') is False
         return response({'ok': True})
     client = fallback_client(conn, http_transport, qwen)
     assert client.call('task', 'JSON', {}, lambda o: o) == {'ok': True}
@@ -215,7 +215,7 @@ def test_previous_unknown_attempt_routes_to_qwen_without_primary_replay(conn):
     def qwen(payload, key):
         body = json.loads(payload)
         qcalls.append(body)
-        assert body['model'] == QWEN_MODEL and 'thinking' not in body
+        assert body['model'] == QWEN_MODEL and 'thinking' not in body and body.get('enable_thinking') is False
         return response({'ok': True})
     later = fallback_client(conn, lambda *a: pytest.fail('unknown primary replayed'), qwen)
     assert later.call('task', 'JSON', {}, lambda o: o) == {'ok': True}
@@ -258,7 +258,7 @@ def test_review_approves_via_qwen_after_primary_timeout(env):
         raise DeepSeekError('transport_unknown')
     def qwen(payload, key):
         body = json.loads(payload)
-        assert body['model'] == QWEN_MODEL and 'thinking' not in body
+        assert body['model'] == QWEN_MODEL and 'thinking' not in body and body.get('enable_thinking') is False
         data = json.loads(body['messages'][2]['content'])
         return response({'reviews': [{'id': f['id'], 'decision': 'approve', 'reason': 'ok'} for f in data['findings']]})
     client = fallback_client(conn, lost, qwen)
@@ -298,7 +298,7 @@ def test_truncated_qwen_batch_is_split_and_review_continues(env):
         raise DeepSeekError('transport_unknown')
     def qwen(payload, key):
         body = json.loads(payload)
-        assert body['model'] == QWEN_MODEL and 'thinking' not in body
+        assert body['model'] == QWEN_MODEL and 'thinking' not in body and body.get('enable_thinking') is False
         data = json.loads(body['messages'][2]['content'])
         sizes.append(len(data['findings']))
         if len(data['findings']) > 1:
