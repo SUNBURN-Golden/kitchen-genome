@@ -1,6 +1,7 @@
 """Conservative model reservations against CostMeter AND a shared KST-day allowance."""
 import datetime as dt
 import json
+import os
 from zoneinfo import ZoneInfo
 from kg_daemon.db import utcnow
 from kg_daemon.runner import CostCapExceeded
@@ -16,7 +17,9 @@ class Budget:
         self.workload = 'fresh'
         self.hold_attempt = None
         self.hold_attempts = set()
-        self.daily_cap = max(0, min(20, float(daily_cap)))
+        # One-off override lifts the 20-unit clamp; unset/empty keeps the default cap.
+        override = os.environ.get('KG_AI_DAILY_COST_CAP_OVERRIDE', '')
+        self.daily_cap = max(0, float(override)) if override else max(0, min(20, float(daily_cap)))
 
     def lookup(self, key):
         return self.conn.execute('SELECT * FROM ai_request WHERE request_key=?', (key,)).fetchone()

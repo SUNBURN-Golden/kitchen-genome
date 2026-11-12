@@ -254,7 +254,9 @@ def _start_run(conn, cap):
 
 def review(conn, seed_path, log_path, raw_dir, *, client=None, daily_cap=None, limit=None):
     daily_cap = float(os.environ.get('KG_AI_DAILY_COST_CAP', '20') if daily_cap is None else daily_cap)
-    daily_cap = max(0.0, min(20.0, daily_cap))
+    # One-off override lifts the 20-unit clamp for this run; unset/empty keeps the default cap.
+    override = os.environ.get('KG_AI_DAILY_COST_CAP_OVERRIDE', '')
+    daily_cap = max(0.0, float(override)) if override else max(0.0, min(20.0, daily_cap))
     now = utcnow()
     stats = {'approved': 0, 'rejected': 0, 'published': 0, 'prechecked_rejects': 0, 'calls': 0, 'stopped': None, 'candidates_closed': 0, 'skipped_no_targets': 0, 'skipped_balance': 0, 'considered': 0, 'eligible': 0}
     stats['candidates_closed'] += close_linked_candidates(conn, now)
