@@ -123,10 +123,7 @@ def stage_plan(ctx):
     recheck.ensure_schedule(conn, seed)
     recheck.reconcile(conn)
     if bot.ai and bot.ai.client.status == 'enabled':
-        reason = bot.ai.client.balance.check(bot.ai.client.key)
-        if reason:
-            bot.ai.client.stopped = reason
-        else:
+        if not bot.ai.client.check_balance():
             new['monthly_rechecks'] = recheck.admit(conn, seeds, bot.ai.client.budget)
     requeued = scheduler.requeue_due(conn, now_dt)
     model_allowance = 0

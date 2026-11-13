@@ -307,11 +307,11 @@ class Adapters:
     def _extract_window(self, doc, recs, gaz, context=None, workload='fresh', attempt_id=None):
         self.window_partial = False
         self.defer_extract = False
-        if self.client.stopped in PAUSES:
+        if self.client.status == 'paused' and self.client.stopped in PAUSES:
             self.defer_extract = True
             self.stats['skipped_balance'] += 1
             return []
-        if self.client.stopped not in (None, 'cost_cap') or not self.client.key:
+        if (self.client.status != 'enabled' and self.client.stopped != 'cost_cap') or not self.client.key:
             return []
         self.stats['considered'] += 1
         # Send the same filtered text we validate offsets against. Every real page contains
@@ -348,9 +348,8 @@ class Adapters:
         review_tokens, previous_hold = 0, None
         fit_limit = self.client.budget.room_tokens()
         if workload == 'recheck' and cached is None:
-            reason = self.client.balance.check(self.client.key)
+            reason = self.client.check_balance()
             if reason:
-                self.client.stopped = reason
                 self.defer_extract = True
                 self.stats['skipped_balance'] += 1
                 return []
@@ -402,11 +401,14 @@ class Adapters:
                 rows, meta, text = cached
                 self.client.last_meta = meta
         except DeepSeekError:
-            if self.client.stopped in PAUSES:
+            if self.client.status == 'paused' and self.client.stopped in PAUSES:
                 self.defer_extract = True
                 self.stats['skipped_balance'] += 1
                 self.stats['called'] -= 1
                 return []
+            if self.client.stopped and self.client.status == 'enabled':
+                # Backup failure defers this document, not the client or later documents.
+                self.defer_extract = True
             self.stats['failed'] += 1
             return []
         except CostCapExceeded as exc:

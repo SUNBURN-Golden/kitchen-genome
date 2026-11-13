@@ -9,7 +9,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1] / 'daemon'))
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / 'tests'))
 from collect_world import SEED
 from kg_ai.budget import Budget
-from kg_ai.deepseek import Client, reservation_tokens
+from kg_ai.deepseek import Client, DeepSeekError, QWEN_MODEL, reservation_tokens
 from kg_collect import cycle, gaps, apply, discover
 from kg_collect.deepseek import EXTRACT_INSTRUCTION, Adapters
 from kg_collect.rawstore import RawStore
@@ -58,6 +58,110 @@ def test_gap_planner_validates_ids_and_returns_search_jobs(world):
     assert discover.enqueue(c, **job)
     forged = adapter(c, {'queries':[{'gap_id':'unknown','target_id':'unknown','query':'https://bad.test', 'reason':'escape'}]})
     assert forged.plan(c)==[] and forged.client.stopped=='invalid_task_json'
+
+
+@pytest.mark.parametrize('low_balance', [False, True])
+def test_qwen_extract_continues_after_both_plan_providers_fail(world, low_balance):
+    from test_deepseek_balance import wallet
+    text = '달빛정원의 운영에 대한 중요한 소식입니다.'
+    dcalls, qcalls = [], []
+    def primary(payload, key):
+        dcalls.append(json.loads(payload))
+        raise DeepSeekError('transport_unknown')
+    def qwen(payload, key):
+        body = json.loads(payload)
+        qcalls.append(body)
+        assert body['model'] == QWEN_MODEL and body['enable_thinking'] is False
+        assert 'thinking' not in body and body['temperature'] == 0
+        if len(qcalls) == 1:
+            raise DeepSeekError('transport_unknown')
+        return response({'findings': [finding(text)]})
+    client = Client(Budget(meter(world)), key='dummy', transport=primary,
+                    balance_transport=(lambda key: wallet(available=False)) if low_balance else healthy_balance,
+                    fallback_key='fixture-backup', fallback_transport=qwen)
+    a = Adapters(client)
+    assert a.plan(world) == []
+    assert client.stopped == 'transport_unknown' and client.status == 'enabled'
+    result = process_doc(world, doc(text), Gazetteer(world), tier='official', model_adapter=a)
+    assert result['new'] == 1 and a.stats['called'] >= 1 and a.stats['findings'] == 1
+    assert len(dcalls) == (0 if low_balance else 1) and len(qcalls) == 2
+    rows = list(world.execute('SELECT task,model,state FROM ai_request ORDER BY rowid'))
+    assert [(r['task'], r['model'], r['state']) for r in rows] == (
+        ([] if low_balance else [('gap-plan-2', 'deepseek-chat', 'unknown')]) +
+        [('gap-plan-2', QWEN_MODEL, 'unknown'), ('web-extract-2', QWEN_MODEL, 'done')])
+    row = world.execute("SELECT pending_only,model_meta_json FROM extraction WHERE extractor='deepseek:web'").fetchone()
+    assert row['pending_only'] == 1 and json.loads(row['model_meta_json'])['provider'] == 'qwen'
+
+
+def test_cycle_balance_epilogue_keeps_qwen_extract_and_recheck_enabled(world, tmp_path, monkeypatch):
+    from test_deepseek_balance import wallet
+    from kg_collect import recheck
+    text = '달빛정원의 운영에 대한 중요한 소식입니다.'
+    tasks, admitted = [], []
+    def qwen(payload, key):
+        body = json.loads(payload)
+        tasks.append(body)
+        if len(tasks) == 1:
+            data = json.loads(body['messages'][1]['content'])
+            g = data[0]
+            return response({'queries': [{'gap_id': g['gap_id'], 'target_id': g['target_id'],
+                                         'query': '달빛정원 공식 소개', 'reason': 'missing biography'}]})
+        return response({'findings': [finding(text)]})
+    client = Client(Budget(meter(world)), key='dummy',
+                    transport=lambda *a: pytest.fail('low-balance primary completion'),
+                    balance_transport=lambda key: wallet(available=False),
+                    fallback_key='fixture-backup', fallback_transport=qwen)
+    a = Adapters(client)
+    bot = cycle.Bot(world, data_dir=str(tmp_path / 'data'), deepseek=True)
+    bot.ai = a
+    monkeypatch.setattr(recheck, 'admit', lambda *args: admitted.append(1) or 1)
+    result = cycle.stage_plan(SimpleNamespace(env={'bot': bot}, cost=client.budget.meter))
+    assert result.output['new_jobs']['deepseek_gap'] == 1
+    assert result.output['new_jobs']['monthly_rechecks'] == 1 and admitted == [1]
+    assert client.balance.check(client.key) == 'balance_low'
+    assert client.primary_paused == 'balance_low' and client.stopped is None and client.status == 'enabled'
+    assert process_doc(world, doc(text), Gazetteer(world), tier='official', model_adapter=a)['new'] == 1
+    assert a.stats['called'] == 1 and a.stats['findings'] == 1 and len(tasks) == 2
+    assert {r[0] for r in world.execute('SELECT model FROM ai_request')} == {QWEN_MODEL}
+
+
+@pytest.mark.parametrize('lost_extract', [False, True])
+def test_monthly_extract_balance_gate_uses_qwen_and_preserves_review_hold(world, lost_extract):
+    from test_deepseek_balance import wallet
+    from kg_collect import recheck
+    text = '달빛정원의 운영에 대한 중요한 소식입니다.'
+    calls = []
+    def qwen(*a):
+        calls.append(1)
+        if lost_extract and len(calls) == 1:
+            raise DeepSeekError('transport_unknown')
+        return response({'findings': [finding(text)]})
+    client = Client(Budget(meter(world)), key='dummy',
+                    transport=lambda *a: pytest.fail('low-balance recheck primary completion'),
+                    balance_transport=lambda key: wallet(available=False),
+                    fallback_key='fixture-backup',
+                    fallback_transport=qwen)
+    recheck.ensure_schedule(world, SEED)
+    world.execute("UPDATE restaurant_recheck SET next_due_at=CASE restaurant_id WHEN 'r_dal' THEN '2026-01-01T00:00:00Z' ELSE '2099-01-01T00:00:00Z' END")
+    world.commit()
+    assert recheck.admit(world, discover.load_seeds(), client.budget) == 1
+    aid = world.execute('SELECT attempt_id FROM restaurant_recheck_attempt').fetchone()[0]
+    a = Adapters(client)
+    rows = a.extract(doc(text), [], Gazetteer(world), workload='recheck', attempt_id=aid)
+    if lost_extract:
+        assert rows == [] and a.defer_extract and client.status == 'enabled'
+        assert world.execute('SELECT state FROM ai_review_hold WHERE attempt_id=?', (aid,)).fetchone()[0] == 'released'
+        # A failed inspection stays deferred, while a different document can still use Qwen.
+        rows = a.extract(doc(text, '2'), [], Gazetteer(world))
+        assert len(rows) == 1 and len(calls) == 2 and not a.defer_extract
+        row = world.execute("SELECT model,state FROM ai_request ORDER BY rowid LIMIT 1").fetchone()
+        assert tuple(row) == (QWEN_MODEL, 'unknown')
+        return
+    assert len(rows) == len(calls) == 1 and a.stats['called'] == 1 and a.stats['skipped_balance'] == 0
+    assert client.primary_paused == 'balance_low' and client.stopped is None and client.status == 'enabled'
+    row = world.execute('SELECT model,workload,state FROM ai_request').fetchone()
+    assert tuple(row) == (QWEN_MODEL, 'recheck', 'done')
+    assert world.execute('SELECT state FROM ai_review_hold WHERE attempt_id=?', (aid,)).fetchone()[0] == 'held'
 
 
 def test_zero_rule_hard_extraction_unknown_date_and_review_only(world):
