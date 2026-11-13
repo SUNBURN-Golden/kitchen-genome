@@ -186,7 +186,7 @@ def test_qwen_http_endpoint_auth_timeout_and_sanitized_exception(monkeypatch):
         def open(self, req, timeout):
             seen.append(req)
             assert req.full_url == QWEN_URL and req.get_header('Authorization') == 'Bearer fixture-token'
-            assert timeout == 30
+            assert timeout == 180
             return Response()
     monkeypatch.setattr(urllib.request, 'build_opener', lambda *handlers: Opener())
     assert qwen_http_transport(b'{"model":"fixture"}', 'fixture-token') == (200, b'{}')
@@ -353,3 +353,25 @@ def test_truncated_qwen_batch_is_split_and_review_continues(env):
     rows = list(conn.execute('SELECT model,state,error FROM ai_request WHERE model=? ORDER BY rowid', (QWEN_MODEL,)))
     assert rows[0]['state'] == 'failed' and rows[0]['error'] == 'truncated_json'
     assert all(r['state'] == 'done' for r in rows[1:])
+
+
+def test_qwen_transport_uses_longer_timeout(monkeypatch):
+    from kg_ai import deepseek as ds
+    seen = {}
+
+    class Resp:
+        status = 200
+        def __enter__(self): return self
+        def __exit__(self, *a): return False
+        def read(self, n): return b'{}'
+
+    class Opener:
+        def open(self, req, timeout):
+            seen[req.full_url] = timeout
+            return Resp()
+
+    monkeypatch.setattr(ds.urllib.request, 'build_opener', lambda *a: Opener())
+    ds.qwen_http_transport(b'{}', 'k')
+    ds.http_transport(b'{}', 'k')
+    assert seen[ds.QWEN_URL] == ds.QWEN_TIMEOUT_SEC >= 120
+    assert seen[ds.URL] == ds.DEEPSEEK_TIMEOUT_SEC == 30

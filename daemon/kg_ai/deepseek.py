@@ -22,6 +22,11 @@ QWEN_URL = 'https://token-plan.maas.qwencloudapi.com/compatible-mode/v1/chat/com
 QWEN_MODEL = 'qwen4-max-preview'
 QWEN_KEY_PATH = '/home/box/.qwen/token_plan_key'
 MAX_BODY = 256 * 1024
+# Non-streaming read timeouts. qwen4-max-preview needs ~41 s for a ~3k-token gap-plan
+# answer, so the old shared 30 s timeout turned every gap-plan backup call into
+# transport_unknown (2026-11-12, 2026-11-13).
+DEEPSEEK_TIMEOUT_SEC = 30
+QWEN_TIMEOUT_SEC = 180
 VERSION = 'json-2'
 FALLBACK_CODES = (
     'provider_failed', 'rate_limited', 'auth_failed', 'model_unavailable',
@@ -85,11 +90,11 @@ def load_qwen_key():
         return ''
 
 
-def http_transport(payload, key, url=URL):
+def http_transport(payload, key, url=URL, timeout=DEEPSEEK_TIMEOUT_SEC):
     req = urllib.request.Request(url, data=payload, headers={'Authorization': 'Bearer ' + key, 'Content-Type': 'application/json'})
     opener = urllib.request.build_opener(urllib.request.ProxyHandler({}), NoRedirect())
     try:
-        with opener.open(req, timeout=30) as response:
+        with opener.open(req, timeout=timeout) as response:
             return response.status, response.read(MAX_BODY + 1)
     except urllib.error.HTTPError as exc:
         return exc.code, b''
@@ -98,7 +103,7 @@ def http_transport(payload, key, url=URL):
 
 
 def qwen_http_transport(payload, key):
-    return http_transport(payload, key, url=QWEN_URL)
+    return http_transport(payload, key, url=QWEN_URL, timeout=QWEN_TIMEOUT_SEC)
 
 
 def reservation_tokens(payload, max_tokens):
