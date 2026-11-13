@@ -27,7 +27,7 @@ R["mao"].update(opened="2025-04 (무신사 성수 입점, 검색 요약 기준)"
 # new alumni
 add("matthew","매튜","이원석","mingles","헤드 셰프 (6년)","2022-06","성수","프렌치 코스","런치 7만 / 디너 12만 (2026.1 블로그)","미확인","metizen","verified","메티즌(2022)·블로그(2026) 교차",press=["metizen","matthew_blog"])
 add("matteo","마테오견문록","신왕열","mingles","수셰프","2023 (블루리본 2023 새맛집)","금호동","이탈리안 생면 파스타","파스타코스 4.8만 / 테이스팅 6.5만 (2023)","미확인","bluer304","verified","고메트리 오너와 공동 운영")
-add("vinho","빈호","전성빈 (+김진호 소믈리에, 장하나 디저트)","mingles","출신(직책 미기재)","2022-07","논현","와인 다이닝","디너코스 13만 (2023)","미확인 (에스콰이어: 미쉐린이 '새로운 별'이라 칭함)","bluer288","verified","세 명 모두 밍글스 출신",press=["bluer288","bluer304","esq_rising"])
+add("vinho","빈호","전성빈","mingles","출신(직책 미기재)","2022-07","논현","와인 다이닝","디너코스 13만 (2023)","미확인 (에스콰이어: 미쉐린이 '새로운 별'이라 칭함)","bluer288","verified","공동: 김진호 소믈리에, 장하나 디저트. 세 명 모두 밍글스 출신",press=["bluer288","bluer304","esq_rising"])
 add("finz","핀즈","김범주 (파티시에)","mingles","파티시에 (소나 경력도)","미확인 (압구정→성수 이전)","성수","플레이팅 디저트",None,"미확인","bluer288","verified","")
 add("mowa","모와","문원기","mingles","출신 → 사브서울 수셰프","2022-11 (헤드셰프 부임)","명동 (르메르디앙)","와인 레스토랑",None,"미확인","mk_mowa","verified","오너 아님: 와인수입사 아영FBC 업장의 고용 헤드셰프")
 add("midolim","미도림","박준희","jungsik","출신(직책 미기재)","미확인","성수(왕십리로)","한식 타파스 바",None,"미확인","foodnews","verified","운영사 카린지 프리젠트 (셰프 오너 아님)")
@@ -58,7 +58,7 @@ for r in R.values():
         if r["name"] in three: r["press"]=list(dict.fromkeys(r["press"]+[S["bluer2027"]]))
 R["evett_r"]["press"]=[S["herald2025"]]
 # onjium established entry
-R["onjium_r"]=dict(id="onjium_r",name="온지음",chef="조은희 (+박성배 헤드셰프)",kitchen=None,role=None,opened=None,area="창성동",cuisine="모던 한식",price="점심 17만 / 저녁 25만 (블루리본 2024.10)",price_src=S["bluer2025"],
+R["onjium_r"]=dict(id="onjium_r",name="온지음",chef="조은희",kitchen=None,role=None,opened=None,area="창성동",cuisine="모던 한식",price="점심 17만 / 저녁 25만 (블루리본 2024.10)",price_src=S["bluer2025"], note="헤드셰프 박성배",
   michelin="미쉐린 1스타 (쿡앤셰프 2025.8 기준)",michelin_src=S["cnc_psb"],reddit_threads=[],press=[S["cnc_psb"],S["bluer2027"]],city="서울",checked=D,type="established",lineage_status="n/a",bluer="3리본 (2027)",bluer_src=S["bluer2027"])
 for k in d["kitchens"]:
     if k["id"]=="onjium": k["michelin"]="1스타 (2025 기사 기준)"; k["michelin_src"]=S["cnc_psb"]

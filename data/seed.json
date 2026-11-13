@@ -1783,7 +1783,7 @@
   {
    "id": "vinho",
    "name": "빈호",
-   "chef": "전성빈 (+김진호 소믈리에, 장하나 디저트)",
+   "chef": "전성빈",
    "kitchen": "mingles",
    "role": "출신(직책 미기재)",
    "opened": "2022-07",
@@ -1794,7 +1794,7 @@
    "michelin_src": "https://guide.michelin.com/kr/ko/seoul-capital-area/kr-seoul/restaurant/vinho",
    "lineage_src": "http://www.bluer.co.kr/magazine/288",
    "lineage_status": "verified",
-   "note": "세 명 모두 밍글스 출신",
+   "note": "공동: 김진호 소믈리에, 장하나 디저트. 세 명 모두 밍글스 출신",
    "url": null,
    "city": "서울",
    "checked": "2026-10-20",
@@ -2533,7 +2533,7 @@
   {
    "id": "onjium_r",
    "name": "온지음",
-   "chef": "조은희 (+박성배 헤드셰프)",
+   "chef": "조은희",
    "kitchen": null,
    "role": null,
    "opened": null,
@@ -2572,7 +2572,8 @@
    "chef_en_official": false,
    "chef_en_type": "romanized",
    "instagram": "onjium_restaurant",
-   "instagram_src": "https://www.eater.com/venue/90304/onjieum"
+   "instagram_src": "https://www.eater.com/venue/90304/onjieum",
+   "note": "헤드셰프 박성배"
   },
   {
    "id": "belong",
