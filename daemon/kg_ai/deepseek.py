@@ -41,7 +41,8 @@ RETRYABLE = ('json_blank', 'invalid_task_json') + SCHEMA_CODES
 NONSTOP = {'cached_result_purged', 'task_previously_rejected', 'missing_key', 'input_limit', 'concurrent_attempt'}
 # Definite primary rejections: the provider refused the request or answered invalidly.
 # A stored one of these never routes to the backup on a later attempt.
-NON_FALLBACK_CODES = ('model_or_request_rejected', 'response_limit', 'invalid_response_or_usage',
+NON_FALLBACK_CODES = ('cost_cap', 'usage_over_reservation', 'missing_key',
+                      'model_or_request_rejected', 'response_limit', 'invalid_response_or_usage',
                       'truncated_json', 'incomplete_output') + RETRYABLE
 
 
@@ -136,6 +137,8 @@ class Client:
         self.key = os.environ.get('DEEPSEEK_API_KEY', '') if key is None else key
         self.model = model or os.environ.get('DEEPSEEK_MODEL', 'deepseek-chat')
         self.budget, self.transport, self.stopped = budget, transport, None
+        self.primary_paused = None
+        self._previous_fallback_worthy = False
         self.last_meta = {}
         self.balance = BalanceGate(balance_transport if balance_transport is not None else (http_balance if transport is http_transport else None), clock)
         # Custom transports (tests) stay primary-only unless a fallback is injected.
@@ -146,7 +149,29 @@ class Client:
 
     @property
     def status(self):
-        return 'disabled' if not self.key else ('paused' if self.stopped else 'enabled')
+        paused = self.stopped and not (self.fallback_available and self._fallback_stop)
+        return 'disabled' if not self.key else ('paused' if paused else 'enabled')
+
+    @property
+    def fallback_available(self):
+        return bool(self.fallback_key and self.fallback_transport)
+
+    @property
+    def _fallback_stop(self):
+        return self.stopped in FALLBACK_CODES or (
+            self.stopped == 'previous_attempt_unknown_or_failed' and self._previous_fallback_worthy)
+
+    def check_balance(self):
+        """Return a run-blocking balance reason, allowing a configured backup."""
+        if self.primary_paused and self.fallback_available:
+            return None
+        reason = self.balance.check(self.key)
+        if reason in FALLBACK_CODES and self.fallback_available:
+            self.primary_paused = self.primary_paused or reason
+            return None
+        if reason:
+            self.stopped = self.stopped or reason
+        return reason
 
     def _messages(self, instruction, data, correction):
         return article_messages(instruction, data, _correction_suffix(correction) if correction else '')
@@ -196,10 +221,22 @@ class Client:
         return False
 
     def call(self, task, instruction, data, validate, *, max_tokens=2048):
+        provider = 'qwen' if self.primary_paused and self.fallback_available else 'deepseek'
+        if self.stopped:
+            if not (self.fallback_available and self._fallback_stop):
+                # Keep cached reads, but never turn a task rejection or cap halt into fallback.
+                return self._call(task, instruction, data, validate, max_tokens=max_tokens, provider=provider)
+            self.primary_paused = self.primary_paused or self.stopped
+            self.stopped = None
+            provider = 'qwen'
+        if provider == 'qwen':
+            return self._call(task, instruction, data, validate, max_tokens=max_tokens, provider=provider)
         try:
             return self._call(task, instruction, data, validate, max_tokens=max_tokens, provider='deepseek')
         except DeepSeekError as exc:
-            if self._should_fallback(failure_code(stored_error(exc)), task, instruction, data, max_tokens):
+            code = failure_code(stored_error(exc))
+            if self._should_fallback(code, task, instruction, data, max_tokens):
+                self.primary_paused = self.primary_paused or code
                 self.stopped = None
                 return self._call(task, instruction, data, validate, max_tokens=max_tokens, provider='qwen')
             raise
@@ -261,6 +298,7 @@ class Client:
                 raise DeepSeekError('cached_result_purged')
             if old['state'] == 'failed':
                 raise DeepSeekError('task_previously_rejected')
+            self._previous_fallback_worthy = failure_code(old['error']) not in NON_FALLBACK_CODES
             self.stopped = 'previous_attempt_unknown_or_failed'
             raise DeepSeekError(self.stopped)
         if provider == 'deepseek':

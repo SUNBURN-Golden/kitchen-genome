@@ -92,15 +92,52 @@ def test_rejected_primary_does_not_fall_back(conn):
     assert qcalls == [] and client.stopped == 'model_or_request_rejected'
 
 
-def test_qwen_failure_stops_without_retrying_primary(conn):
-    dcalls = []
-    client = fallback_client(conn, lambda *a: dcalls.append(1) or (503, b''), lambda *a: (429, b''))
+def test_qwen_failure_allows_different_request_without_retrying_primary(conn):
+    dcalls, qcalls = [], []
+    def qwen(*a):
+        qcalls.append(1)
+        return (429, b'') if len(qcalls) == 1 else response()
+    client = fallback_client(conn, lambda *a: dcalls.append(1) or (503, b''), qwen)
     with pytest.raises(DeepSeekError, match='rate_limited'):
         client.call('task', 'JSON', {}, lambda o: o)
-    assert len(dcalls) == 1 and client.stopped == 'rate_limited'
-    with pytest.raises(DeepSeekError, match='rate_limited'):
-        client.call('task', 'JSON', {'n': 2}, lambda o: o)
-    assert len(dcalls) == 1
+    assert len(dcalls) == 1 and client.stopped == 'rate_limited' and client.status == 'enabled'
+    with pytest.raises(DeepSeekError, match='previous_attempt_unknown_or_failed'):
+        client.call('task', 'JSON', {}, lambda o: o)
+    assert client.status == 'enabled'
+    assert client.call('task', 'JSON', {'n': 2}, lambda o: o) == {'ok': True}
+    assert len(dcalls) == 1 and len(qcalls) == 2 and client.stopped is None
+
+
+@pytest.mark.parametrize('code', FALLBACK_CODES)
+def test_primary_stays_paused_for_later_requests(conn, code):
+    dcalls, qcalls, balances = [], [], []
+    def primary(*a):
+        dcalls.append(1)
+        raise DeepSeekError(code)
+    def balance(key):
+        balances.append(1)
+        return healthy_balance(key)
+    client = fallback_client(conn, primary, lambda *a: qcalls.append(1) or response(),
+                             balance_transport=balance)
+    for n in (1, 2):
+        assert client.call('task', 'JSON', {'n': n}, lambda o: o) == {'ok': True}
+    assert client.primary_paused == code and client.status == 'enabled'
+    assert client.check_balance() is None
+    assert len(dcalls) == 1 and len(qcalls) == 2 and len(balances) == 1
+    assert conn.execute("SELECT COUNT(*) FROM ai_request WHERE model='deepseek-chat'").fetchone()[0] == 1
+
+
+@pytest.mark.parametrize('code', ['cost_cap', 'usage_over_reservation', 'missing_key',
+                                  'json_blank', 'quote_not_exact', 'model_or_request_rejected'])
+def test_qwen_does_not_clear_run_halts(conn, code):
+    qcalls = []
+    client = fallback_client(conn, lambda *a: (503, b''), lambda *a: qcalls.append(1) or response())
+    assert client.call('task', 'JSON', {}, lambda o: o) == {'ok': True}
+    client.stopped = code
+    assert client.status == 'paused'
+    with pytest.raises(DeepSeekError, match='^' + code + '$'):
+        client.call('other', 'JSON', {}, lambda o: o)
+    assert len(qcalls) == 1
 
 
 def test_qwen_result_is_cached_and_validated(conn):
@@ -247,6 +284,9 @@ def test_previous_definite_rejection_does_not_fall_back(conn):
     with pytest.raises(DeepSeekError, match='previous_attempt_unknown_or_failed'):
         later.call('task', 'JSON', {}, lambda o: o)
     assert later.stopped == 'previous_attempt_unknown_or_failed'
+    assert later.status == 'paused'
+    with pytest.raises(DeepSeekError, match='previous_attempt_unknown_or_failed'):
+        later.call('other', 'JSON', {}, lambda o: o)
 
 
 def test_review_approves_via_qwen_after_primary_timeout(env):
