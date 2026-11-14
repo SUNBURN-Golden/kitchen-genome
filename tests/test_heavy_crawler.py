@@ -131,6 +131,100 @@ def test_proxy_down_skips_without_any_request(world):
     assert rep['outcome'] == 'skipped' and rep['reason'] == 'proxy_down' and web.calls == []
 
 
+@pytest.mark.parametrize('reason', ['exit_ip_unknown', 'proxy_down'])
+@pytest.mark.parametrize('failures', [1, 3])
+def test_startup_egress_recovers_and_crawls(world, reason, failures):
+    conn, tmp, clock, sleep, t = world
+    hc, web = _crawler(world, default_routes)
+    started, checks = clock(), []
+
+    def egress():
+        checks.append((clock(), len(web.calls)))
+        return (False, reason) if len(checks) <= failures else (True, proxynet.EXPECTED_EXIT_IP)
+
+    hc.egress = egress
+    rep = hc.run(started + 3 * 3600)
+    assert rep['outcome'] == 'stopped' and rep['stats']['content_handoff'] > 0
+    assert rep['egress_retries'] == failures and rep['egress'] == proxynet.EXPECTED_EXIT_IP
+    assert checks == [(started + i * 600, 0) for i in range(failures + 1)]
+    assert min(web.times) >= started + failures * 600
+    assert json.loads((tmp / 'crawl_traffic.jsonl').read_text().splitlines()[-1])['egress_retries'] == failures
+
+
+@pytest.mark.parametrize('duration, retries', [(1800, 0), (1801, 1), (3600, 3), (10800, 15)])
+@pytest.mark.parametrize('reason', ['exit_ip_unknown', 'proxy_down'])
+def test_startup_egress_stays_down_until_retry_cutoff(world, duration, retries, reason):
+    hc, web = _crawler(world, default_routes)
+    clock = world[2]
+    started, checks = clock(), []
+
+    def egress():
+        checks.append(clock())
+        return False, reason
+
+    hc.egress = egress
+    rep = hc.run(started + duration)
+    assert rep['outcome'] == 'skipped' and rep['reason'] == reason
+    assert rep['egress_retries'] == retries and web.calls == []
+    assert checks == [started + i * 600 for i in range(retries + 1)]
+    assert clock() == started + retries * 600
+
+
+@pytest.mark.parametrize('unknown_first', [False, True])
+def test_egress_mismatch_skips_immediately(world, unknown_first):
+    reason = 'exit_ip_mismatch:192.0.2.1'
+    hc, web = _crawler(world, default_routes)
+    clock = world[2]
+    started, checks = clock(), []
+
+    def egress():
+        checks.append(clock())
+        return (False, 'exit_ip_unknown') if unknown_first and len(checks) == 1 else (False, reason)
+
+    hc.egress = egress
+    rep = hc.run(started + 3 * 3600)
+    retries = int(unknown_first)
+    assert rep['outcome'] == 'skipped' and rep['reason'] == reason and web.calls == []
+    assert rep['egress_retries'] == retries
+    assert checks == [started + i * 600 for i in range(retries + 1)]
+    assert clock() == started + retries * 600
+
+
+@pytest.mark.parametrize('failures, reason, retries, outcome', [
+    (1, 'exit_ip_unknown', 1, 'stopped'),
+    (2, 'exit_ip_unknown', 2, 'stopped'),
+    (3, 'exit_ip_unknown', 2, 'halted'),
+    (1, 'proxy_down', 0, 'halted'),
+    (1, 'exit_ip_mismatch:192.0.2.1', 0, 'halted'),
+])
+def test_periodic_egress_retries_only_unknown(world, failures, reason, retries, outcome):
+    hc, web = _crawler(world, default_routes, max_concurrency=1)
+    clock, sleep = world[2:4]
+    started, checks = clock(), []
+    handle = hc.handle
+
+    def advance_after_first_result(result):
+        if hc.stats['requests'] == 0:
+            sleep(901)
+        return handle(result)
+
+    def egress():
+        checks.append(clock())
+        return (False, reason) if 1 < len(checks) <= failures + 1 else (True, proxynet.EXPECTED_EXIT_IP)
+
+    hc.handle, hc.egress = advance_after_first_result, egress
+    rep = hc.run(started + 3 * 3600)
+    assert rep['outcome'] == outcome and rep['egress_retries'] == retries
+    assert len(checks) == 2 + retries
+    assert checks[1] - started > 900
+    assert checks[1:] == [checks[1] + i * 30 for i in range(retries + 1)]
+    if outcome == 'halted':
+        assert rep['reason'] == reason
+        assert max(web.times) < checks[1]
+    else:
+        assert rep['stats']['content_handoff'] > 0 and max(web.times) >= checks[-1]
+
+
 def test_tunnel_lost_mid_run_halts(world):
     def routes(url, headers):
         if 'press.test' in url and not url.endswith('robots.txt'):
@@ -176,6 +270,45 @@ def test_excluded_hosts_never_enter_the_frontier(world):
 
 
 # ── proxynet: no leak to the box IP ──
+@pytest.mark.parametrize('responses, expected', [
+    ([(200, b'{"ip":"49.50.131.207"}')], '49.50.131.207'),
+    ([(0, b''), (200, b'{"ip":"2001:db8::1"}')], '2001:db8::1'),
+    ([(200, b'not json'), (200, b'{"ip":"invalid"}'), (200, b' 49.50.131.207\n')], '49.50.131.207'),
+    ([(503, b''), (200, b'{}'), (200, b'2001:db8::1\n')], '2001:db8::1'),
+    ([(0, b''), (503, b''), (500, b'')], None),
+    ([(200, b'[]'), (200, b'{"ip":1234}'), (200, b'not an IP')], None),
+    ([(200, b'{"ip":null}'), (200, b'\xff'), (200, b'')], None),
+])
+def test_exit_ip_uses_validated_proxied_fallbacks_in_order(monkeypatch, responses, expected):
+    urls = ['https://api.ipify.org?format=json', 'https://api64.ipify.org?format=json', 'https://icanhazip.com']
+    calls = []
+
+    def request(url, headers, timeout, text_only):
+        calls.append(url)
+        assert headers['User-Agent'] == 'KitchenGenomeBot/1.0' and timeout == 7 and text_only
+        status, body = responses[len(calls) - 1]
+        return status, {}, body, 'network_error' if status == 0 else None
+
+    monkeypatch.setattr(proxynet, 'request', request)
+    assert proxynet.exit_ip(timeout=7) == expected
+    assert calls == urls[:len(responses)]
+
+
+@pytest.mark.parametrize('down_at', [0, 1, 2])
+def test_exit_ip_proxy_down_stops_fallbacks(monkeypatch, down_at):
+    calls = []
+
+    def request(url, *args, **kwargs):
+        calls.append(url)
+        if len(calls) == down_at + 1:
+            raise proxynet.ProxyDown('connect:ConnectionRefusedError')
+        return 0, {}, b'', 'network_error'
+
+    monkeypatch.setattr(proxynet, 'request', request)
+    assert proxynet.exit_ip() is None
+    assert len(calls) == down_at + 1
+
+
 def test_wrong_proxy_port_raises_and_never_connects_direct(monkeypatch):
     monkeypatch.setenv('KG_WEB_PROXY', 'socks5h://127.0.0.1:1')
     seen = []
