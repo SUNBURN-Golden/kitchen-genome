@@ -22,6 +22,7 @@ import zlib
 DEFAULT_PROXY = 'socks5h://127.0.0.1:1080'
 EXPECTED_EXIT_IP = '49.50.131.207'
 IP_ECHO_URL = 'https://api.ipify.org?format=json'
+IP_ECHO_URLS = (IP_ECHO_URL, 'https://api64.ipify.org?format=json', 'https://icanhazip.com')
 MAX_BODY = int(os.environ.get('KG_WEB_MAX_BODY', 1_500_000))           # decoded-size cap per response
 MAX_WIRE = int(os.environ.get('KG_WEB_MAX_WIRE', 2_000_000))           # declared Content-Length cap (bytes on the wire)
 TEXT_TYPES = ('text/html', 'application/xhtml+xml', 'application/rss+xml', 'application/atom+xml', 'application/xml', 'text/xml', 'text/plain', 'application/json', 'application/ld+json')
@@ -214,16 +215,21 @@ def proxy_alive(timeout: float = 5) -> bool:
 
 def exit_ip(timeout: float = 15) -> str | None:
     """The public IP the target web sees for our proxied requests (via a public IP echo). None if unknown / proxy down."""
-    try:
-        st, _, body, _ = request(IP_ECHO_URL, {'User-Agent': 'KitchenGenomeBot/1.0'}, timeout=timeout, text_only=True)
-    except ProxyDown:
-        return None
-    if st != 200:
-        return None
-    try:
-        return json.loads(body.decode()).get('ip')
-    except (ValueError, AttributeError):
-        return None
+    for url in IP_ECHO_URLS:
+        try:
+            st, _, body, _ = request(url, {'User-Agent': 'KitchenGenomeBot/1.0'}, timeout=timeout, text_only=True)
+        except ProxyDown:
+            return None
+        if st != 200:
+            continue
+        try:
+            ip = body.decode().strip() if url == IP_ECHO_URLS[-1] else json.loads(body.decode()).get('ip')
+            if isinstance(ip, str):
+                ipaddress.ip_address(ip)
+                return ip
+        except (ValueError, AttributeError):
+            continue
+    return None
 
 
 def egress_ok(expected: str | None = None) -> tuple[bool, str]:

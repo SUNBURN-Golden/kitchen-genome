@@ -489,10 +489,14 @@ class HeavyCrawler:
         run_id = 'hv_' + uuid.uuid4().hex[:10]
         started = self.clock()
         self.started = started
-        rep = {'run_id': run_id, 'block': block, 'started_kst': kst_now(self.clock).isoformat(timespec='seconds')}
+        rep = {'run_id': run_id, 'block': block, 'started_kst': kst_now(self.clock).isoformat(timespec='seconds'), 'egress_retries': 0}
         if deadline <= started + 60:
             return self._end(rep, 'skipped', 'block_over')
         ok, info = self.egress()
+        while not ok and info in ('exit_ip_unknown', 'proxy_down') and self.clock() + 600 < deadline - 1200:
+            self.sleep(600)
+            rep['egress_retries'] += 1
+            ok, info = self.egress()
         rep['egress'] = info
         if not ok:
             return self._end(rep, 'skipped', info)
@@ -519,10 +523,18 @@ class HeavyCrawler:
                         elif (c := self.cap_reason()):
                             halt = c
                         elif now - last_ip_check > 900:
-                            last_ip_check = now
                             ok, info = self.egress()
+                            for _ in range(2):
+                                if ok or info != 'exit_ip_unknown' or self.clock() + 30 >= stop_at:
+                                    break
+                                self.sleep(30)
+                                rep['egress_retries'] += 1
+                                ok, info = self.egress()
+                            last_ip_check = self.clock()
                             if not ok:
                                 halt = info
+                            elif self.clock() >= stop_at:
+                                halt = 'deadline'
                     if halt is None:
                         free = self.caps['max_concurrency'] - len(inflight)
                         if free > 0:
@@ -572,7 +584,7 @@ class HeavyCrawler:
         self.q.execute('INSERT OR REPLACE INTO run(run_id,started,ended,block,outcome,stats) VALUES (?,?,?,?,?,?)',
                        (rep['run_id'], getattr(self, 'started', None), self.clock(), rep['block'], f'{outcome}:{reason}', json.dumps(rep, ensure_ascii=False)))
         self.q.commit()
-        line = {k: rep.get(k) for k in ('run_id', 'block', 'started_kst', 'ended_kst', 'outcome', 'reason', 'egress', 'traffic', 'stats', 'day_totals', 'month_bytes', 'max_rss_mb')}
+        line = {k: rep.get(k) for k in ('run_id', 'block', 'started_kst', 'ended_kst', 'outcome', 'reason', 'egress', 'egress_retries', 'traffic', 'stats', 'day_totals', 'month_bytes', 'max_rss_mb')}
         line['day'] = self.day()
         os.makedirs(os.path.dirname(os.path.abspath(self.log_path)), exist_ok=True)
         with open(self.log_path, 'a', encoding='utf-8') as f:
