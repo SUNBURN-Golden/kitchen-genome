@@ -198,7 +198,7 @@ def test_invalid_model_fields_quotes_and_dates_are_rejected(world, extra, code):
     a = Adapters(Client(Budget(meter(world)), key='dummy', transport=transport, balance_transport=healthy_balance))
     assert a.extract(doc(text), [], Gazetteer(world)) == []
     assert len(calls) == 2 and a.client.stopped is None and a.client.status == 'enabled'
-    assert a.defer_extract and a.stats['failed'] == 1 and a.stats['findings'] == 0
+    assert not a.defer_extract and a.stats['failed'] == 1 and a.stats['findings'] == 0
     assert code in calls[1]['messages'][-1]['content']
     assert 'Previous output was rejected' not in calls[0]['messages'][0]['content']
     rows = world.execute("SELECT error, result_json FROM ai_request WHERE state='failed'").fetchall()
@@ -208,7 +208,7 @@ def test_invalid_model_fields_quotes_and_dates_are_rejected(world, extra, code):
     assert world.execute('SELECT COUNT(*) FROM extraction').fetchone()[0] == 0
 
 
-def test_quote_rejection_defers_one_document_and_next_document_is_extracted(world):
+def test_quote_rejection_fails_one_document_and_next_document_is_extracted(world):
     text = '달빛정원의 운영 소식입니다.'
     calls, qcalls = [], []
     def transport(payload, key):
@@ -220,13 +220,15 @@ def test_quote_rejection_defers_one_document_and_next_document_is_extracted(worl
                     fallback_transport=lambda *a: qcalls.append(1) or response())
     a, gaz = Adapters(client), Gazetteer(world)
     assert process_doc(world, doc(text), gaz, tier='official', model_adapter=a)['new'] == 0
-    assert len(calls) == 2 and a.defer_extract and a.stats['failed'] == 1
+    # Failed, not deferred: the billed rejection is stored, so a deferred document
+    # would return every run only to hit task_previously_rejected and defer forever.
+    assert len(calls) == 2 and not a.defer_extract and a.stats['failed'] == 1
     assert client.stopped is None and client.status == 'enabled'
     billed = client.budget.meter.used
     assert billed == pytest.approx(.12)
     # The same Client also refuses to replay the two already billed attempts.
     assert process_doc(world, doc(text), gaz, tier='official', model_adapter=a)['new'] == 0
-    assert len(calls) == 2 and client.budget.meter.used == billed and a.defer_extract
+    assert len(calls) == 2 and client.budget.meter.used == billed and not a.defer_extract
     assert process_doc(world, doc(text, '2'), gaz, tier='official', model_adapter=a)['new'] == 1
     assert len(calls) == 3 and qcalls == [] and not a.defer_extract
     assert a.stats['findings'] == 1 and client.status == 'enabled'
@@ -404,7 +406,7 @@ def test_billed_blank_content_skips_document_and_publishes_nothing(world):
     before = c.execute('SELECT COUNT(*) FROM claim').fetchone()[0]
     assert process_doc(c, doc(text), Gazetteer(c), tier='official', model_adapter=a)['new'] == 0
     assert len(calls) == 2 and a.client.stopped is None and a.client.status == 'enabled'
-    assert a.defer_extract
+    assert not a.defer_extract
     assert a.stats['called'] == 1 and a.stats['failed'] == 1 and a.stats['findings'] == 0
     assert c.execute('SELECT COUNT(*) FROM extraction').fetchone()[0] == 0
     assert c.execute('SELECT COUNT(*) FROM claim').fetchone()[0] == before
