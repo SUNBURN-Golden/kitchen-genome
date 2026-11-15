@@ -508,3 +508,19 @@ def test_same_content_guard_skips_bookkeeping_only_changes(tmp_path):
     assert _same_content(ctx, {'raw_ref': paths['new']}, 'd_old')
     assert not _same_content(ctx, {'raw_ref': paths['edited']}, 'd_old')
     assert not _same_content(ctx, {'raw_ref': None}, 'd_old')     # raw purged: fall back to queueing the review
+
+
+def test_chef_fact_without_resolved_chef_goes_back_to_review_instead_of_crashing(world):
+    # 2026-11-14/15: a reviewer split a combined chef name and applied it by hand, leaving the candidate 'resolved'
+    # with resolved_chef_id NULL -> employment.chef_id NOT NULL crashed state_history_update every run.
+    c, env, _ = world
+    assert daemon(c, env).run()['status'] == 'succeeded'
+    cid = c.execute('SELECT candidate_id FROM candidate_fact ORDER BY rowid LIMIT 1').fetchone()[0]
+    c.execute("UPDATE candidate_fact SET fact_type='employment', resolution='resolved', verification='source_claim', resolved_chef_id=NULL, applied_claim_id=NULL WHERE candidate_id=?", (cid,))
+    c.execute("INSERT OR IGNORE INTO review_queue(review_id,reason,subject_type,subject_id,payload_json,dedupe_key,created_at,state) VALUES ('rev_done','unknown_chef','candidate_fact',?,'{}',?, '2026-11-13T00:00:00Z','resolved')", (cid, f'unknown_chef:{cid}'))
+    emp_before = counts(c)['employment']
+    rep = daemon(c, env).run(resume=False)
+    assert rep['status'] == 'succeeded'
+    assert c.execute('SELECT resolution FROM candidate_fact WHERE candidate_id=?', (cid,)).fetchone()[0] == 'needs_review'
+    assert counts(c)['employment'] == emp_before
+    assert c.execute("SELECT COUNT(*) FROM failure_queue WHERE state='open'").fetchone()[0] == 0
