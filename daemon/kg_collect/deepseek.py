@@ -406,9 +406,9 @@ class Adapters:
                 self.stats['skipped_balance'] += 1
                 self.stats['called'] -= 1
                 return []
-            if self.client.stopped and self.client.status == 'enabled':
-                # Backup failure defers this document, not the client or later documents.
-                self.defer_extract = True
+            # A failed extraction defers this document even when the client can
+            # continue with later documents (including schema rejections).
+            self.defer_extract = True
             self.stats['failed'] += 1
             return []
         except CostCapExceeded as exc:

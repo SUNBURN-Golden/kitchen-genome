@@ -57,7 +57,7 @@ def test_gap_planner_validates_ids_and_returns_search_jobs(world):
     job = jobs[0]; job['url']=discover.search_url(discover.load_seeds(),job['query'])
     assert discover.enqueue(c, **job)
     forged = adapter(c, {'queries':[{'gap_id':'unknown','target_id':'unknown','query':'https://bad.test', 'reason':'escape'}]})
-    assert forged.plan(c)==[] and forged.client.stopped=='invalid_task_json'
+    assert forged.plan(c)==[] and forged.client.stopped is None and forged.client.status=='enabled'
 
 
 @pytest.mark.parametrize('low_balance', [False, True])
@@ -197,7 +197,8 @@ def test_invalid_model_fields_quotes_and_dates_are_rejected(world, extra, code):
         return response({'findings': [finding(text, **extra)]})
     a = Adapters(Client(Budget(meter(world)), key='dummy', transport=transport, balance_transport=healthy_balance))
     assert a.extract(doc(text), [], Gazetteer(world)) == []
-    assert len(calls) == 2 and a.client.stopped == code and a.stats['failed'] == 1 and a.stats['findings'] == 0
+    assert len(calls) == 2 and a.client.stopped is None and a.client.status == 'enabled'
+    assert a.defer_extract and a.stats['failed'] == 1 and a.stats['findings'] == 0
     assert code in calls[1]['messages'][-1]['content']
     assert 'Previous output was rejected' not in calls[0]['messages'][0]['content']
     rows = world.execute("SELECT error, result_json FROM ai_request WHERE state='failed'").fetchall()
@@ -205,6 +206,57 @@ def test_invalid_model_fields_quotes_and_dates_are_rejected(world, extra, code):
     blob = ' '.join(r['error'] for r in rows)
     assert text not in blob and 'fabricated' not in blob and '2026-11-05' not in blob and 'invented' not in blob
     assert world.execute('SELECT COUNT(*) FROM extraction').fetchone()[0] == 0
+
+
+def test_quote_rejection_defers_one_document_and_next_document_is_extracted(world):
+    text = '달빛정원의 운영 소식입니다.'
+    calls, qcalls = [], []
+    def transport(payload, key):
+        calls.append(json.loads(payload))
+        quote = 'fabricated' if len(calls) <= 2 else text
+        return response({'findings': [finding(text, quote=quote)]})
+    client = Client(Budget(meter(world)), key='dummy', transport=transport,
+                    balance_transport=healthy_balance, fallback_key='fixture-backup',
+                    fallback_transport=lambda *a: qcalls.append(1) or response())
+    a, gaz = Adapters(client), Gazetteer(world)
+    assert process_doc(world, doc(text), gaz, tier='official', model_adapter=a)['new'] == 0
+    assert len(calls) == 2 and a.defer_extract and a.stats['failed'] == 1
+    assert client.stopped is None and client.status == 'enabled'
+    billed = client.budget.meter.used
+    assert billed == pytest.approx(.12)
+    # The same Client also refuses to replay the two already billed attempts.
+    assert process_doc(world, doc(text), gaz, tier='official', model_adapter=a)['new'] == 0
+    assert len(calls) == 2 and client.budget.meter.used == billed and a.defer_extract
+    assert process_doc(world, doc(text, '2'), gaz, tier='official', model_adapter=a)['new'] == 1
+    assert len(calls) == 3 and qcalls == [] and not a.defer_extract
+    assert a.stats['findings'] == 1 and client.status == 'enabled'
+    rows = world.execute('SELECT state,error,result_json FROM ai_request ORDER BY rowid').fetchall()
+    assert [r['state'] for r in rows] == ['failed', 'failed', 'done']
+    assert all(r['error'].startswith('quote_not_exact') and r['result_json'] is None for r in rows[:2])
+
+
+@pytest.mark.parametrize('failure', ['transport_unknown', 'balance_low'])
+def test_provider_failures_still_extract_later_documents_via_qwen(world, failure):
+    from test_deepseek_balance import wallet
+    text = '달빛정원의 운영 소식입니다.'
+    dcalls, qcalls = [], []
+    def primary(*a):
+        dcalls.append(1)
+        raise DeepSeekError('transport_unknown')
+    def qwen(*a):
+        qcalls.append(1)
+        return response({'findings': [finding(text)]})
+    client = Client(Budget(meter(world)), key='dummy', transport=primary,
+                    balance_transport=(lambda key: wallet(available=False)) if failure == 'balance_low' else healthy_balance,
+                    fallback_key='fixture-backup', fallback_transport=qwen)
+    a, gaz = Adapters(client), Gazetteer(world)
+    for suffix in ('1', '2'):
+        assert process_doc(world, doc(text, suffix), gaz, tier='official', model_adapter=a)['new'] == 1
+        assert client.status == 'enabled' and client.stopped is None and not a.defer_extract
+    assert client.primary_paused == failure
+    assert len(dcalls) == (1 if failure == 'transport_unknown' else 0) and len(qcalls) == 2
+    assert client._schema_rejections == 0 and a.stats['failed'] == 0 and a.stats['findings'] == 2
+    assert world.execute("SELECT COUNT(*) FROM ai_request WHERE model=? AND state='done'", (QWEN_MODEL,)).fetchone()[0] == 2
 
 
 def test_exact_quote_survives_wrong_offsets_and_cannot_publish(world):
@@ -272,7 +324,7 @@ def test_realistic_extraction_misses_are_categorized_without_storing_source_text
     ]}
     a = adapter(c, payload)
     assert a.extract(doc(text), [], Gazetteer(c)) == []
-    assert a.client.stopped == 'quote_not_exact' and a.stats['findings'] == 0
+    assert a.client.stopped is None and a.stats['findings'] == 0
     error = c.execute("SELECT error, result_json FROM ai_request WHERE task='web-extract-2' AND state='failed' ORDER BY rowid").fetchone()
     assert error['result_json'] is None
     assert error['error'].startswith('quote_not_exact ')
@@ -287,10 +339,10 @@ def test_near_quote_and_too_many_findings_store_no_evidence(world):
     text = '달빛정원의 운영 소식입니다.'
     near = adapter(world, {'findings': [finding(text, quote='달빛정원의  운영 소식입니다.')]})
     assert near.extract(doc(text), [], Gazetteer(world)) == []
-    assert near.client.stopped == 'quote_not_exact'
+    assert near.client.stopped is None
     many = adapter(world, {'findings': [finding(text) for _ in range(9)]})
     assert many.extract(doc(text, '2'), [], Gazetteer(world)) == []
-    assert many.client.stopped == 'too_many_findings'
+    assert many.client.stopped is None
     errors = [r['error'] for r in world.execute("SELECT error FROM ai_request WHERE state='failed'").fetchall()]
     assert any(e.startswith('too_many_findings n=9') for e in errors)
     assert all(text not in e for e in errors)
@@ -338,7 +390,7 @@ def test_category_is_kept_when_the_retry_cannot_be_reserved(world):
     assert conn.execute('SELECT COUNT(*) FROM extraction').fetchone()[0] == 0
 
 
-def test_billed_blank_content_pauses_ai_and_publishes_nothing(world):
+def test_billed_blank_content_skips_document_and_publishes_nothing(world):
     c = world
     text = '달빛정원의 운영 소식입니다.'
     calls = []
@@ -351,7 +403,8 @@ def test_billed_blank_content_pauses_ai_and_publishes_nothing(world):
     a = Adapters(Client(Budget(meter(c)), key='dummy', transport=transport, balance_transport=healthy_balance))
     before = c.execute('SELECT COUNT(*) FROM claim').fetchone()[0]
     assert process_doc(c, doc(text), Gazetteer(c), tier='official', model_adapter=a)['new'] == 0
-    assert len(calls) == 2 and a.client.stopped == 'json_blank'
+    assert len(calls) == 2 and a.client.stopped is None and a.client.status == 'enabled'
+    assert a.defer_extract
     assert a.stats['called'] == 1 and a.stats['failed'] == 1 and a.stats['findings'] == 0
     assert c.execute('SELECT COUNT(*) FROM extraction').fetchone()[0] == 0
     assert c.execute('SELECT COUNT(*) FROM claim').fetchone()[0] == before
