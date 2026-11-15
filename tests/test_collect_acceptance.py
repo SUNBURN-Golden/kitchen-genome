@@ -135,7 +135,8 @@ def test_affiliation_change_old_vs_new_detected(world):
     chef = conn.execute("SELECT chef_id FROM chef WHERE display_name='한도윤'").fetchone()['chef_id']
     open_before = q(conn, "SELECT b.branch_id, r.name FROM employment e JOIN branch b USING(branch_id) JOIN restaurant r USING(restaurant_id) WHERE e.chef_id=? AND e.state='active' AND e.valid_to_kind='open'", chef)
     assert [r['name'] for r in open_before] == ['달빛정원']
-    today = dt.date.today().isoformat()
+    # Match the UTC detection clock; KST's next day can produce negative latency.
+    today = dt.datetime.now(dt.timezone.utc).date().isoformat()
     web.pages['https://press1.test/a/4'] = ('text/html', html('셰프 이동', '<p>한도윤 셰프는 모래시계로 옮겼다. 모래시계는 한남동에 있는 프렌치 레스토랑이다. 이 문서는 수집 봇 시험을 위한 가상의 안내문이며 실제 식당과 무관하다. '
                                                           '모든 이름과 주소는 지어낸 것이다. 문서의 길이를 채우기 위한 문장이 이어진다. 시험용 문서는 여기서 끝난다.</p>', pub=today))
     web.search_items.append(('한도윤 셰프 모래시계 이적', 'https://press1.test/a/4', '한도윤 셰프 모래시계로 옮겼다'))

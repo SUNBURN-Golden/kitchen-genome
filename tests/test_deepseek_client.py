@@ -8,7 +8,8 @@ from pathlib import Path
 import pytest
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / 'daemon'))
 from kg_ai.budget import Budget
-from kg_ai.deepseek import Client, DeepSeekError, MAX_BODY, NoRedirect, TaskReject, URL
+from kg_ai.deepseek import (Client, DeepSeekError, MAX_BODY, NoRedirect, RETRYABLE,
+                            SCHEMA_REJECT_LIMIT, TaskReject, URL)
 from kg_daemon.db import connect, migrate, new_id, utcnow
 from kg_daemon.runner import CostCapExceeded, CostMeter
 
@@ -173,7 +174,7 @@ def envelope(content, usage=None, finish='stop', reasoning='{"ok": true} do not 
                             'choices': [{'finish_reason': finish, 'message': {'role': 'assistant', 'content': content, 'reasoning_content': reasoning}}]}).encode()
 
 
-def test_json_mode_blank_retries_once_then_pauses_without_using_reasoning(conn):
+def test_json_mode_blank_retries_once_then_skips_without_using_reasoning(conn):
     """The observed smoke: HTTP 200, real usage, finish_reason stop, content replaced by spaces."""
     calls = []
     def transport(payload, key):
@@ -186,7 +187,7 @@ def test_json_mode_blank_retries_once_then_pauses_without_using_reasoning(conn):
     # Prompt-sized input keeps the 8,958-token smoke usage inside the byte reservation.
     with pytest.raises(DeepSeekError, match='^json_blank$'):
         client.call('web-extract-1', 'JSON', {'text': 'source ' * 800}, lambda o: o)
-    assert len(calls) == 2 and client.stopped == 'json_blank' and client.status == 'paused'
+    assert len(calls) == 2 and client.stopped is None and client.status == 'enabled'
     assert 'json_blank' in calls[1]['messages'][0]['content']
     rows = conn.execute('SELECT state,error,result_json,prompt_tokens,completion_tokens FROM ai_request ORDER BY rowid').fetchall()
     assert len(rows) == 2
@@ -231,7 +232,7 @@ def test_schema_rejection_retries_once_and_double_encoded_json_is_accepted(conn)
     bad = Client(Budget(meter(conn)), key='dummy', transport=lambda *a: response({'nope': True}), balance_transport=healthy_balance)
     with pytest.raises(DeepSeekError, match='^invalid_task_json$'):
         bad.call('task', 'JSON', {'n': 3}, validate)
-    assert bad.stopped == 'invalid_task_json'
+    assert bad.stopped is None and bad.status == 'enabled'
     # One rejected sample from the recovered call, then both samples of the unrecovered call.
     assert conn.execute("SELECT COUNT(*) FROM ai_request WHERE state='failed' AND error='invalid_task_json'").fetchone()[0] == 3
 
@@ -244,7 +245,7 @@ def test_task_reject_keeps_a_sanitized_category_and_is_not_replayed(conn):
     client = Client(Budget(meter(conn)), key='dummy', transport=lambda *a: calls.append(1) or response({'findings': []}), balance_transport=healthy_balance)
     with pytest.raises(DeepSeekError, match='^quote_not_exact$'):
         client.call('web-extract-1', 'JSON', {'text': 'source'}, validate)
-    assert client.stopped == 'quote_not_exact' and len(calls) == 2
+    assert client.stopped is None and client.status == 'enabled' and len(calls) == 2
     rows = conn.execute("SELECT error, result_json FROM ai_request WHERE state='failed'").fetchall()
     assert len(rows) == 2
     assert all(r['result_json'] is None and r['error'].startswith('quote_not_exact 0:quote_not_exact,quote_len=21,in_text=0') for r in rows)
@@ -253,3 +254,43 @@ def test_task_reject_keeps_a_sanitized_category_and_is_not_replayed(conn):
     with pytest.raises(DeepSeekError, match='^task_previously_rejected$'):
         later.call('web-extract-1', 'JSON', {'text': 'source'}, validate)
     assert later.stopped is None
+
+
+@pytest.mark.parametrize('code', RETRYABLE)
+def test_final_schema_rejections_pause_only_at_run_limit(conn, code):
+    calls, qcalls = [], []
+    def transport(payload, key):
+        calls.append(1)
+        if code == 'json_blank':
+            return envelope(' ')
+        if code == 'invalid_task_json':
+            return envelope('not JSON')
+        return response()
+    def validate(obj):
+        raise TaskReject(code)
+    client = Client(Budget(meter(conn)), key='dummy', transport=transport,
+                    balance_transport=healthy_balance, fallback_key='fixture-backup',
+                    fallback_transport=lambda *a: qcalls.append(1) or response())
+    assert SCHEMA_REJECT_LIMIT == 3
+    for n in range(1, SCHEMA_REJECT_LIMIT + 1):
+        with pytest.raises(DeepSeekError, match='^' + code + '$'):
+            client.call('web-extract-1', 'JSON', {'document': n}, validate)
+        assert len(calls) == 2 * n
+        assert client._schema_rejections == n
+        if n < SCHEMA_REJECT_LIMIT:
+            assert client.stopped is None and client.status == 'enabled'
+            # A billed rejection cannot be replayed or counted toward the brake again.
+            with pytest.raises(DeepSeekError, match='^task_previously_rejected$'):
+                client.call('web-extract-1', 'JSON', {'document': n}, validate)
+            assert len(calls) == 2 * n and client._schema_rejections == n
+    assert client.stopped == 'schema_reject_limit' and client.status == 'paused'
+    with pytest.raises(DeepSeekError, match='^schema_reject_limit$'):
+        client.call('web-extract-1', 'JSON', {'document': 'later'}, lambda o: o)
+    assert len(calls) == 6 and qcalls == []
+    rows = conn.execute('SELECT state,error,result_json FROM ai_request').fetchall()
+    assert len(rows) == 6 and all(r['state'] == 'failed' and r['error'] == code and r['result_json'] is None for r in rows)
+    assert client.budget.meter.used > 0
+    # The brake belongs to this Client, not to the persisted requests or day.
+    later = Client(client.budget, key='dummy', transport=lambda *a: response(), balance_transport=healthy_balance)
+    assert later.call('web-extract-1', 'JSON', {'document': 'later'}, lambda o: o) == {'ok': True}
+    assert later.stopped is None and later.status == 'enabled'

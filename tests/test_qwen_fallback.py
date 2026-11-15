@@ -128,7 +128,7 @@ def test_primary_stays_paused_for_later_requests(conn, code):
 
 
 @pytest.mark.parametrize('code', ['cost_cap', 'usage_over_reservation', 'missing_key',
-                                  'json_blank', 'quote_not_exact', 'model_or_request_rejected'])
+                                  'json_blank', 'quote_not_exact', 'schema_reject_limit', 'model_or_request_rejected'])
 def test_qwen_does_not_clear_run_halts(conn, code):
     qcalls = []
     client = fallback_client(conn, lambda *a: (503, b''), lambda *a: qcalls.append(1) or response())

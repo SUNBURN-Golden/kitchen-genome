@@ -4,7 +4,8 @@ The current DeepSeek API enables thinking when `thinking` is omitted. JSON mode
 then replaces an unrecognized completion with spaces while finish_reason stays
 `stop` and usage is still billed. That blank body is not task JSON. One bounded
 retry is allowed for blank content and for schema rejection. A second failure
-pauses this run. Redirects, proxies, raw bodies, and partial results are not kept.
+skips the task; three rejected tasks pause this run. Redirects, proxies, raw
+bodies, and partial results are not kept.
 """
 import hashlib
 import json
@@ -36,6 +37,7 @@ FALLBACK_CODES = (
 # Token count is at most one per payload byte, so this remains an upper bound.
 FRAME_TOKENS = 4096
 MAX_TASK_ATTEMPTS = 2
+SCHEMA_REJECT_LIMIT = 3
 SCHEMA_CODES = (
     'shape_invalid', 'too_many_findings', 'label_invalid', 'quote_missing', 'quote_too_long',
     'quote_not_exact', 'offset_ambiguous', 'offset_invalid', 'name_absent', 'name_invalid',
@@ -48,7 +50,7 @@ NONSTOP = {'cached_result_purged', 'task_previously_rejected', 'missing_key', 'i
 # A stored one of these never routes to the backup on a later attempt.
 NON_FALLBACK_CODES = ('cost_cap', 'usage_over_reservation', 'missing_key',
                       'model_or_request_rejected', 'response_limit', 'invalid_response_or_usage',
-                      'truncated_json', 'incomplete_output') + RETRYABLE
+                      'truncated_json', 'incomplete_output', 'schema_reject_limit') + RETRYABLE
 
 
 class DeepSeekError(NonRetryable):
@@ -142,6 +144,7 @@ class Client:
         self.key = os.environ.get('DEEPSEEK_API_KEY', '') if key is None else key
         self.model = model or os.environ.get('DEEPSEEK_MODEL', 'deepseek-chat')
         self.budget, self.transport, self.stopped = budget, transport, None
+        self._schema_rejections = 0
         self.primary_paused = None
         self._previous_fallback_worthy = False
         self.last_meta = {}
@@ -283,7 +286,12 @@ class Client:
                     self.stopped = None
                     correction = code
                     continue
-                if code not in NONSTOP:
+                if code in RETRYABLE:
+                    # _once already settled the billed failure. Skip this task,
+                    # but stop a broken prompt from rejecting the whole queue.
+                    self._schema_rejections += 1
+                    self.stopped = 'schema_reject_limit' if self._schema_rejections >= SCHEMA_REJECT_LIMIT else None
+                elif code not in NONSTOP:
                     self.stopped = self.stopped or code
                 raise
 

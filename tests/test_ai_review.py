@@ -110,6 +110,21 @@ def test_unlinked_approval_and_cap_stop_leaves_rest_open(env):
     assert seed['ai_reviewed_unlinked'][0]['badge'] == 'AI 검토'
 
 
+def test_review_batch_splitting_preserves_schema_rejection_brake(env):
+    conn, sp, log, raw = env
+    add(conn, 'x_open', 'opening', '서울 한남동의 달빛정원은 2026-10-01 문을 열었다', rest='달빛정원', date='2026-10-01')
+    add(conn, 'x_rep', 'employment_claim', '한도윤 셰프가 총괄 셰프를 맡는다', chef='한도윤', role='총괄 셰프')
+    calls, qcalls = [], []
+    client = Client(Budget(meter(conn)), key='dummy',
+                    transport=lambda *a: calls.append(1) or response({'reviews': 'invalid'}),
+                    balance_transport=healthy_balance, fallback_key='fixture-backup',
+                    fallback_transport=lambda *a: qcalls.append(1) or response())
+    stats = rv.review(conn, str(sp), str(log), raw, client=client)
+    assert len(calls) == 6 and qcalls == []
+    assert client.stopped == stats['stopped'] == 'schema_reject_limit'
+    assert client.status == 'paused' and stats['remaining'] == 1 and stats['published'] == 0
+
+
 def test_daily_cap_is_clamped_to_20(env):
     conn, sp, log, raw = env
     add(conn, 'x1', 'opening', '서울 한남동의 달빛정원은 2026-10-01 문을 열었다', rest='달빛정원')
