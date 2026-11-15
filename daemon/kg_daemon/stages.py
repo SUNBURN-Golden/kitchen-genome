@@ -400,6 +400,13 @@ def state_history_update(ctx: StageContext) -> StageResult:
             held += 1
             continue
         ft = c['fact_type']
+        if ft in ('employment', 'chef_move', 'mentorship') and not c['resolved_chef_id']:
+            # a chef fact without a resolved chef (e.g. a reviewer split the name and applied it by hand) cannot be
+            # materialised; hand it back to review instead of crashing the whole stage on employment.chef_id NOT NULL.
+            ctx.conn.execute("UPDATE candidate_fact SET resolution='needs_review' WHERE candidate_id=?", (c['candidate_id'],))
+            queue_review(ctx.conn, 'unknown_chef', 'candidate_fact', c['candidate_id'], {'fact_type': ft, 'payload': p}, dedupe_key=f'unknown_chef:{c["candidate_id"]}')
+            held += 1
+            continue
         if ft in ('closure', 'opening', 'relocation', 'pause'):
             claim = _apply_status_event(ctx, c, p, {'closure': 'close', 'opening': 'open', 'relocation': 'move', 'pause': 'pause'}[ft])
         elif ft in ('menu', 'collab'):
