@@ -223,6 +223,64 @@ def test_monthly_extract_balance_gate_uses_qwen_and_preserves_review_hold(world,
     assert world.execute('SELECT state FROM ai_review_hold WHERE attempt_id=?', (aid,)).fetchone()[0] == 'held'
 
 
+def _recheck_attempt(conn, budget):
+    from kg_collect import recheck
+    recheck.ensure_schedule(conn, SEED)
+    conn.execute("UPDATE restaurant_recheck SET next_due_at=CASE restaurant_id WHEN 'r_dal' THEN '2026-01-01T00:00:00Z' ELSE '2099-01-01T00:00:00Z' END")
+    conn.commit()
+    assert recheck.admit(conn, discover.load_seeds(), budget) == 1
+    return conn.execute('SELECT attempt_id FROM restaurant_recheck_attempt').fetchone()[0]
+
+
+def test_recheck_over_cap_rejects_and_restores_the_review_hold(world):
+    text = '달빛정원의 운영 소식입니다.'
+    calls = []
+    a = Adapters(Client(Budget(meter(world)), key='dummy',
+                        transport=lambda *args: calls.append(1) or response({'findings': [finding(text) for _ in range(3)]}),
+                        balance_transport=healthy_balance))
+    aid = _recheck_attempt(world, a.client.budget)
+    assert a.extract(doc(text), [], Gazetteer(world), workload='recheck', attempt_id=aid) == []
+    # Three valid rows still breach the recheck ceiling: one billed retry, then the document fails.
+    assert len(calls) == 2 and a.stats['called'] == 1 and a.stats['failed'] == 1
+    assert a.stats['findings'] == 0 and a.stats['findings_dropped'] == 0
+    assert a.client.stopped is None and a.client.status == 'enabled' and not a.defer_extract
+    rows = world.execute("SELECT state,error,result_json FROM ai_request WHERE task='web-extract-2'").fetchall()
+    assert len(rows) == 2 and all(r['state'] == 'failed' and r['error'] == 'too_many_findings' and r['result_json'] is None for r in rows)
+    assert world.execute('SELECT COUNT(*) FROM extraction').fetchone()[0] == 0
+    # The finally path releases the speculative hold because no reviewable rows survived.
+    assert world.execute('SELECT state FROM ai_review_hold WHERE attempt_id=?', (aid,)).fetchone()[0] == 'released'
+
+
+@pytest.mark.parametrize('valid,invalid', [(2, 1), (2, 2), (1, 2)])
+def test_recheck_partial_drops_keep_valid_rows_under_the_cap(world, valid, invalid):
+    text = '달빛정원의 운영 소식입니다.'
+    good = [finding(text), finding('운영 소식', label='menu')][:valid]
+    bad = [finding(text, quote='not on the page'), finding(text, date_text='2026-11-05')][:invalid]
+    tokens = ['quote_not_exact,quote_len=15,in_text=0', 'date_not_verbatim'][:invalid]
+    expected_dropped = ' '.join('%d:%s' % (valid + i, token) for i, token in enumerate(tokens))
+    calls = []
+    a = Adapters(Client(Budget(meter(world)), key='dummy',
+                        transport=lambda *args: calls.append(1) or response({'findings': good + bad}),
+                        balance_transport=healthy_balance))
+    aid = _recheck_attempt(world, a.client.budget)
+    rows = a.extract(doc(text), [], Gazetteer(world), workload='recheck', attempt_id=aid)
+    # Dropping the invalid findings brings the >2-finding response under the ceiling: no retry.
+    assert len(calls) == 1 and len(rows) == valid and a.stats['failed'] == 0
+    assert [r['quote'] for r in rows] == [r['quote'] for r in good]
+    assert all(r['pending_only'] for r in rows)
+    assert a.stats['findings'] == valid and a.stats['findings_dropped'] == invalid
+    assert a.client.stopped is None and a.client.status == 'enabled' and not a.defer_extract
+    # Reviewable rows survive, so the hold stays held for the review stage.
+    assert world.execute('SELECT state FROM ai_review_hold WHERE attempt_id=?', (aid,)).fetchone()[0] == 'held'
+    for r in rows:
+        meta = json.loads(r['model_meta_json'])
+        assert meta['workload'] == 'recheck' and meta['dropped'] == expected_dropped
+        assert 'not on the page' not in meta['dropped'] and '2026-11-05' not in meta['dropped'] and text not in meta['dropped']
+    request = world.execute("SELECT state,error,result_json FROM ai_request WHERE task='web-extract-2'").fetchone()
+    assert request['state'] == 'done' and request['error'] is None
+    assert json.loads(request['result_json'])['dropped'] == expected_dropped.split(' ')
+
+
 def test_zero_rule_hard_extraction_unknown_date_and_review_only(world):
     c = world; text='달빛정원의 운영에 대한 중요한 소식입니다.'
     a = adapter(c, {'findings':[finding(text)]})
