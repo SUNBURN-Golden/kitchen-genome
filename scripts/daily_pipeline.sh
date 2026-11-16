@@ -3,6 +3,7 @@
 # Headless up to the Cloudflare deploy; the deploy itself needs the user-Cloudflare connector (see README "자동 크롤러").
 # Usage: bash scripts/daily_pipeline.sh [/path/to/clone]   (default /tmp/kg; falls back to /workspace/kitchen-genome when that path is gone,
 # e.g. /tmp/kg symlink lost after a box restore — the 2026-11-03 07:00 run died on `cd /tmp/kg`)
+# Runs take ~13+ minutes: callers with a hard time limit should background the pipeline and wait for its RESULT line in the log.
 # Exit 0 always on success; last line is one of: RESULT=NO_CHANGE | RESULT=MERGED_NO_DEPLOY pr=<url> | RESULT=NEEDS_DEPLOY pr=<url> | RESULT=DEPLOYED pr=<url>
 # Collection is in-place and never calls the legacy Instagram account. AI findings never apply through the rule path;
 # the DeepSeek review stage (daemon/kg_ai/review.py) reviews each one: approved -> seed `ai_reviewed` (badged 'AI 검토',
@@ -12,6 +13,13 @@ REPO="${1:-/tmp/kg}"; KG_HOME="${KG_HOME:-/workspace/kitchen-genome}"
 SCRIPT_DIR=$(cd "$(dirname "$0")" && pwd)
 CF_TOKEN="${KG_CF_TOKEN_FILE:-/home/box/.secrets/cloudflare_pages_token}"
 STAGE=resolve; FINAL=0; AI_REASON=none
+DAY=$(date +%Y%m%d); BR="crawl/$DAY"
+CRAWL_CREATED=0; PR_SUCCEEDED=0; BASE_SHA=
+mkdir -p "$KG_HOME/data_store/logs"
+exec 3>&1
+# Keep logging even if the caller closes its output pipe during a timeout.
+exec > >(trap '' HUP INT TERM; exec tee -ap "$KG_HOME/data_store/logs/daily_pipeline_$DAY.log" 3>&-) 2>&1
+LOG_PID=$!
 export KG_IG="${KG_IG:-0}"
 record_ai_reason() {
   local line="$1" reason=none token
@@ -26,11 +34,34 @@ record_ai_reason() {
 }
 finish() {
   local rc=$?
+  trap '' HUP INT TERM
+  if [ "$rc" != 0 ] && [ "$CRAWL_CREATED" = 1 ] && [ "$PR_SUCCEEDED" = 0 ]; then
+    # Restore tracked sources only; keep any crawl commits and any other current branch.
+    {
+      git checkout -q -- sources || true
+      if [ "$(git symbolic-ref -q --short HEAD)" = "$BR" ] && [ "$(git rev-parse HEAD)" = "$BASE_SHA" ]; then
+        git checkout -q main && git branch -d "$BR" || true
+      fi
+    } >/dev/null 2>&1 || true
+  fi
   if [ "$FINAL" = 0 ]; then
     echo "RESULT=FAILED stage=$STAGE reason=command_failed exit=$rc ai_reason=$AI_REASON"
   fi
+  # Close the tee pipe and drain it before returning so the RESULT is on disk.
+  exec 1>&3 2>&3 3>&-
+  wait "$LOG_PID" || true
+  return "$rc"
+}
+on_signal() {
+  trap '' HUP INT TERM
+  FINAL=1
+  echo "RESULT=FAILED stage=$STAGE reason=signal_$1 ai_reason=$AI_REASON"
+  exit "$((128 + $2))"
 }
 trap finish EXIT
+trap 'on_signal HUP 1' HUP
+trap 'on_signal INT 2' INT
+trap 'on_signal TERM 15' TERM
 if [ ! -d "$REPO/.git" ] && [ ! -f "$REPO/.git" ]; then
   if [ -d "$KG_HOME/.git" ]; then echo "WARN: $REPO is not a clone; using $KG_HOME"; REPO="$KG_HOME"
   else echo "FATAL: no clone at $REPO or $KG_HOME"; exit 2; fi
@@ -42,10 +73,10 @@ GIT_COMMON=$(git rev-parse --git-common-dir)
 exec 9>"$GIT_COMMON/kg_daily.lock"
 if ! flock -n 9; then FINAL=1; echo 'RESULT=SKIPPED reason=locked'; exit 0; fi
 if ! git diff --quiet || ! git diff --cached --quiet; then echo 'FATAL: tracked changes present'; exit 2; fi
-DAY=$(date +%Y%m%d); BR="crawl/$DAY"
 git checkout -q main && git pull -q --ff-only
-git branch -D "$BR" >/dev/null 2>&1 || true; git checkout -q -b "$BR"
 BASE_SHA=$(git rev-parse HEAD)
+git branch -d "$BR" >/dev/null 2>&1 || true; git checkout -q -b "$BR"
+CRAWL_CREATED=1
 # Another process sharing this working tree (e.g. a dev/review-fix session) can switch branches mid-run;
 # on 2026-11-12 07:33 that put the crawl commit on feat/ai-entertainment-prefilter and the PR stage failed
 # with "No commits between main and crawl/…". Refuse to commit or push unless HEAD is still our branch.
@@ -128,6 +159,7 @@ git push -q -u origin "$BR" --force
 PR=$(gh pr create --repo SUNBURN-Golden/kitchen-genome --base main --head "$BR" --title "crawl $DAY: $SUM" \
   --body "Automated daily crawl (scripts/daily_pipeline.sh). Applied only with >=2 independent reliable sources; see crawler/applied.json. Review queue: crawler/pending.json. AI findings are published only after the DeepSeek review stage approves them (badged 'AI 검토', source URL, data/ai_review_log.jsonl; rollback: scripts/ai_review_rollback.py); rejected ones are closed with a reason. SHOW_VERDICTS/SHOW_NEWSLETTER=false, no noindex (guards passed).")
 gh pr merge "$PR" --squash --delete-branch
+PR_SUCCEEDED=1
 git checkout -q main && git pull -q --ff-only
 python3 scripts/build_deploy.py >/dev/null   # dist/deploy_kitchengenome.js from merged main
 echo "$IG_OUT"
