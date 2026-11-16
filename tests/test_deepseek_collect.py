@@ -9,9 +9,9 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1] / 'daemon'))
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / 'tests'))
 from collect_world import SEED
 from kg_ai.budget import Budget
-from kg_ai.deepseek import Client, DeepSeekError, QWEN_MODEL, reservation_tokens
+from kg_ai.deepseek import Client, DeepSeekError, QWEN_MODEL, TaskReject, reservation_tokens
 from kg_collect import cycle, gaps, apply, discover
-from kg_collect.deepseek import EXTRACT_INSTRUCTION, Adapters
+from kg_collect.deepseek import EXTRACT_INSTRUCTION, Adapters, validate_extraction
 from kg_collect.rawstore import RawStore
 from kg_collect.pipeline import process_doc
 from kg_collect.targets import Gazetteer, load_seed_targets
@@ -43,6 +43,65 @@ def finding(text, **extra):
 
 def adapter(conn, data):
     return Adapters(Client(Budget(meter(conn)), key='dummy', transport=lambda *a: response(data), balance_transport=healthy_balance))
+
+
+def test_validate_extraction_keeps_valid_rows_and_reports_each_dropped_index():
+    text = '달빛정원의 운영 소식입니다.'
+    payload = {'findings': [
+        finding(text, quote='not on the page'),
+        finding(text),
+        finding(text, date_text='2026-11-05'),
+        None,
+        finding('운영 소식', label='menu'),
+        finding(text, label='unknown'),
+    ]}
+    dropped = []
+    rows = validate_extraction(payload, text, dropped=dropped)
+    assert [r['quote'] for r in rows] == [text, '운영 소식']
+    assert all(text[r['span_start']:r['span_end']] == r['quote'] for r in rows)
+    assert dropped == [
+        '0:quote_not_exact,quote_len=15,in_text=0',
+        '2:date_not_verbatim',
+        '3:shape_invalid,finding=not_object',
+        '5:label_invalid,label=unknown',
+    ]
+    assert validate_extraction(payload, text) == rows
+
+
+def test_validate_extraction_all_invalid_preserves_primary_code_and_every_miss():
+    text = '달빛정원의 운영 소식입니다.'
+    with pytest.raises(TaskReject) as rejected:
+        validate_extraction({'findings': [
+            finding(text, quote='not on the page'),
+            finding(text, date_text='2026-11-05'),
+            None,
+        ]}, text)
+    assert rejected.value.code == 'quote_not_exact'
+    assert rejected.value.detail == (
+        '0:quote_not_exact,quote_len=15,in_text=0 '
+        '1:date_not_verbatim 2:shape_invalid,finding=not_object'
+    )
+
+
+@pytest.mark.parametrize('payload,code,detail', [
+    (None, 'shape_invalid', 'findings=missing'),
+    ([], 'shape_invalid', 'findings=missing'),
+    ({}, 'shape_invalid', 'findings=missing'),
+    ({'findings': None}, 'shape_invalid', 'findings=missing'),
+    ({'findings': {}}, 'shape_invalid', 'findings=missing'),
+    ({'findings': [finding('달빛정원')] * 9}, 'too_many_findings', 'n=9'),
+    ({'findings': [None] * 9}, 'too_many_findings', 'n=9'),
+])
+def test_validate_extraction_structural_rejections_are_unchanged(payload, code, detail):
+    with pytest.raises(TaskReject) as rejected:
+        validate_extraction(payload, '달빛정원')
+    assert (rejected.value.code, rejected.value.detail) == (code, detail)
+
+
+def test_validate_extraction_empty_findings_remain_valid():
+    dropped = []
+    assert validate_extraction({'findings': []}, '', dropped=dropped) == []
+    assert dropped == []
 
 
 def test_gap_planner_validates_ids_and_returns_search_jobs(world):
@@ -162,6 +221,64 @@ def test_monthly_extract_balance_gate_uses_qwen_and_preserves_review_hold(world,
     row = world.execute('SELECT model,workload,state FROM ai_request').fetchone()
     assert tuple(row) == (QWEN_MODEL, 'recheck', 'done')
     assert world.execute('SELECT state FROM ai_review_hold WHERE attempt_id=?', (aid,)).fetchone()[0] == 'held'
+
+
+def _recheck_attempt(conn, budget):
+    from kg_collect import recheck
+    recheck.ensure_schedule(conn, SEED)
+    conn.execute("UPDATE restaurant_recheck SET next_due_at=CASE restaurant_id WHEN 'r_dal' THEN '2026-01-01T00:00:00Z' ELSE '2099-01-01T00:00:00Z' END")
+    conn.commit()
+    assert recheck.admit(conn, discover.load_seeds(), budget) == 1
+    return conn.execute('SELECT attempt_id FROM restaurant_recheck_attempt').fetchone()[0]
+
+
+def test_recheck_over_cap_rejects_and_restores_the_review_hold(world):
+    text = '달빛정원의 운영 소식입니다.'
+    calls = []
+    a = Adapters(Client(Budget(meter(world)), key='dummy',
+                        transport=lambda *args: calls.append(1) or response({'findings': [finding(text) for _ in range(3)]}),
+                        balance_transport=healthy_balance))
+    aid = _recheck_attempt(world, a.client.budget)
+    assert a.extract(doc(text), [], Gazetteer(world), workload='recheck', attempt_id=aid) == []
+    # Three valid rows still breach the recheck ceiling: one billed retry, then the document fails.
+    assert len(calls) == 2 and a.stats['called'] == 1 and a.stats['failed'] == 1
+    assert a.stats['findings'] == 0 and a.stats['findings_dropped'] == 0
+    assert a.client.stopped is None and a.client.status == 'enabled' and not a.defer_extract
+    rows = world.execute("SELECT state,error,result_json FROM ai_request WHERE task='web-extract-2'").fetchall()
+    assert len(rows) == 2 and all(r['state'] == 'failed' and r['error'] == 'too_many_findings' and r['result_json'] is None for r in rows)
+    assert world.execute('SELECT COUNT(*) FROM extraction').fetchone()[0] == 0
+    # The finally path releases the speculative hold because no reviewable rows survived.
+    assert world.execute('SELECT state FROM ai_review_hold WHERE attempt_id=?', (aid,)).fetchone()[0] == 'released'
+
+
+@pytest.mark.parametrize('valid,invalid', [(2, 1), (2, 2), (1, 2)])
+def test_recheck_partial_drops_keep_valid_rows_under_the_cap(world, valid, invalid):
+    text = '달빛정원의 운영 소식입니다.'
+    good = [finding(text), finding('운영 소식', label='menu')][:valid]
+    bad = [finding(text, quote='not on the page'), finding(text, date_text='2026-11-05')][:invalid]
+    tokens = ['quote_not_exact,quote_len=15,in_text=0', 'date_not_verbatim'][:invalid]
+    expected_dropped = ' '.join('%d:%s' % (valid + i, token) for i, token in enumerate(tokens))
+    calls = []
+    a = Adapters(Client(Budget(meter(world)), key='dummy',
+                        transport=lambda *args: calls.append(1) or response({'findings': good + bad}),
+                        balance_transport=healthy_balance))
+    aid = _recheck_attempt(world, a.client.budget)
+    rows = a.extract(doc(text), [], Gazetteer(world), workload='recheck', attempt_id=aid)
+    # Dropping the invalid findings brings the >2-finding response under the ceiling: no retry.
+    assert len(calls) == 1 and len(rows) == valid and a.stats['failed'] == 0
+    assert [r['quote'] for r in rows] == [r['quote'] for r in good]
+    assert all(r['pending_only'] for r in rows)
+    assert a.stats['findings'] == valid and a.stats['findings_dropped'] == invalid
+    assert a.client.stopped is None and a.client.status == 'enabled' and not a.defer_extract
+    # Reviewable rows survive, so the hold stays held for the review stage.
+    assert world.execute('SELECT state FROM ai_review_hold WHERE attempt_id=?', (aid,)).fetchone()[0] == 'held'
+    for r in rows:
+        meta = json.loads(r['model_meta_json'])
+        assert meta['workload'] == 'recheck' and meta['dropped'] == expected_dropped
+        assert 'not on the page' not in meta['dropped'] and '2026-11-05' not in meta['dropped'] and text not in meta['dropped']
+    request = world.execute("SELECT state,error,result_json FROM ai_request WHERE task='web-extract-2'").fetchone()
+    assert request['state'] == 'done' and request['error'] is None
+    assert json.loads(request['result_json'])['dropped'] == expected_dropped.split(' ')
 
 
 def test_zero_rule_hard_extraction_unknown_date_and_review_only(world):
@@ -351,15 +468,56 @@ def test_near_quote_and_too_many_findings_store_no_evidence(world):
     assert world.execute('SELECT COUNT(*) FROM extraction').fetchone()[0] == 0
 
 
-def test_one_bad_finding_rejects_the_whole_response(world):
+def test_bad_findings_are_dropped_and_valid_finding_is_stored_pending(world):
     text = '달빛정원의 운영 소식입니다.'
-    payload = {'findings': [finding(text), finding(text, quote='not on the page')]}
-    a = adapter(world, payload)
-    assert a.extract(doc(text), [], Gazetteer(world)) == []
-    error = world.execute("SELECT error FROM ai_request WHERE state='failed'").fetchone()[0]
-    assert error.startswith('quote_not_exact ') and '0:quote_not_exact' not in error and '1:quote_not_exact' in error
-    assert 'not on the page' not in error
-    assert world.execute('SELECT COUNT(*) FROM extraction').fetchone()[0] == 0
+    payload = {'findings': [finding(text), finding(text, quote='not on the page'),
+                            finding(text, date_text='2026-11-05')]}
+    calls = []
+    a = Adapters(Client(Budget(meter(world)), key='dummy',
+                        transport=lambda *args: calls.append(1) or response(payload),
+                        balance_transport=healthy_balance))
+    before = world.execute('SELECT COUNT(*) FROM claim').fetchone()[0]
+    assert process_doc(world, doc(text), Gazetteer(world), tier='official', model_adapter=a)['new'] == 1
+    assert len(calls) == 1 and a.stats['called'] == 1 and a.stats['failed'] == 0
+    assert a.stats['findings'] == 1 and a.stats['findings_dropped'] == 2
+    assert a.client._schema_rejections == 0 and a.client.stopped is None and not a.defer_extract
+    row = world.execute("SELECT * FROM extraction WHERE extractor='deepseek:web'").fetchone()
+    assert row['quote'] == text and row['pending_only'] == 1 and row['asserted_by'] == 'ai_inference'
+    detail = json.loads(row['model_meta_json'])['dropped']
+    assert detail == '1:quote_not_exact,quote_len=15,in_text=0 2:date_not_verbatim'
+    assert 'not on the page' not in detail and '2026-11-05' not in detail and text not in detail
+    assert world.execute('SELECT COUNT(*) FROM claim').fetchone()[0] == before
+    requests = world.execute('SELECT state,error,result_json FROM ai_request').fetchall()
+    assert len(requests) == 1 and requests[0]['state'] == 'done' and requests[0]['error'] is None
+    assert len(json.loads(requests[0]['result_json'])['dropped']) == 2
+
+
+@pytest.mark.parametrize('cache', ['adapter', 'client', 'legacy'])
+def test_cached_extraction_preserves_drop_reporting_without_another_paid_call(world, cache):
+    text = '달빛정원의 운영 소식입니다.'
+    a = adapter(world, {'findings': [finding(text), finding(text, quote='not on the page')]})
+    rows = a.extract(doc(text), [], Gazetteer(world))
+    assert len(rows) == 1 and a.stats['findings_dropped'] == 1
+    if cache == 'legacy':
+        request = world.execute('SELECT request_key,result_json FROM ai_request').fetchone()
+        legacy_rows = json.loads(request['result_json'])['findings']
+        world.execute('UPDATE ai_request SET result_json=? WHERE request_key=?',
+                      (json.dumps(legacy_rows), request['request_key']))
+        world.commit()
+    if cache != 'adapter':
+        a = Adapters(Client(Budget(meter(world)), key='dummy',
+                            transport=lambda *args: pytest.fail('paid request for a cached extraction'),
+                            balance_transport=healthy_balance))
+    else:
+        a.client.call = lambda *args, **kwargs: pytest.fail('adapter cache missed')
+    billed = world.execute('SELECT SUM(units) FROM ai_request').fetchone()[0]
+    cached_rows = a.extract(doc(text), [], Gazetteer(world))
+    assert len(cached_rows) == 1 and cached_rows[0]['quote'] == text
+    assert a.stats['findings_dropped'] == {'adapter': 2, 'client': 1, 'legacy': 0}[cache]
+    detail = json.loads(cached_rows[0]['model_meta_json'])['dropped']
+    assert detail == ('' if cache == 'legacy' else '1:quote_not_exact,quote_len=15,in_text=0')
+    assert world.execute('SELECT COUNT(*) FROM ai_request').fetchone()[0] == 1
+    assert world.execute('SELECT SUM(units) FROM ai_request').fetchone()[0] == billed
 
 
 def test_category_is_kept_when_the_retry_cannot_be_reserved(world):

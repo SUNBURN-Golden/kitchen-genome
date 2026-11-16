@@ -125,8 +125,14 @@ def normalize_finding(raw, text):
     return out
 
 
-def validate_extraction(obj, text):
-    """Accept every finding or reject the whole object. The detail lists every miss."""
+def validate_extraction(obj, text, *, dropped=None):
+    """Return valid findings, optionally appending safe rejection tokens to dropped.
+
+    Reject malformed objects and oversized lists as a whole. Drop individual
+    findings that fail validation, but reject a nonempty list with no valid rows
+    using the first problem's code and every problem's detail. An empty list is
+    valid. Quotes are validated unchanged by normalize_finding().
+    """
     if not isinstance(obj, dict) or not isinstance(obj.get('findings'), list):
         raise TaskReject('shape_invalid', 'findings=missing')
     findings = obj['findings']
@@ -141,9 +147,11 @@ def validate_extraction(obj, text):
             if exc.detail:
                 item += ',' + exc.detail
             problems.append(item)
-    if problems:
+    if problems and not rows:
         primary = problems[0].split(':', 1)[1].split(',', 1)[0]
         raise TaskReject(primary, ' '.join(problems))
+    if dropped is not None:
+        dropped.extend(problems)
     return rows
 
 
@@ -188,7 +196,7 @@ class Adapters:
         self.article_results = {}
         # Observable extraction funnel: a production no-op must not hide behind ai=enabled.
         self.stats = {'considered': 0, 'skipped_filter': 0, 'skipped_no_targets': 0,
-                      'eligible': 0, 'plan_skipped_targets': 0, 'skipped_balance': 0, 'skipped_not_needed': 0, 'skipped_budget': 0, 'called': 0, 'failed': 0, 'findings': 0}
+                      'eligible': 0, 'plan_skipped_targets': 0, 'skipped_balance': 0, 'skipped_not_needed': 0, 'skipped_budget': 0, 'called': 0, 'failed': 0, 'findings': 0, 'findings_dropped': 0}
 
     def _budget_stop(self, exc=None, workload='fresh'):
         """Defer rechecks independently; a shared cap pause lets rules finish.
@@ -387,18 +395,25 @@ class Adapters:
                 return []
 
         def validate(obj):
-            rows = validate_extraction(obj, text)
+            dropped = []
+            rows = validate_extraction(obj, text, dropped=dropped)
             if workload == 'recheck' and len(rows) > 2:
                 raise TaskReject('too_many_findings')
-            return rows
+            # Cache diagnostics with the rows: Client cache hits bypass validation.
+            return {'findings': rows, 'dropped': dropped}
         self.stats['called'] += int(cached is None)
         rows = []
         try:
             if cached is None:
-                rows = self.client.call('web-extract-2', EXTRACT_INSTRUCTION, article_data(body, text), validate, max_tokens=max_output)
-                self.article_results[cache_key] = (rows, dict(self.client.last_meta), text)
+                extraction = self.client.call('web-extract-2', EXTRACT_INSTRUCTION, article_data(body, text), validate, max_tokens=max_output)
+                # Results cached before drop reporting contain only the row list.
+                if isinstance(extraction, list):
+                    extraction = {'findings': extraction, 'dropped': []}
+                rows = extraction['findings']
+                self.article_results[cache_key] = (extraction, dict(self.client.last_meta), text)
             else:
-                rows, meta, text = cached
+                extraction, meta, text = cached
+                rows = extraction['findings']
                 self.client.last_meta = meta
         except DeepSeekError:
             if self.client.status == 'paused' and self.client.stopped in PAUSES:
@@ -419,11 +434,13 @@ class Adapters:
             if workload == 'recheck' and cached is None and not rows:
                 from .recheck import restore_review_hold
                 restore_review_hold(gaz.conn, attempt_id, previous_hold)
+        dropped = extraction['dropped']
+        self.stats['findings_dropped'] += len(dropped)
         result = []
         for row in rows:
             r = {**row, 'epistemic': 'inference', 'asserted_by': 'ai_inference', 'pending_only': True, 'extractor': 'deepseek:web',
                  'extractor_version': 'web-extract-2', 'published_at': doc.published_at,
-                 'model_meta_json': json.dumps({**self.client.last_meta, 'workload': workload, 'partial': self.window_partial, 'source_start': body['source_start'], 'snapshot_key': body['snapshot_key']}, sort_keys=True),
+                 'model_meta_json': json.dumps({**self.client.last_meta, 'workload': workload, 'partial': self.window_partial, 'source_start': body['source_start'], 'snapshot_key': body['snapshot_key'], 'dropped': ' '.join(dropped)}, sort_keys=True),
                  'extraction_id': stable_id('ext', body['url'], self.client.last_meta['request_id'], json.dumps(row, sort_keys=True))}
             # Exact known matches only. Never create targets from inference.
             for field, kind in (('chef', 'chef'), ('restaurant', 'restaurant'), ('org', 'restaurant')):

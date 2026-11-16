@@ -146,7 +146,12 @@ An extraction rejection sets `reason=` to one category: `shape_invalid`,
 `name_invalid`, `date_not_iso`, `date_not_verbatim`, `mentorship_unsupported`,
 or `field_invalid`. `ai_request.error` adds a sanitized index list such as
 `0:quote_not_exact,quote_len=12,in_text=0`. It does not store the quote, names,
-dates, page text, or response body. Run `749a8bdcf4fe` stored only
+dates, page text, or response body. If some findings pass validation, extraction
+keeps those rows without retrying and drops the failed findings. The adapter's
+`findings_dropped` counter records the drops, and each retained row's
+`model_meta_json.dropped` contains the same safe index tokens. A nonempty response
+with no valid findings still rejects and retries as before; an empty findings
+list remains valid. Run `749a8bdcf4fe` stored only
 `invalid_task_json` because that body was discarded. The extraction instruction
 now states the same limits (at most 8 findings, an exact quote, no date
 conversion, names copied from the page). Schema version stays `json-2`, so a
