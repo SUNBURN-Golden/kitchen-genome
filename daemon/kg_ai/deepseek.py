@@ -4,8 +4,9 @@ The current DeepSeek API enables thinking when `thinking` is omitted. JSON mode
 then replaces an unrecognized completion with spaces while finish_reason stays
 `stop` and usage is still billed. That blank body is not task JSON. One bounded
 retry is allowed for blank content and for schema rejection. A second failure
-skips the task; three rejected tasks pause this run. Redirects, proxies, raw
-bodies, and partial results are not kept.
+skips the task; three rejected tasks pause this run. Redirects, proxies, and raw
+bodies are not kept. Extraction retains independently validated findings when
+other findings fail evidence checks.
 """
 import hashlib
 import json
