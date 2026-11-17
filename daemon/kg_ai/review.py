@@ -363,12 +363,17 @@ def review(conn, seed_path, log_path, raw_dir, *, client=None, daily_cap=None, l
     def fits(batch):
         return reserved_tokens(batch) <= client.budget.room_tokens()
 
+    def ever_fits_tokens(batch):
+        """Most tokens this batch's workload could ever reserve under the daily cap; None means never close."""
+        cap = daily_cap if batch[0]['workload'] == 'fresh' else min(8, .4 * daily_cap)
+        if cap <= 0:
+            return None
+        return int(cap / meter.unit_costs['llm_tokens_k'] * 1000)
+
     def use_context(f, shared, text, segments):
         f['_source'] = {**shared, 'text': text, 'context_digest': digest(text), 'source_segments': segments}
         f['_text'] = text
         f['_ctx'] = [{'start': i, 'end': i + len(f['quote'])} for i in occurrences(text, f['quote'])]
-
-    full_cap_tokens = int(daily_cap / meter.unit_costs['llm_tokens_k'] * 1000)
 
     for fs in groups.values():
         publication = min((f['published_at'] for f in fs if f['published_at']), default=None)
@@ -423,7 +428,8 @@ def review(conn, seed_path, log_path, raw_dir, *, client=None, daily_cap=None, l
                 h = len(batch) // 2
                 queue[:0] = [batch[:h], batch[h:]]
                 continue
-            if reserved_tokens(batch) > full_cap_tokens:
+            bound = ever_fits_tokens(batch)
+            if bound is not None and reserved_tokens(batch) > bound:
                 decide(batch[0], 'reject', 'review_unavailable: context_too_large', None)
                 continue
             stats['deferred_budget'] = stats.get('deferred_budget',0) + len(batch)

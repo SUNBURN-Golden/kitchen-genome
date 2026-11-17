@@ -153,7 +153,7 @@ def test_oversized_shared_context_uses_separate_minimal_contexts(env):
     assert contexts[0] != contexts[1]
 
 
-@pytest.mark.parametrize('daily_cap', [0, 5, 20])
+@pytest.mark.parametrize('daily_cap', [5, 20])
 def test_never_fitting_finding_is_closed_without_cost_cap(env, daily_cap):
     conn, sp, log, raw = env
     quote = '달빛정원 특별 메뉴를 소개한다'
@@ -184,6 +184,44 @@ def test_ever_fitting_bound_uses_configured_daily_cap(env, daily_cap, expected):
     assert stats['remaining'] == 0 and stats['stopped'] is None
     assert stats['approved'] == stats['calls'] == len(calls) == int(expected == 'approve')
     assert stats['rejected'] == int(expected == 'reject')
+
+
+def test_recheck_never_fits_bound_uses_recheck_sub_cap(env):
+    conn, sp, log, raw = env
+    quote = '달빛정원 특별 메뉴를 소개한다'
+    text = (quote + '. ' + '배경 설명이 이어진다. ' * 80) * 15
+    (Path(raw) / 'h/t.txt').write_text(text, encoding='utf-8')
+    add(conn, 'x1', 'menu', quote, rest='달빛정원')
+    conn.execute("UPDATE extraction SET workload='recheck' WHERE extraction_id='x1'"); conn.commit()
+    calls = []
+    # Reservation sits between the recheck sub-cap (min(8, .4*20)=8 units -> 16k tokens)
+    # and the full 20-unit cap (40k tokens): a fresh finding this size is reviewed, a recheck never fits.
+    stats = rv.review(conn, str(sp), str(log), raw, client=client_for(conn, {'x1': 'approve'}, calls), daily_cap=20)
+    assert (stats['calls'], stats['rejected'], stats['remaining'], stats['stopped']) == (0, 1, 0, None)
+    assert stats['cost_used'] == 0 and stats.get('deferred_budget', 0) == 0 and calls == []
+    row = conn.execute("SELECT state,payload_json FROM review_queue WHERE subject_id='x1'").fetchone()
+    assert row['state'] == 'dismissed'
+    assert json.loads(row['payload_json'])['ai_review']['reason'] == 'review_unavailable: context_too_large'
+    assert conn.execute('SELECT status FROM daemon_run WHERE run_id=?', (stats['run_id'],)).fetchone()[0] == 'succeeded'
+
+
+@pytest.mark.parametrize('huge', [False, True])
+def test_zero_cap_defers_instead_of_closing(env, huge):
+    conn, sp, log, raw = env
+    quote = '달빛정원 특별 메뉴를 소개한다'
+    if huge:
+        text = (quote + '. ' + '배경 설명이 이어진다. ' * 80) * 100
+        (Path(raw) / 'h/t.txt').write_text(text, encoding='utf-8')
+        add(conn, 'x1', 'menu', quote, rest='달빛정원')
+    else:
+        add(conn, 'x1', 'opening', '서울 한남동의 달빛정원은 2026-10-01 문을 열었다', rest='달빛정원', date='2026-10-01')
+    calls = []
+    stats = rv.review(conn, str(sp), str(log), raw, client=client_for(conn, {'x1': 'approve'}, calls), daily_cap=0)
+    assert (stats['calls'], stats['rejected'], stats['remaining'], stats['stopped']) == (0, 0, 1, 'cost_cap')
+    assert stats['deferred_budget'] == 1 and stats['cost_used'] == 0 and calls == []
+    assert conn.execute("SELECT state FROM review_queue WHERE subject_id='x1'").fetchone()[0] == 'open'
+    assert not log.exists()
+    assert conn.execute('SELECT status FROM daemon_run WHERE run_id=?', (stats['run_id'],)).fetchone()[0] == 'paused_cost_cap'
 
 
 @pytest.mark.parametrize('missing', ['target', 'field'])
