@@ -19,7 +19,7 @@ from kg_collect.net import PoliteNet, Response
 from kg_collect.limits import Limits, DailyLimit
 from kg_daemon import db, stages, collect_bridge
 from kg_daemon.runner import Daemon
-from test_deepseek_client import meter, response
+from test_deepseek_client import envelope, meter, response
 
 
 @pytest.fixture
@@ -354,6 +354,65 @@ def test_quote_rejection_fails_one_document_and_next_document_is_extracted(world
     assert all(r['error'].startswith('quote_not_exact') and r['result_json'] is None for r in rows[:2])
 
 
+@pytest.mark.parametrize('provider', ['deepseek', 'qwen'])
+@pytest.mark.parametrize('retry_fits', [False, True])
+def test_invalid_json_skips_one_document_and_extracts_next(world, provider, retry_fits):
+    from test_deepseek_balance import wallet
+    text = '달빛정원의 운영 소식입니다.'
+    calls = []
+    def transport(payload, key):
+        calls.append(json.loads(payload))
+        if len(calls) <= (2 if retry_fits else 1):
+            # Like production, this fits the original byte reservation, but
+            # leaves too little of the 20-unit cap for a large correction.
+            usage = None if retry_fits else {'prompt_tokens': 7142, 'completion_tokens': 633, 'total_tokens': 7775}
+            return envelope('Result: {"findings": ', usage=usage)
+        return response({'findings': [finding(text)]})
+    client = Client(Budget(meter(world), daily_cap=20), key='dummy',
+                    transport=transport if provider == 'deepseek' else lambda *a: pytest.fail('primary called'),
+                    balance_transport=healthy_balance if provider == 'deepseek' else lambda key: wallet(available=False),
+                    fallback_key='fixture-backup',
+                    fallback_transport=transport if provider == 'qwen' else lambda *a: pytest.fail('backup called'))
+    a, gaz = Adapters(client), Gazetteer(world)
+    first_text = text if retry_fits else text + '가' * 10000
+    assert process_doc(world, doc(first_text), gaz, tier='official', model_adapter=a)['new'] == 0
+    assert len(calls) == (2 if retry_fits else 1)
+    assert client.stopped is None and client.status == 'enabled'
+    assert client._schema_rejections == 1 and a.stats['failed'] == 1 and not a.defer_extract
+    billed = client.budget.meter.used
+    if retry_fits:
+        # Identical billed requests are never replayed or counted again.
+        assert process_doc(world, doc(first_text), gaz, tier='official', model_adapter=a)['new'] == 0
+        assert client.budget.meter.used == billed and client._schema_rejections == 1
+    assert process_doc(world, doc(text, '2'), gaz, tier='official', model_adapter=a)['new'] == 1
+    assert len(calls) == (3 if retry_fits else 2)
+    assert client.stopped is None and not a.defer_extract
+    assert a.stats['findings'] == 1 and client.budget.meter.used < 20
+    rows = world.execute('SELECT model,state,error,result_json FROM ai_request ORDER BY rowid').fetchall()
+    assert [r['state'] for r in rows] == (['failed', 'failed', 'done'] if retry_fits else ['failed', 'done'])
+    assert all(r['error'].startswith('invalid_task_json len=') and r['result_json'] is None for r in rows[:-1])
+    assert all(r['model'] == (QWEN_MODEL if provider == 'qwen' else 'deepseek-chat') for r in rows)
+
+
+@pytest.mark.parametrize('provider', ['deepseek', 'qwen'])
+def test_true_reservation_cap_still_pauses_collection(world, provider, monkeypatch):
+    from kg_daemon.runner import CostCapExceeded
+    from test_deepseek_balance import wallet
+    budget = Budget(meter(world))
+    def exhausted(*a):
+        raise CostCapExceeded('concurrent reservation consumed available room')
+    monkeypatch.setattr(budget, 'reserve', exhausted)
+    client = Client(budget, key='dummy', transport=lambda *a: pytest.fail('unreserved primary'),
+                    balance_transport=healthy_balance if provider == 'deepseek' else lambda key: wallet(available=False),
+                    fallback_key='fixture-backup', fallback_transport=lambda *a: pytest.fail('unreserved backup'))
+    a, gaz = Adapters(client), Gazetteer(world)
+    for suffix in ('1', '2'):
+        assert process_doc(world, doc('달빛정원의 운영 소식입니다.', suffix), gaz, tier='official', model_adapter=a)['new'] == 0
+        assert client.stopped == 'cost_cap' and client.status == 'paused' and a.defer_extract
+    assert client._schema_rejections == 0
+    assert world.execute('SELECT COUNT(*) FROM ai_request').fetchone()[0] == 0
+
+
 @pytest.mark.parametrize('failure', ['transport_unknown', 'balance_low'])
 def test_provider_failures_still_extract_later_documents_via_qwen(world, failure):
     from test_deepseek_balance import wallet
@@ -543,7 +602,8 @@ def test_category_is_kept_when_the_retry_cannot_be_reserved(world):
     text = LEAD + ('가' * 12000)
     a = Adapters(client)
     assert a.extract(doc(text), [], Gazetteer(conn)) == []
-    assert len(calls) == 1 and a.client.stopped == 'quote_not_exact' and a.stats['called'] == 1 and a.stats['failed'] == 1
+    assert len(calls) == 1 and a.client.stopped is None and a.stats['called'] == 1 and a.stats['failed'] == 1
+    assert client._schema_rejections == 1 and client.status == 'enabled'
     row = conn.execute("SELECT state, error, result_json, completion_tokens FROM ai_request WHERE task='web-extract-2'").fetchone()
     assert row['state'] == 'failed' and row['result_json'] is None and row['completion_tokens'] == 1182
     assert row['error'].startswith('quote_not_exact ') and 'not on the page' not in row['error'] and '2021-05' not in row['error']
