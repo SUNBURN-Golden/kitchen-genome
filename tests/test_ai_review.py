@@ -101,13 +101,103 @@ def test_approve_publishes_with_badge_and_reject_closes(env):
 def test_unlinked_approval_and_cap_stop_leaves_rest_open(env):
     conn, sp, log, raw = env
     add(conn, 'x1', 'opening', '서울 한남동의 달빛정원은 2026-10-01 문을 열었다', chef=None, rest=None)
-    s = rv.review(conn, str(sp), str(log), raw, client=client_for(conn, {'x1': 'approve'}, []), daily_cap=0)
+    calls = []
+    client = client_for(conn, {'x1': 'approve'}, calls)
+    # The finding fits a fresh day's cap, but another task has used today's allowance.
+    client.budget.reserve('earlier-task', 'extract', 'deepseek-chat', 39_800)
+    s = rv.review(conn, str(sp), str(log), raw, client=client, daily_cap=20)
     assert s['stopped'] == 'cost_cap' and s['remaining'] == 1 and s['approved'] == 0
+    assert s['deferred_budget'] == 1 and s['rejected'] == 0 and calls == []
+    assert conn.execute("SELECT state FROM review_queue WHERE subject_id='x1'").fetchone()[0] == 'open'
+    conn.execute("UPDATE ai_request SET day='2000-01-01'"); conn.commit()
     s = rv.review(conn, str(sp), str(log), raw, client=client_for(conn, {'x1': 'approve'}, []), daily_cap=20)
     assert s['approved'] == 1 and s['remaining'] == 0
     seed = json.loads(sp.read_text(encoding='utf-8'))
     # no restaurant/chef text: matched by nothing -> published to the unlinked list, still badged and sourced
     assert seed['ai_reviewed_unlinked'][0]['badge'] == 'AI 검토'
+
+
+def test_oversized_shared_context_uses_separate_minimal_contexts(env):
+    conn, sp, log, raw = env
+    opening = '서울 한남동의 달빛정원은 2026-10-01 문을 열었다'
+    employment = '달빛정원에서 한도윤 셰프가 총괄 셰프를 맡는다'
+    text = ''.join((opening if i in (0, 25, 50, 75) else employment if i == 99 else f'달빛정원 목록 {i}')
+                   + '. ' + '배경 설명이 이어진다. ' * 80 for i in range(100))
+    (Path(raw) / 'h/t.txt').write_text(text, encoding='utf-8')
+    _, text = rv.source_text(raw, 'h/t.txt')
+    add(conn, 'x_open', 'opening', opening, rest='달빛정원', date='2026-10-01')
+    add(conn, 'x_job', 'employment_claim', employment, chef='한도윤', rest='달빛정원', role='총괄 셰프')
+    gaz = rv.Gazetteer(conn)
+    spans = rv.eligibility(gaz, text)['spans']
+    bounded, _ = rv.context_windows(text, [(max(0, m['start'] - rv.CONTEXT), min(len(text), m['end'] + rv.CONTEXT)) for m in spans])
+    assert len(bounded.encode('utf-8')) > 20 / rv.UNIT_COSTS['llm_tokens_k'] * 1000
+    calls = []
+    stats = rv.review(conn, str(sp), str(log), raw, client=client_for(conn, {'x_open': 'approve', 'x_job': 'approve'}, calls))
+    assert (stats['calls'], stats['approved'], stats['remaining'], stats['stopped']) == (2, 2, 0, None)
+    contexts = []
+    for call in calls:
+        article = json.loads(call['messages'][1]['content'])
+        findings = json.loads(call['messages'][2]['content'])['findings']
+        assert len(findings) == 1
+        finding = findings[0]
+        small = article['text']
+        contexts.append(small)
+        assert len(small) < 2000 and '목록' not in small
+        assert article['article_key'] == rv.article_key('https://press.test/a', text)
+        assert article['context_digest'] == rv.digest(small)
+        assert small == '\n[…]\n'.join(text[a:b] for a, b in article['source_segments'])
+        assert rv.eligibility(gaz, small)['target_ids'] and rv.precheck(finding, small)[0] is None
+        assert finding['occurrences'] == [{'start': i, 'end': i + len(finding['quote'])}
+                                          for i in rv.occurrences(small, finding['quote'])]
+        assert len(finding['occurrences']) == (4 if finding['id'] == 'x_open' else 1)
+    assert contexts[0] != contexts[1]
+
+
+@pytest.mark.parametrize('daily_cap', [0, 5, 20])
+def test_never_fitting_finding_is_closed_without_cost_cap(env, daily_cap):
+    conn, sp, log, raw = env
+    quote = '달빛정원 특별 메뉴를 소개한다'
+    text = (quote + '. ' + '배경 설명이 이어진다. ' * 80) * 100
+    (Path(raw) / 'h/t.txt').write_text(text, encoding='utf-8')
+    add(conn, 'x_huge', 'menu', quote, rest='달빛정원')
+    calls = []
+    stats = rv.review(conn, str(sp), str(log), raw, client=client_for(conn, {}, calls), daily_cap=daily_cap)
+    assert (stats['calls'], stats['rejected'], stats['remaining'], stats['stopped']) == (0, 1, 0, None)
+    assert stats['cost_used'] == 0 and stats.get('deferred_budget', 0) == 0 and calls == []
+    row = conn.execute("SELECT state,payload_json FROM review_queue WHERE subject_id='x_huge'").fetchone()
+    assert row['state'] == 'dismissed'
+    assert json.loads(row['payload_json'])['ai_review']['reason'] == 'review_unavailable: context_too_large'
+    entry = json.loads(log.read_text(encoding='utf-8'))
+    assert (entry['action'], entry['reason'], entry['model_meta']) == ('reject', 'review_unavailable: context_too_large', None)
+    assert conn.execute('SELECT status FROM daemon_run WHERE run_id=?', (stats['run_id'],)).fetchone()[0] == 'succeeded'
+
+
+@pytest.mark.parametrize('daily_cap, expected', [(5, 'reject'), (20, 'approve')])
+def test_ever_fitting_bound_uses_configured_daily_cap(env, daily_cap, expected):
+    conn, sp, log, raw = env
+    quote = '달빛정원 특별 메뉴를 소개한다'
+    text = (quote + '. ' + '배경 설명이 이어진다. ' * 80) * 15
+    (Path(raw) / 'h/t.txt').write_text(text, encoding='utf-8')
+    add(conn, 'x1', 'menu', quote, rest='달빛정원')
+    calls = []
+    stats = rv.review(conn, str(sp), str(log), raw, client=client_for(conn, {'x1': 'approve'}, calls), daily_cap=daily_cap)
+    assert stats['remaining'] == 0 and stats['stopped'] is None
+    assert stats['approved'] == stats['calls'] == len(calls) == int(expected == 'approve')
+    assert stats['rejected'] == int(expected == 'reject')
+
+
+@pytest.mark.parametrize('missing', ['target', 'field'])
+def test_minimal_context_preserves_eligibility_and_precheck_guards(env, missing):
+    conn, sp, log, raw = env
+    quote = '특별 메뉴를 소개한다' if missing == 'target' else '달빛정원 특별 메뉴를 소개한다'
+    text = '한도윤 셰프. ' + ('달빛정원 목록. ' + '배경 설명이 이어진다. ' * 80) * 100 + quote
+    (Path(raw) / 'h/t.txt').write_text(text, encoding='utf-8')
+    add(conn, 'x1', 'menu', quote, chef='한도윤' if missing == 'field' else None)
+    calls = []
+    stats = rv.review(conn, str(sp), str(log), raw, client=client_for(conn, {}, calls))
+    assert (stats['rejected'], stats['prechecked_rejects'], stats['remaining'], stats['stopped']) == (1, 0, 0, None)
+    assert calls == []
+    assert json.loads(log.read_text(encoding='utf-8'))['reason'] == 'review_unavailable: context_too_large'
 
 
 def test_review_batch_splitting_preserves_schema_rejection_brake(env):

@@ -89,6 +89,16 @@ def occurrences(text, quote, limit=None):
     return out
 
 
+def context_windows(text, intervals):
+    merged = []
+    for start, end in sorted(intervals):
+        if merged and start <= merged[-1][1]:
+            merged[-1] = (merged[-1][0], max(end, merged[-1][1]))
+        else:
+            merged.append((start, end))
+    return '\n[…]\n'.join(text[a:b] for a, b in merged), merged
+
+
 def precheck(f, text):
     """Deterministic gate. Returns (reject_reason | None, [occurrence excerpts])."""
     if text is None:
@@ -345,10 +355,20 @@ def review(conn, seed_path, log_path, raw_dir, *, client=None, daily_cap=None, l
     def max_tokens(batch):
         return 200 + 120 * len(batch)
 
-    def fits(batch):
+    def reserved_tokens(batch):
         data = payload_for(batch)
         payload = client._payload(INSTRUCTION, data, max_tokens(batch), None)[1]
-        return reservation_tokens(payload, max_tokens(batch)) <= client.budget.room_tokens()
+        return reservation_tokens(payload, max_tokens(batch))
+
+    def fits(batch):
+        return reserved_tokens(batch) <= client.budget.room_tokens()
+
+    def use_context(f, shared, text, segments):
+        f['_source'] = {**shared, 'text': text, 'context_digest': digest(text), 'source_segments': segments}
+        f['_text'] = text
+        f['_ctx'] = [{'start': i, 'end': i + len(f['quote'])} for i in occurrences(text, f['quote'])]
+
+    full_cap_tokens = int(daily_cap / meter.unit_costs['llm_tokens_k'] * 1000)
 
     for fs in groups.values():
         publication = min((f['published_at'] for f in fs if f['published_at']), default=None)
@@ -358,27 +378,36 @@ def review(conn, seed_path, log_path, raw_dir, *, client=None, daily_cap=None, l
         if fits(fs[:MAX_BATCH]):
             continue
         text = fs[0]['_text']
-        intervals = [(max(0,m['start']-CONTEXT), min(len(text),m['end']+CONTEXT)) for m in eligibility(gaz,text)['spans']]
+        target_spans = eligibility(gaz, text)['spans']
+        intervals = [(max(0,m['start']-CONTEXT), min(len(text),m['end']+CONTEXT)) for m in target_spans]
         for f in fs:
             intervals.extend((max(0,i-CONTEXT),min(len(text),i+len(f['quote'])+CONTEXT)) for i in occurrences(text,f['quote'],limit=len(text)))
-        merged = []
-        for start,end in sorted(intervals):
-            if merged and start <= merged[-1][1]:
-                merged[-1] = (merged[-1][0],max(end,merged[-1][1]))
-            else:
-                merged.append((start,end))
-        bounded = '\n[…]\n'.join(text[a:b] for a,b in merged)
+        bounded, merged = context_windows(text, intervals)
         if eligibility(gaz,bounded)['target_ids'] and all(precheck(f,bounded)[0] is None for f in fs):
             for f in fs:
-                f['_source'] = {**shared, 'text':bounded, 'context_digest':digest(bounded), 'source_segments':merged}
-                f['_text'] = bounded
-                f['_ctx'] = [{'start':i,'end':i+len(f['quote'])} for i in occurrences(bounded,f['quote'],limit=len(bounded))]
+                use_context(f, shared, bounded, merged)
+        if fits(fs[:MAX_BATCH]):
+            continue
+        for f in fs:
+            # Keep every verbatim occurrence, but no unrelated target windows from a long listing.
+            windows = [(max(0, i - CONTEXT), min(len(text), i + len(f['quote']) + CONTEXT))
+                       for i in occurrences(text, f['quote'])]
+            nearby_targets = [(m['start'], m['end']) for m in target_spans
+                              if any(m['start'] < end and start < m['end'] for start, end in windows)]
+            minimal, segments = context_windows(text, windows + nearby_targets)
+            if eligibility(gaz, minimal)['target_ids'] and precheck(f, minimal)[0] is None:
+                use_context(f, shared, minimal, segments)
 
     queue = []
     for fs in groups.values():
         fs.sort(key=lambda f: f['extraction_id'])
-        for i in range(0, len(fs), MAX_BATCH):
-            queue.append(fs[i:i + MAX_BATCH])
+        contexts = {}
+        for f in fs:
+            key = (f['_source']['context_digest'], tuple(f['_source'].get('source_segments', ())))
+            contexts.setdefault(key, []).append(f)
+        for context_fs in contexts.values():
+            for i in range(0, len(context_fs), MAX_BATCH):
+                queue.append(context_fs[i:i + MAX_BATCH])
     while queue and not stats['stopped']:
         batch = queue.pop(0)
         if not client.key:
@@ -393,6 +422,9 @@ def review(conn, seed_path, log_path, raw_dir, *, client=None, daily_cap=None, l
             if len(batch) > 1:
                 h = len(batch) // 2
                 queue[:0] = [batch[:h], batch[h:]]
+                continue
+            if reserved_tokens(batch) > full_cap_tokens:
+                decide(batch[0], 'reject', 'review_unavailable: context_too_large', None)
                 continue
             stats['deferred_budget'] = stats.get('deferred_budget',0) + len(batch)
             if queue:
