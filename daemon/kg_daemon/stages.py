@@ -21,6 +21,7 @@ from . import collect_bridge
 from . import registry as reg_mod
 from .claims import independent_sources, add_evidence, create_claim, host_of, link_evidence, open_conflict, queue_review, RANK
 from .db import ROOT, new_id, stable_id, utcnow
+from .date_repair import repair_timeline_dates
 from .ontology import AmbiguousMove, branch_state_asof, current_employment, move_chef, parse_iso_date, pending_moves
 from .runner import NoActiveSources, NonRetryable, StageContext, StageResult
 
@@ -492,6 +493,7 @@ def state_history_update(ctx: StageContext) -> StageResult:
 
 # ───────────── 8. service output recompute ─────────────
 def service_output_recompute(ctx: StageContext) -> StageResult:
+    repaired = repair_timeline_dates(ctx.conn)
     day = ctx.env.get('today') or utcnow()[:10]
     n = 0
     for ch in ctx.conn.execute('SELECT chef_id FROM chef').fetchall():
@@ -508,7 +510,7 @@ def service_output_recompute(ctx: StageContext) -> StageResult:
         n += 1
     n += _recompute_product_views(ctx, day)
     ctx.conn.commit()
-    return StageResult({'outputs_written': n, 'as_of': day})
+    return StageResult({'outputs_written': n, 'as_of': day, 'dates_repaired': repaired})
 
 
 def _upsert_out(ctx, key, subject, day, payload):
