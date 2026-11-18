@@ -102,6 +102,32 @@ def effective_date(x):
     return iso
 
 
+def normalized_effective_date(x):
+    """Validated (ISO date, precision), or None; publication is the only inferred year."""
+    from .ontology import parse_iso_date
+    from kg_collect.extract import DATE_RE, EN_MONTHS, relative_or_english_date
+
+    if x.get('date_iso'):
+        return parse_iso_date(x['date_iso'])
+    text = (x.get('date_text') or '').strip()
+    parsed = parse_iso_date(text)
+    if parsed:
+        return parsed
+    year = (x.get('published_at') or '')[:4]
+    # The bridge's English parser requires a year. Supply only the publication
+    # year for a standalone month-day, just as for Korean month-day dates.
+    english = re.fullmatch(r'([A-Za-z]+)\s+(\d{1,2}),?', text)
+    if english and english[1].lower() in EN_MONTHS and re.fullmatch(r'\d{4}', year):
+        return parse_iso_date(relative_or_english_date(f'{text.title()} {year}', year)[1])
+    parsed = parse_iso_date(effective_date(dict(x, date_text=text)))
+    korean = DATE_RE.search(text)
+    # iso_from_dateish drops an out-of-range day; do not turn a bad day into
+    # an apparently valid month when applying or repairing stored dates.
+    if korean and korean[3] and parsed and parsed[1] != 'day':
+        return None
+    return parsed
+
+
 def candidates(body, today) -> list[tuple]:
     """-> [(fact_type, payload, locator, quote)] from one collector extraction. Conservative by design."""
     x, ch, rs, org = body['collect'], body.get('chef'), body.get('restaurant'), body.get('org')

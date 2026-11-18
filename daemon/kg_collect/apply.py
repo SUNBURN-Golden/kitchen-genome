@@ -5,6 +5,7 @@ import json
 
 from kg_daemon import claims as cl
 from kg_daemon import ontology as ont
+from kg_daemon.collect_bridge import normalized_effective_date
 from kg_daemon.db import stable_id, utcnow
 
 BY = 'collect:apply'
@@ -107,7 +108,8 @@ def apply_status(conn, now: str | None = None, tier_of=lambda host: 'press') -> 
         if conn.execute('SELECT 1 FROM restaurant_status_event WHERE event_id=?', (eid,)).fetchone():
             continue
         kind = STATUS_KIND[e['label']]
-        d = e['date_iso'] or e['date_text'] or ''
+        parsed = normalized_effective_date(dict(e))
+        d, prec = parsed if parsed else (None, None)
         if kind in ('open', 'close') and conn.execute('SELECT 1 FROM restaurant_status_event WHERE branch_id=? AND kind=? AND COALESCE(effective_date,"")=COALESCE(?,"") AND state=\'active\'', (branch, kind, d or None)).fetchone():
             out['skipped'] += 1                       # same event already on file (seed or an earlier source): corroboration, not a duplicate row
             continue
@@ -117,7 +119,6 @@ def apply_status(conn, now: str | None = None, tier_of=lambda host: 'press') -> 
         ev = cl.add_evidence(conn, source_id=src, source_url=e['canonical_url'], collected_at=now, quote=e['quote'][:200], published_at=e['published_at'],
                              locator={'extraction_id': e['extraction_id'], 'span': [e['span_start'], e['span_end']]})
         cl.link_evidence(conn, cid, ev)
-        prec = 'day' if len(d) == 10 else 'month' if len(d) == 7 else 'year' if len(d) == 4 else None
         conn.execute("""INSERT OR IGNORE INTO restaurant_status_event(event_id,branch_id,kind,effective_date,effective_precision,detail,claim_id,created_at) VALUES (?,?,?,?,?,?,?,?)""",
                      (eid, branch, kind if kind != 'move' else 'move', d or None, prec, e['quote'][:200], cid, now))
         if kind in ('close', 'move', 'rename') and e['epistemic'] in ('claim', 'fact'):
