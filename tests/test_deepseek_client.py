@@ -9,7 +9,8 @@ import pytest
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / 'daemon'))
 from kg_ai.budget import Budget
 from kg_ai.deepseek import (Client, DeepSeekError, MAX_BODY, NoRedirect, RETRYABLE,
-                            SCHEMA_REJECT_LIMIT, TaskReject, URL)
+                            SCHEMA_REJECT_LIMIT, TaskReject, URL, failure_code,
+                            parse_json_content, stored_error)
 from kg_daemon.db import connect, migrate, new_id, utcnow
 from kg_daemon.runner import CostCapExceeded, CostMeter
 
@@ -288,9 +289,124 @@ def test_final_schema_rejections_pause_only_at_run_limit(conn, code):
         client.call('web-extract-1', 'JSON', {'document': 'later'}, lambda o: o)
     assert len(calls) == 6 and qcalls == []
     rows = conn.execute('SELECT state,error,result_json FROM ai_request').fetchall()
-    assert len(rows) == 6 and all(r['state'] == 'failed' and r['error'] == code and r['result_json'] is None for r in rows)
+    assert len(rows) == 6 and all(r['state'] == 'failed' and failure_code(r['error']) == code and r['result_json'] is None for r in rows)
     assert client.budget.meter.used > 0
     # The brake belongs to this Client, not to the persisted requests or day.
     later = Client(client.budget, key='dummy', transport=lambda *a: response(), balance_transport=healthy_balance)
     assert later.call('web-extract-1', 'JSON', {'document': 'later'}, lambda o: o) == {'ok': True}
     assert later.stopped is None and later.status == 'enabled'
+
+
+@pytest.mark.parametrize('content', [
+    'Here is the result: {"ok": true} Thanks.',
+    '{"ok": true} Done.',
+    'Result: {"ok": true}',
+    'Here is the result:\n```json\n{"ok": true}\n```\nDone.',
+    'Here is the result:\n```JSON\n{"ok": true}\n```\nDone.',
+    '```\n{"ok": true}\n```',
+    '```text\nother text\n```\nResult: ```json\n{"ok": true}\n```',
+    '{"ok": true, "text": "```json example```"}',
+    'Result: {"ok": true, "nested": {"text": "brace } and \\\" quote"}} Done.',
+])
+def test_wrapped_json_is_decoded_without_rewriting(content):
+    result = parse_json_content(content)
+    assert result['ok'] is True
+    if 'nested' in result:
+        assert result['nested'] == {'text': 'brace } and " quote'}
+
+
+@pytest.mark.parametrize('content', [
+    'Result: {"secret-payload": } Done.',
+    'Result: {"outer": {"ok": true}',
+    'Result: {"bad": } then {"ok": true}',
+    'Result: {"ok": true} {"other": true}',
+    '[{"ok": true}] trailing prose',
+    '{"bad": , "nested": {"ok": true}}',
+    'Result: {"text": "unclosed }',
+    'Intro ```json\n{"bad": , "nested": {"ok": true}}\n``` End',
+    'x' * 401 + '{"ok": true}',
+    '{"ok": true}' + 'x' * 401,
+])
+def test_invalid_json_keeps_only_structural_diagnostics(conn, content):
+    client = Client(Budget(meter(conn)), key='dummy',
+                    transport=lambda *a: envelope(content), balance_transport=healthy_balance)
+    with pytest.raises(DeepSeekError) as rejected:
+        client.call('task', 'JSON', {}, lambda o: pytest.fail('invalid JSON validated'))
+    assert failure_code(stored_error(rejected.value)) == 'invalid_task_json'
+    rows = conn.execute('SELECT error,result_json,state FROM ai_request').fetchall()
+    assert len(rows) == 2
+    for row in rows:
+        error = row['error']
+        assert failure_code(error) == 'invalid_task_json'
+        assert f'len={len(content)} pos=' in error
+        assert ' msg=' in error and ' starts=u' in error and ' ends=u' in error
+        assert 'secret-payload' not in error and 'nested' not in error
+        assert len(error) < 250
+        assert row['state'] == 'failed' and row['result_json'] is None
+
+
+@pytest.mark.parametrize('content', ['[]', '[{"ok": true}]', 'null', '1', 'true', '"hello"',
+                                     'Before ```json\n[]\n``` After'])
+def test_non_object_json_is_rejected(content):
+    with pytest.raises(DeepSeekError) as rejected:
+        parse_json_content(content)
+    assert failure_code(stored_error(rejected.value)) == 'invalid_task_json'
+
+
+def test_wrapped_json_still_passes_through_validation(conn):
+    seen = []
+    def validate(obj):
+        seen.append(obj)
+        raise TaskReject('shape_invalid')
+    client = Client(Budget(meter(conn)), key='dummy', balance_transport=healthy_balance,
+                    transport=lambda *a: envelope('Result: {"ok": true} Done.'))
+    with pytest.raises(TaskReject, match='^shape_invalid$'):
+        client.call('task', 'JSON', {}, validate)
+    assert seen == [{'ok': True}, {'ok': True}]
+    assert client._schema_rejections == 1 and client.stopped is None
+
+
+def test_unreservable_corrections_count_once_per_document_toward_limit(conn, monkeypatch):
+    budget = Budget(meter(conn))
+    reserve = budget.reserve
+    attempts = []
+    def bounded_reserve(*args):
+        attempts.append(args)
+        if len(attempts) % 2 == 0:
+            raise CostCapExceeded('concurrent reservation consumed retry room')
+        return reserve(*args)
+    monkeypatch.setattr(budget, 'reserve', bounded_reserve)
+    client = Client(budget, key='dummy', transport=lambda *a: envelope('{bad}'),
+                    balance_transport=healthy_balance)
+    for n in range(SCHEMA_REJECT_LIMIT):
+        with pytest.raises(DeepSeekError, match='^invalid_task_json$'):
+            client.call('task', 'JSON', {'document': n}, lambda o: o)
+        assert client._schema_rejections == n + 1
+        assert client.stopped == ('schema_reject_limit' if n + 1 == SCHEMA_REJECT_LIMIT else None)
+        if client.stopped is None:
+            with pytest.raises(DeepSeekError, match='^task_previously_rejected$'):
+                client.call('task', 'JSON', {'document': n}, lambda o: o)
+            assert len(attempts) == (n + 1) * 2 and client._schema_rejections == n + 1
+    assert len(attempts) == 6
+    assert conn.execute('SELECT COUNT(*) FROM ai_request').fetchone()[0] == 3
+
+
+@pytest.mark.parametrize('on_retry', [False, True])
+@pytest.mark.parametrize('invalid_output', [False, True])
+def test_over_reservation_stops_even_when_settling_invalid_json(conn, on_retry, invalid_output):
+    calls = []
+    def transport(*args):
+        calls.append(1)
+        if on_retry and len(calls) == 1:
+            return envelope('{bad}')
+        return envelope('{bad}' if invalid_output else '{}',
+                        usage={'prompt_tokens': 100000, 'completion_tokens': 0, 'total_tokens': 100000})
+    client = Client(Budget(meter(conn)), key='dummy', transport=transport, balance_transport=healthy_balance)
+    with pytest.raises(CostCapExceeded):
+        client.call('task', 'JSON', {}, lambda o: o)
+    assert client.stopped == 'usage_over_reservation' and client.status == 'paused'
+    assert client._schema_rejections == 0
+    assert client.budget.meter.used >= 50
+    with pytest.raises(DeepSeekError, match='^usage_over_reservation$'):
+        client.call('task', 'JSON', {'next': True}, lambda o: o)
+    assert len(calls) == (2 if on_retry else 1)

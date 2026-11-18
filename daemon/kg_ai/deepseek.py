@@ -39,6 +39,7 @@ FALLBACK_CODES = (
 FRAME_TOKENS = 4096
 MAX_TASK_ATTEMPTS = 2
 SCHEMA_REJECT_LIMIT = 3
+MAX_JSON_WRAPPER = 400
 SCHEMA_CODES = (
     'shape_invalid', 'too_many_findings', 'label_invalid', 'quote_missing', 'quote_too_long',
     'quote_not_exact', 'offset_ambiguous', 'offset_invalid', 'name_absent', 'name_invalid',
@@ -123,19 +124,42 @@ def parse_json_content(content):
     if not isinstance(content, str) or not content.strip():
         raise DeepSeekError('json_blank')
     text = content.strip()
-    fenced = re.fullmatch(r'```(?:json)?\s*(.*?)\s*```', text, re.DOTALL | re.IGNORECASE)
-    if fenced:
-        text = fenced.group(1).strip()
-    if not text:
-        raise DeepSeekError('json_blank')
+
+    def reject(pos, msg):
+        # Code points describe the boundaries without retaining response text.
+        stripped = content.strip()
+        return TaskReject('invalid_task_json',
+                          f'len={len(content)} pos={pos} msg={msg.lower()} '
+                          f'starts=u{ord(stripped[0]):04x} ends=u{ord(stripped[-1]):04x}')
+
     try:
-        value = json.loads(text)
+        try:
+            value = json.loads(text)
+        except json.JSONDecodeError:
+            fenced = (re.search(r'```json\b\s*(.*?)\s*```', text, re.DOTALL | re.IGNORECASE)
+                      or re.search(r'```\s*(.*?)\s*```', text, re.DOTALL))
+            if fenced:
+                text = fenced.group(1).strip()
+                if not text:
+                    raise DeepSeekError('json_blank')
+                value = json.loads(text)
+            else:
+                start = text.find('{')
+                prefix = text[:start] if start >= 0 else text
+                # Never extract a nested object from an array, malformed object,
+                # or JSON string. Only short prose may surround the first object.
+                if start < 0 or len(prefix) > MAX_JSON_WRAPPER or any(ch in prefix for ch in '{}[]"'):
+                    raise
+                value, end = json.JSONDecoder().raw_decode(text, start)
+                suffix = text[end:]
+                if len(suffix) > MAX_JSON_WRAPPER or any(ch in suffix for ch in '{}[]'):
+                    raise json.JSONDecodeError('Extra data', text, end)
         if isinstance(value, str):
             value = json.loads(value)
-    except (json.JSONDecodeError, TypeError):
-        raise DeepSeekError('invalid_task_json') from None
+    except json.JSONDecodeError as exc:
+        raise reject(exc.pos, exc.msg) from None
     if not isinstance(value, dict):
-        raise DeepSeekError('invalid_task_json')
+        raise reject(0, 'expected_object')
     return value
 
 
@@ -275,10 +299,11 @@ class Client:
             try:
                 return self._once(task, instruction, data, validate, max_tokens=max_tokens, correction=correction, provider=provider)
             except CostCapExceeded:
-                # A retry that cannot be reserved pauses on the original task error.
-                # Usage past the reservation still stops the phase; do not hide that.
+                # An unreservable correction ends this task, just like a final
+                # rejection. A smaller next document may still fit the cap.
+                # Usage past the reservation always stops the phase.
                 if correction and self.stopped != 'usage_over_reservation':
-                    self.stopped = correction
+                    self._reject_task()
                     raise DeepSeekError(correction) from None
                 raise
             except DeepSeekError as exc:
@@ -290,11 +315,21 @@ class Client:
                 if code in RETRYABLE:
                     # _once already settled the billed failure. Skip this task,
                     # but stop a broken prompt from rejecting the whole queue.
-                    self._schema_rejections += 1
-                    self.stopped = 'schema_reject_limit' if self._schema_rejections >= SCHEMA_REJECT_LIMIT else None
+                    self._reject_task()
                 elif code not in NONSTOP:
                     self.stopped = self.stopped or code
                 raise
+
+    def _reject_task(self):
+        self._schema_rejections += 1
+        self.stopped = 'schema_reject_limit' if self._schema_rejections >= SCHEMA_REJECT_LIMIT else None
+
+    def _settle(self, key, usage, **kwargs):
+        try:
+            self.budget.settle(key, usage, **kwargs)
+        except CostCapExceeded:
+            self.stopped = 'usage_over_reservation'
+            raise
 
     def _once(self, task, instruction, data, validate, *, max_tokens, correction, provider='deepseek'):
         messages, payload = self._payload(instruction, data, max_tokens, correction, provider=provider)
@@ -360,15 +395,11 @@ class Client:
             result = validate(parse_json_content((choice.get('message') or {}).get('content')))
         except DeepSeekError as exc:
             self.stopped = failure_code(stored_error(exc))
-            self.budget.settle(key, usage, error=stored_error(exc))
+            self._settle(key, usage, error=stored_error(exc))
             raise
         except Exception:
             self.stopped = 'invalid_task_json'
-            self.budget.settle(key, usage, error=self.stopped)
+            self._settle(key, usage, error=self.stopped)
             raise DeepSeekError(self.stopped) from None
-        try:
-            self.budget.settle(key, usage, result=result)
-        except CostCapExceeded:
-            self.stopped = 'usage_over_reservation'
-            raise
+        self._settle(key, usage, result=result)
         return result
