@@ -1647,7 +1647,23 @@
      "src": "https://www.hankookilbo.com/news/article/A2026102316200004434"
     }
    ],
-   "chef_mentorship": []
+   "chef_mentorship": [],
+   "ai_reviewed": [
+    {
+     "label": "menu",
+     "label_ko": "메뉴",
+     "quote": "한국 식문화의 역사와 재료, 조리법, 기물의 조화를 연구하며 계절 제철 식재료에 글로벌 퀴진의 요소를 접목한 현대적 한식을 선보이고 있다.",
+     "src": "https://seoul.co.kr:8888/index.php?keyword=%EB%AF%B8%EC%89%90%EB%A6%B0+%EB%A0%88%EC%8A%A4%ED%86%A0%EB%9E%91",
+     "date": null,
+     "chef": null,
+     "restaurant": "이타닉 가든",
+     "provenance": "ai_reviewed",
+     "badge": "AI 검토",
+     "extraction_id": "ext_cf1554db64e8",
+     "review_id": "rev_11c32b6dcaef",
+     "reviewed_at": "2026-11-18T22:22:06Z"
+    }
+   ]
   },
   {
    "id": "yeast",
@@ -2716,6 +2732,48 @@
    "extraction_id": "ext_e38b49fb8664",
    "review_id": "rev_9db3c9c4e50d",
    "reviewed_at": "2026-11-12T00:48:32Z"
+  },
+  {
+   "label": "employment_claim",
+   "label_ko": "근무",
+   "quote": "현재 모던 한식 레스토랑 ‘수퍼판’과 프리미엄 분식 브랜드 ‘가지가지’ 등을 운영하고 있다.",
+   "src": "https://seoul.co.kr:8888/index.php?keyword=%EB%AF%B8%EC%89%90%EB%A6%B0+%EB%A0%88%EC%8A%A4%ED%86%A0%EB%9E%91",
+   "date": null,
+   "chef": "우정욱",
+   "restaurant": "가지가지",
+   "provenance": "ai_reviewed",
+   "badge": "AI 검토",
+   "extraction_id": "ext_3a44a63b3fa6",
+   "review_id": "rev_570af186471b",
+   "reviewed_at": "2026-11-18T22:35:47Z"
+  },
+  {
+   "label": "menu",
+   "label_ko": "메뉴",
+   "quote": "메뉴는 ▲작은 한입거리들(먹물 바이트·춘권 바이트) ▲광어와 동치미 물회 ▲새우와 호박죽 ▲제철 생선 미역국 ▲항정살과 버섯솥밥 ▲순두부 아이스크림 ▲차와 다과 등 7가지 요리에 히든 메뉴를 더한 총 8가지 코스로 구성했다.",
+   "src": "https://biz.chosun.com/distribution/food/2025/11/18/GQMTLK2EMRFDNKTRAD2REKHC3Y",
+   "date": "2025-11-18",
+   "chef": null,
+   "restaurant": "오닐(ONIL)",
+   "provenance": "ai_reviewed",
+   "badge": "AI 검토",
+   "extraction_id": "ext_198d5cb689bf",
+   "review_id": "rev_c476f9928b3b",
+   "reviewed_at": "2026-11-18T22:35:49Z"
+  },
+  {
+   "label": "opening",
+   "label_ko": "오픈",
+   "quote": "'퀴진케이(Cuisine. K)'의 여덟 번째 팝업 레스토랑 '오닐(ONIL)'을 오픈했다고 18일 밝혔다.",
+   "src": "https://biz.chosun.com/distribution/food/2025/11/18/GQMTLK2EMRFDNKTRAD2REKHC3Y",
+   "date": "2025-11-18",
+   "chef": "최인규",
+   "restaurant": "오닐(ONIL)",
+   "provenance": "ai_reviewed",
+   "badge": "AI 검토",
+   "extraction_id": "ext_7a6c21066110",
+   "review_id": "rev_0ff7804284d7",
+   "reviewed_at": "2026-11-18T22:35:52Z"
   }
  ]
 }
