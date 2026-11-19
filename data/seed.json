@@ -1884,7 +1884,11 @@
    "chef_en_official": false,
    "chef_en_type": "romanized",
    "instagram": "finz.seoul",
-   "instagram_src": "existing seed url/name_en_src"
+   "instagram_src": "existing seed url/name_en_src",
+   "career_checking": [
+    "kitchen",
+    "role"
+   ]
   },
   {
    "id": "mowa",
@@ -2055,7 +2059,11 @@
    "chef_en": null,
    "chef_en_src": null,
    "chef_en_official": null,
-   "chef_en_type": null
+   "chef_en_type": null,
+   "career_checking": [
+    "kitchen",
+    "role"
+   ]
   },
   {
    "id": "iter",
@@ -2188,7 +2196,11 @@
    "chef_en_official": false,
    "chef_en_type": "romanized",
    "instagram": "songi_19oct",
-   "instagram_src": "press (maisonkorea.com, marieclairekorea.com, ohmynews.com)"
+   "instagram_src": "press (maisonkorea.com, marieclairekorea.com, ohmynews.com)",
+   "career_checking": [
+    "kitchen",
+    "role"
+   ]
   },
   {
    "id": "oddhouse",
@@ -2232,7 +2244,10 @@
    "chef_en_official": null,
    "chef_en_type": null,
    "instagram": "odd_haus",
-   "instagram_src": "existing seed url/name_en_src"
+   "instagram_src": "existing seed url/name_en_src",
+   "career_checking": [
+    "kitchen"
+   ]
   },
   {
    "id": "gaongaok",
@@ -2589,7 +2604,10 @@
    "chef_en_type": "romanized",
    "instagram": "onjium_restaurant",
    "instagram_src": "https://www.eater.com/venue/90304/onjieum",
-   "note": "헤드셰프 박성배"
+   "note": "헤드셰프 박성배",
+   "career_checking": [
+    "note"
+   ]
   },
   {
    "id": "belong",

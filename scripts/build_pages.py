@@ -8,6 +8,8 @@ d=json.load(open(os.path.join(root,'data','seed.json'),encoding='utf-8'))
 K={k['id']:k for k in d['kitchens']}; R=d['restaurants']
 bad=lambda v:v is None or v=='' or bool(re.search('미확인|미기재',str(v)))
 VS={'confirmed':'식당 확인 완료','contacted':'식당에 확인 요청함 (답변 대기)'}
+CHK='<span class="tag">확인 중</span>'
+def chk(r,f): return (' '+CHK) if f in (r.get('career_checking') or []) else ''
 def vstat(r): return VS.get(r.get('verification_status'),'공개 자료 기준 (식당 확인 전)')
 def kname(r): k=K.get(r.get('kitchen')); return k['name'] if k else None
 def chef(r): return None if bad(r.get('chef')) else r['chef']
@@ -51,7 +53,7 @@ def rdesc(r):
     return '. '.join(bits)+'. 출처와 확인 상태를 함께 정리했어요.'
 def rpage(r):
     path=f"/r/{r['id']}/"; k=K.get(r.get('kitchen')); c=chef(r)
-    rows=[('셰프',c or '미확인'),('출신 주방',f'<a href="/k/{k["id"]}/">{e(k["name"])}</a>' if k else '미확인'),('직책·기간',e(role(r) or '미기재')),
+    rows=[('셰프',c or '미확인'),('출신 주방',(f'<a href="/k/{k["id"]}/">{e(k["name"])}</a>' if k else '미확인')+chk(r,'kitchen')),('직책·기간',e(role(r) or '미기재')+chk(r,'role')),
           ('지역',e(' · '.join(v for v in (r.get('city'),r.get('area')) if not bad(v)) or '미확인')),('요리',e(r.get('cuisine') or '미확인')),
           ('오픈',e(r.get('opened') or '미확인')),]
     if r.get('closed_at'): rows.append(('폐업',e(r['closed_at'])))
@@ -64,7 +66,7 @@ def rpage(r):
 <h1>{e(r['name'])}{' <span class="tag">폐업</span>' if r.get('closed_at') else ''}</h1>
 <p class="lead">{e(rdesc(r))}</p>
 <dl>{''.join(f'<dt>{a}</dt><dd>{b}</dd>' for a,b in rows)}</dl>
-{f'<p class="note muted">{e(r["note"])}</p>' if r.get('note') else ''}
+{f'<p class="note muted">{e(r["note"])}{chk(r,"note")}</p>' if r.get('note') else ''}
 {('<h2>셰프 근무 이력</h2><ul>'+''.join(f'<li>{e(c["date"])} · {e(c["text"])} ({link(c["src"],"source" if True else "")})</li>' for c in r.get('chef_career',[]))+'</ul>') if r.get('chef_career') else ''}{('<h2>사제 관계</h2><ul>'+''.join(f'<li>{e(c.get("text",""))} ({link(c["src"],"source")})</li>' for c in r.get('chef_mentorship',[]))+'</ul>') if r.get('chef_mentorship') else ''}{aisec(r)}<h2>출처</h2><ul>{''.join(f'<li>{link(u,lab)}</li>' for lab,u in srcs(r)) or '<li>공개 출처 수집 중</li>'}</ul>
 <p class="cta"><a class="btn p" href="/#/r/{e(r['id'])}">인터랙티브 계보에서 보기</a>{f' <a class="btn g" href="/k/{k["id"]}/">{e(k["name"])} 출신 전체</a>' if k else ''}</p></article>
 {sibs}'''
@@ -84,7 +86,7 @@ def kpage(k):
     path=f"/k/{k['id']}/"; al=[r for r in R if r.get('kitchen')==k['id']]
     title=f"{k['name']} 출신 셰프와 식당 {len(al)}곳 | 키친 게놈"
     desc=f"{k['name']}({k.get('en','')}) 주방을 거친 셰프들이 연 식당 {len(al)}곳을 출처와 함께 정리했어요."+(f" {k['michelin']}." if not bad(k.get('michelin')) else '')
-    lis=''.join(f'<li><a href="/r/{r["id"]}/">{e(r["name"])}</a>{" <span class=tag>폐업</span>" if r.get("closed_at") else ""} · {e(chef(r) or "셰프 미확인")}{(" · "+e(role(r))) if role(r) else ""} · {e(" ".join(v for v in (r.get("area"),r.get("cuisine")) if not bad(v)))}</li>' for r in al)
+    lis=''.join(f'<li><a href="/r/{r["id"]}/">{e(r["name"])}</a>{" <span class=tag>폐업</span>" if r.get("closed_at") else ""} · {e(chef(r) or "셰프 미확인")}{(" · "+e(role(r))) if role(r) else ""}{(" "+CHK) if r.get("career_checking") else ""} · {e(" ".join(v for v in (r.get("area"),r.get("cuisine")) if not bad(v)))}</li>' for r in al)
     body=f'''<article class="card"><p class="muted">출신 주방</p><h1>{e(k['name'])} <small class="muted">{e(k.get('en',''))}</small></h1>
 <p class="lead">{e(desc)}</p><dl><dt>미쉐린</dt><dd>{e(k.get('michelin') or '미확인')}{(' · '+link(k['michelin_src'],'출처')) if k.get('michelin_src') else ''}</dd><dt>자료 확인일</dt><dd>{e(k.get('checked') or d['generated'])}</dd></dl>
 <h2>출신 셰프가 연 식당</h2><ul>{lis or '<li>아직 수집된 기록이 없어요</li>'}</ul>{aisec(k)}
@@ -94,7 +96,7 @@ def kpage(k):
     return path,page(path,title,desc,body,ld)
 def dirpage():
     path='/directory/'; desc=f"서울 최고 주방 {len(K)}곳 출신 셰프들이 연 식당 {len(R)}곳 전체 목록. 출신 주방별로 정리했어요."
-    sec=''.join(f'<section class="card"><h2><a href="/k/{k["id"]}/">{e(k["name"])}</a> <small class="muted">{sum(r.get("kitchen")==k["id"] for r in R)}곳</small></h2><ul>'+''.join(f'<li><a href="/r/{r["id"]}/">{e(r["name"])}</a> · {e(chef(r) or "셰프 미확인")}</li>' for r in R if r.get('kitchen')==k['id'])+'</ul></section>' for k in d['kitchens'])
+    sec=''.join(f'<section class="card"><h2><a href="/k/{k["id"]}/">{e(k["name"])}</a> <small class="muted">{sum(r.get("kitchen")==k["id"] for r in R)}곳</small></h2><ul>'+''.join(f'<li><a href="/r/{r["id"]}/">{e(r["name"])}</a> · {e(chef(r) or "셰프 미확인")}'+((" "+CHK) if r.get("career_checking") else "")+'</li>' for r in R if r.get('kitchen')==k['id'])+'</ul></section>' for k in d['kitchens'])
     other=[r for r in R if r.get('kitchen') not in K]
     if other: sec+='<section class="card"><h2>출신 주방 미확인</h2><ul>'+''.join(f'<li><a href="/r/{r["id"]}/">{e(r["name"])}</a></li>' for r in other)+'</ul></section>'
     if d.get('ai_reviewed_unlinked'): sec+='<section class="card">'+aisec({'ai_reviewed':d['ai_reviewed_unlinked']})+'</section>'
