@@ -152,3 +152,25 @@ PYTHONPATH=daemon python3 -m kg_collect --db data_store/kg_service.db gold data_
 v6 남은 오류(다음 개선 후보, 튜닝 금지 → 다음 held-out으로 검증): 갈라 디너 문장에서 셰프명 미부착 collab, 단축형 '문 셰프' 공지시 없는 mentorship/career, 레지스트리 짧은 별칭('모수')으로 '모수 서울' 고용 주장 표면형 불일치.
 검증: rules/1.5·1.6·1.7 + collect_extraction 70개 통과; held-out v4 (--registry) P/R/F1 1.0 유지.
 
+## Phase 8 (2026-11-08): rules/1.8 — collab names the participant beside the cue
+
+협업·공동작업·팝업이 문장에서 가장 먼저 나온 셰프/식당을 붙였다. 앞 절의 방관자(`A가 사회를 보고 B가 R과 협업한다`)가 기록되고, 동사 옆 참가자는 빠졌다. 짧은 식당명(1–3음절)은 `의` 뒤에 보통 명사가 오면 빠지는데, `의 갈라 디너`처럼 행사 명사가 뒤따라도 같이 빠져 장소가 없는 collab가 됐다.
+
+`surface_at`은 단서 앞에서 가장 가까운 이름을 고르고, `A와 B가`처럼 접속된 주어는 기존과 같이 그 묶음의 첫 이름을 유지한다. 다른 절의 이름은 묶음에 넣지 않는다. `의` 뒤가 역할이거나 행사 명사(갈라/디너/만찬/협업 등)이면 짧은 식당명을 유지하고, `의 맛` 같은 보통 명사는 그대로 버린다. 셰프 없는 행사 collab(`한빛에서 갈라 디너가 열린다`)는 그대로 둔다.
+
+이번 변경은 v6에 적힌 세 오류(셰프명 미부착 갈라, 공지시 없는 단축형, 짧은 별칭 표면형)를 보고 규칙을 맞추지 않았다. 단축형 공지시와 별칭 표면은 그대로다. `겸하고 있다`만 있는 이중 고용과 과거 `이끌었다`는 이번 범위 밖이다. collab는 이벤트로 남고 employment/mentorship로 바뀌지 않는다. PR #77의 provenance 생략 해시는 건드리지 않았다. `EXTRACTOR_VERSION`이 `rules/1.8`이므로 다음 수집은 버전이 다른 문서만 다시 추출한다.
+
+합성 회귀(`tests/test_extract_rules_18.py`)와 rules/1.3–1.7 + `collect_extraction` 90개 통과. provenance 해시 테스트 2개 통과. 이 환경에는 `data_store/kg_service.db`가 없어 게시된 `--registry` 점수는 재현하지 못했다. 레지스트리 없는 채점(gold 파일의 빈 타깃)은 변경 전후가 같다. 이것은 게시 baseline이 아니다.
+
+| 채점 | v5 | v6 |
+|---|---|---|
+| 게시 baseline (--registry, rules/1.7) | P/R/F1 1.000 | P 0.786 / R 0.647 / F1 0.710 |
+| 이 환경, 레지스트리 없음, rules/1.7과 1.8 동일 | P 1.000 / R 0.750 / F1 0.857 (기대 12, 오류 3) | P 0.714 / R 0.294 / F1 0.417 (기대 17, 오류 14) |
+
+부모 검증(읽기 전용, 실서비스 DB):
+
+```sh
+PYTHONPATH=daemon python3 -m kg_collect --db data_store/kg_service.db gold data_store/gold/gold_heldout_v5.json --registry
+PYTHONPATH=daemon python3 -m kg_collect --db data_store/kg_service.db gold data_store/gold/gold_heldout_v6.json --registry
+```
+
