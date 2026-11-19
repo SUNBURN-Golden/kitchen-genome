@@ -946,6 +946,34 @@
      "extraction_id": "ext_bc489b6d3a3d",
      "review_id": "rev_688898173a52",
      "reviewed_at": "2026-11-10T22:16:47Z"
+    },
+    {
+     "label": "employment_claim",
+     "label_ko": "근무",
+     "quote": "최고 등급인 3스타를 받은 강민구 셰프 ‘밍글스’의 메뉴들",
+     "src": "https://sports.donga.com/life/article/all/20260311/133507856/1",
+     "date": "2026-03-11",
+     "chef": "강민구",
+     "restaurant": "밍글스",
+     "provenance": "ai_reviewed",
+     "badge": "AI 검토",
+     "extraction_id": "ext_828b5b67bc07",
+     "review_id": "rev_c3fee486b498",
+     "reviewed_at": "2026-11-19T22:22:53Z"
+    },
+    {
+     "label": "employment_claim",
+     "label_ko": "근무",
+     "quote": "3스타를 획득한 ‘밍글스’의 강민구 셰프",
+     "src": "https://newsis.com/view/NISX20260307_0003538758",
+     "date": "2026-03-08",
+     "chef": "강민구",
+     "restaurant": "밍글스",
+     "provenance": "ai_reviewed",
+     "badge": "AI 검토",
+     "extraction_id": "ext_ed58417ad611",
+     "review_id": "rev_c3e900a439f2",
+     "reviewed_at": "2026-11-19T22:23:00Z"
     }
    ]
   },
@@ -1585,7 +1613,37 @@
      "src": "https://www.hankookilbo.com/news/article/A2026102316200004434"
     }
    ],
-   "chef_mentorship": []
+   "chef_mentorship": [],
+   "ai_reviewed": [
+    {
+     "label": "employment_claim",
+     "label_ko": "근무",
+     "quote": "손 셰프가 이끄는 이타닉 가든과 라망시크레가 각각 1, 2위를 차지한 것이다.",
+     "src": "https://hankyung.com/article/202601238486g",
+     "date": "2026-01-23",
+     "chef": "손종원",
+     "restaurant": "라망시크레",
+     "provenance": "ai_reviewed",
+     "badge": "AI 검토",
+     "extraction_id": "ext_6a4c3f335b7e",
+     "review_id": "rev_6e7d0e24f5d8",
+     "reviewed_at": "2026-11-19T22:22:50Z"
+    },
+    {
+     "label": "employment_claim",
+     "label_ko": "근무",
+     "quote": "각각 미쉐린 1스타인 조선 팰리스 서울 강남 ‘이타닉 가든’과 레스케이프 서울 명동 ‘라망 시크레’를 이끄는 손종원 셰프.",
+     "src": "https://newsis.com/view/NISX20260307_0003538758",
+     "date": "2026-03-08",
+     "chef": "손종원",
+     "restaurant": "라망 시크레",
+     "provenance": "ai_reviewed",
+     "badge": "AI 검토",
+     "extraction_id": "ext_468b5396d1d1",
+     "review_id": "rev_c8aebbf2e8e4",
+     "reviewed_at": "2026-11-19T22:23:00Z"
+    }
+   ]
   },
   {
    "id": "eatanic",
@@ -1662,6 +1720,34 @@
      "extraction_id": "ext_cf1554db64e8",
      "review_id": "rev_11c32b6dcaef",
      "reviewed_at": "2026-11-18T22:22:06Z"
+    },
+    {
+     "label": "employment_claim",
+     "label_ko": "근무",
+     "quote": "손종원 셰프(사진)가 이끄는 한식당 '이타닉 가든'은 지난해 말 \"너른 양해를 부탁드린다\"며 이 같이 공지했다.",
+     "src": "https://hankyung.com/article/202601238486g",
+     "date": "2026-01-23",
+     "chef": "손종원",
+     "restaurant": "이타닉 가든",
+     "provenance": "ai_reviewed",
+     "badge": "AI 검토",
+     "extraction_id": "ext_f220a31eaca8",
+     "review_id": "rev_613656d6264c",
+     "reviewed_at": "2026-11-19T22:22:50Z"
+    },
+    {
+     "label": "employment_claim",
+     "label_ko": "근무",
+     "quote": "각각 미쉐린 1스타인 조선 팰리스 서울 강남 ‘이타닉 가든’과 레스케이프 서울 명동 ‘라망 시크레’를 이끄는 손종원 셰프.",
+     "src": "https://newsis.com/view/NISX20260307_0003538758",
+     "date": "2026-03-08",
+     "chef": "손종원",
+     "restaurant": "이타닉 가든",
+     "provenance": "ai_reviewed",
+     "badge": "AI 검토",
+     "extraction_id": "ext_0dd7d880895c",
+     "review_id": "rev_11e71de62270",
+     "reviewed_at": "2026-11-19T22:23:00Z"
     }
    ]
   },
@@ -2774,6 +2860,160 @@
    "extraction_id": "ext_7a6c21066110",
    "review_id": "rev_0ff7804284d7",
    "reviewed_at": "2026-11-18T22:35:52Z"
+  },
+  {
+   "label": "career",
+   "label_ko": "경력",
+   "quote": "우정욱 셰프는 1995년 서울 대치동에서 가정요리 수업을 시작한 이후 약 30년간 한국 가정식의 맛과 조리법을 알려온 전문가다.",
+   "src": "https://seoul.co.kr:8888/index.php?keyword=%EB%AF%B8%EC%89%90%EB%A6%B0+%EB%A0%88%EC%8A%A4%ED%86%A0%EB%9E%91",
+   "date": null,
+   "chef": "우정욱",
+   "restaurant": null,
+   "provenance": "ai_reviewed",
+   "badge": "AI 검토",
+   "extraction_id": "ext_b008b35a4b83",
+   "review_id": "rev_2074bcb88ace",
+   "reviewed_at": "2026-11-19T22:22:32Z"
+  },
+  {
+   "label": "career",
+   "label_ko": "경력",
+   "quote": "네 번째 팝업('DOORI')을 운영했던 배요환 셰프",
+   "src": "https://biz.chosun.com/distribution/food/2025/11/18/GQMTLK2EMRFDNKTRAD2REKHC3Y",
+   "date": "2025-11-18",
+   "chef": "배요환",
+   "restaurant": "DOORI",
+   "provenance": "ai_reviewed",
+   "badge": "AI 검토",
+   "extraction_id": "ext_3f0de6e7a687",
+   "review_id": "rev_ab7871f454b4",
+   "reviewed_at": "2026-11-19T22:22:40Z"
+  },
+  {
+   "label": "opening",
+   "label_ko": "오픈",
+   "quote": "최근 일곱 번째 팝업을 마무리한 김민석 셰프가 고향인 광주에서 전라도의 식재료를 활용한 한식 다이닝 레스토랑 '소재(SOJAE)'를 오픈했다.",
+   "src": "https://biz.chosun.com/distribution/food/2025/11/18/GQMTLK2EMRFDNKTRAD2REKHC3Y",
+   "date": "2025-11-18",
+   "chef": "김민석",
+   "restaurant": "소재(SOJAE)",
+   "provenance": "ai_reviewed",
+   "badge": "AI 검토",
+   "extraction_id": "ext_49d3f92ad79f",
+   "review_id": "rev_55c87cc1d9cb",
+   "reviewed_at": "2026-11-19T22:22:41Z"
+  },
+  {
+   "label": "employment_claim",
+   "label_ko": "근무",
+   "quote": "이번에는 푸드 스타일리스트 출신 최인규 셰프와 진연준 셰프가 함께 운영하며 제철 식재료를 활용한 디너 코스 요리를 선보인다.",
+   "src": "https://biz.chosun.com/distribution/food/2025/11/18/GQMTLK2EMRFDNKTRAD2REKHC3Y",
+   "date": "2025-11-18",
+   "chef": "진연준",
+   "restaurant": "오닐(ONIL)",
+   "provenance": "ai_reviewed",
+   "badge": "AI 검토",
+   "extraction_id": "ext_7018380235e2",
+   "review_id": "rev_578c37d4aba8",
+   "reviewed_at": "2026-11-19T22:22:41Z"
+  },
+  {
+   "label": "career",
+   "label_ko": "경력",
+   "quote": "두 번째 팝업('주052')을 이끈 신용준 셰프·이경원 셰프",
+   "src": "https://biz.chosun.com/distribution/food/2025/11/18/GQMTLK2EMRFDNKTRAD2REKHC3Y",
+   "date": "2025-11-18",
+   "chef": "이경원",
+   "restaurant": "주052",
+   "provenance": "ai_reviewed",
+   "badge": "AI 검토",
+   "extraction_id": "ext_c60e8ebe6d1d",
+   "review_id": "rev_81625aa343af",
+   "reviewed_at": "2026-11-19T22:22:41Z"
+  },
+  {
+   "label": "employment_claim",
+   "label_ko": "근무",
+   "quote": "예약 수 기준으로 보면 오스테리아 샘킴(샘킴), 도우룸 광화문(이준), 에그앤플라워(김희은), 콩두 명동(박효남), 히카리모노(칼마카세) 등이 상위권을 차지했다.",
+   "src": "https://hankyung.com/article/202601238486g",
+   "date": "2026-01-23",
+   "chef": "샘킴",
+   "restaurant": "오스테리아 샘킴",
+   "provenance": "ai_reviewed",
+   "badge": "AI 검토",
+   "extraction_id": "ext_1c291cb827ff",
+   "review_id": "rev_4755924d31fe",
+   "reviewed_at": "2026-11-19T22:22:50Z"
+  },
+  {
+   "label": "employment_claim",
+   "label_ko": "근무",
+   "quote": "에그앤플라워(김희은)",
+   "src": "https://hankyung.com/article/202601238486g",
+   "date": "2026-01-23",
+   "chef": "김희은",
+   "restaurant": "에그앤플라워",
+   "provenance": "ai_reviewed",
+   "badge": "AI 검토",
+   "extraction_id": "ext_6aacd8452d3a",
+   "review_id": "rev_2603f7c73446",
+   "reviewed_at": "2026-11-19T22:22:50Z"
+  },
+  {
+   "label": "employment_claim",
+   "label_ko": "근무",
+   "quote": "콩두 명동(박효남)",
+   "src": "https://hankyung.com/article/202601238486g",
+   "date": "2026-01-23",
+   "chef": "박효남",
+   "restaurant": "콩두 명동",
+   "provenance": "ai_reviewed",
+   "badge": "AI 검토",
+   "extraction_id": "ext_7d2d88f81fff",
+   "review_id": "rev_d1e6cdb69d08",
+   "reviewed_at": "2026-11-19T22:22:50Z"
+  },
+  {
+   "label": "employment_claim",
+   "label_ko": "근무",
+   "quote": "도우룸 광화문(이준)",
+   "src": "https://hankyung.com/article/202601238486g",
+   "date": "2026-01-23",
+   "chef": "이준",
+   "restaurant": "도우룸 광화문",
+   "provenance": "ai_reviewed",
+   "badge": "AI 검토",
+   "extraction_id": "ext_f2d8643bc650",
+   "review_id": "rev_4fed7a9cbe3b",
+   "reviewed_at": "2026-11-19T22:22:50Z"
+  },
+  {
+   "label": "employment_claim",
+   "label_ko": "근무",
+   "quote": "반얀트리 서울 ‘페스타 바이 충후’의 총괄 셰프를 맡고 있는 미쉐린 1스타 ‘제로 콤플렉스’의 이충후 셰프.",
+   "src": "https://newsis.com/view/NISX20260307_0003538758",
+   "date": "2026-03-08",
+   "chef": "이충후",
+   "restaurant": "페스타 바이 충후",
+   "provenance": "ai_reviewed",
+   "badge": "AI 검토",
+   "extraction_id": "ext_246bcf06900e",
+   "review_id": "rev_7b50ab24180b",
+   "reviewed_at": "2026-11-19T22:23:00Z"
+  },
+  {
+   "label": "opening",
+   "label_ko": "오픈",
+   "quote": "2014년 일본 오키나와 나하의 마키시 시장 인근에서 첫 매장을 열었으며, 현재 오키나와를 비롯해 도쿄·후쿠오카·오사카·나고야 등 일본 내 총 12개 매장을 운영하고 있다.",
+   "src": "https://hotelrestaurant.co.kr/news/articleList.html?sc_section_code=S1N2&view_type=sm",
+   "date": null,
+   "chef": null,
+   "restaurant": "포타마",
+   "provenance": "ai_reviewed",
+   "badge": "AI 검토",
+   "extraction_id": "ext_bb83c257f6ec",
+   "review_id": "rev_ec065f99e1dc",
+   "reviewed_at": "2026-11-19T22:49:17Z"
   }
  ]
 }
