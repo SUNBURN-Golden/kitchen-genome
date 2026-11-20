@@ -224,22 +224,20 @@ def test_instagram_paused_by_flag_is_skipped_and_never_worked_around(world):
     rep = daemon(c, env).run()
     assert rep['status'] == 'succeeded'
     out = json.loads(c.execute("SELECT output_json FROM stage_checkpoint WHERE stage='source_discovery'").fetchone()[0])
-    assert 'instagram_public' in out['paused'] and 'instagram_public' not in out['active']
+    assert 'instagram_public' in out['skipped'] and 'instagram_public' not in out['active']
     assert 'instagram_kitchen_genome' in out['paused'] and 'instagram_kitchen_genome' not in out['active']
     assert c.execute("SELECT COUNT(*) FROM document WHERE source_id='instagram_public'").fetchone()[0] == 0
     assert (root / 'crawler' / 'out' / 'ig_blocked.flag').exists()                   # the daemon never clears the flag
 
 
-def test_instagram_candidates_stay_unverified_and_do_not_change_public_state(world):
+def test_archived_instagram_candidates_are_ignored(world):
     c, env, root = world
     (root / 'crawler' / 'out' / 'ig-20261026.json').write_text(json.dumps([{'id': 'r1', 'kind': 'closure', 'url': 'https://www.instagram.com/p/FAKE', 'date': '2026-10-26', 'title': '곧 영업 종료'}]))
     daemon(c, env).run()
     cand = c.execute("SELECT * FROM candidate_fact WHERE source_id='instagram_public'").fetchone()
-    assert cand['verification'] == 'unverified' and cand['asserted_by'] == 'source'
+    assert cand is None
     r1 = branch(c, '가상식당1')
     assert onto.branch_state_asof(c, r1, '2026-10-27')['state'] != 'closed'
-    ev = c.execute("SELECT e.effective_date, cl.status FROM restaurant_status_event e JOIN claim cl USING(claim_id) WHERE e.branch_id=? AND e.kind='close'", (r1,)).fetchall()
-    assert [(e['effective_date'], e['status']) for e in ev] == [(None, 'unverified')]      # recorded as a lead; undated, so it cannot move any as-of state
 
 
 def test_all_sources_paused_pauses_the_run_instead_of_failing(world):

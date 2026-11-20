@@ -1,4 +1,4 @@
-"""Fetcher: API/feed -> HTML + JSON-LD -> browser render (only dynamic pages on allowed hosts, never to get past a block).
+"""HTTP fetcher for APIs, feeds, HTML and JSON-LD.
 Handles pagination, tables, PDFs, image OCR. Every attempt writes a fetch_record (raw ref, hash, fetched_at, extractor version).
 A 200 that is a login page, a challenge page or an empty body is a FAILURE, recorded as such."""
 import dataclasses
@@ -16,7 +16,7 @@ from kg_daemon.db import ROOT, stable_id, utcnow
 from . import EXTRACTOR_VERSION, FETCHER_VERSION
 from .docs_ocr import ocr_image, pdf_text
 from .htmlx import is_js_shell, parse_date_text, parse_html
-from .net import CFG, PoliteNet, Response, host_of, looks_like_challenge, looks_like_login
+from .net import CFG, PoliteNet, Response, host_of, matches_domain
 from .rawstore import RawStore
 
 sys.path.insert(0, os.path.join(ROOT, 'crawler'))
@@ -27,7 +27,7 @@ except Exception:  # pragma: no cover
         return (u or '').strip()
 
 MIN_TEXT_CHARS = 120
-BROWSER_HOSTS = set(CFG['allowed_browser_hosts'])
+BROWSER_HOSTS = tuple(CFG['allowed_browser_hosts'])
 
 
 @dataclasses.dataclass
@@ -54,6 +54,13 @@ class Doc:
     @property
     def ok(self):
         return self.outcome == 'ok'
+
+
+def unreadable_js_shell(url, html, text, browser_hint=False):
+    loading = text.strip().lower() in ('loading...', 'loading…', '로딩 중')
+    return len(text) < MIN_TEXT_CHARS and (
+        is_js_shell(html, len(text)) or loading and (browser_hint or matches_domain(host_of(url), BROWSER_HOSTS))
+    )
 
 
 def _rfc_date(s):
@@ -100,7 +107,6 @@ class Fetcher:
     def __init__(self, conn, net: PoliteNet, raw: RawStore, charge=None, browser=None, clock=utcnow, ocr=True):
         self.conn, self.net, self.raw, self.clock = conn, net, raw, clock
         self.charge = charge or (lambda kind, units=1.0: None)
-        self.browser = browser            # callable(url)->html ; None = browser rendering unavailable
         self.ocr = ocr
 
     # ── persistence ──
@@ -145,17 +151,17 @@ class Fetcher:
     def _fetch_one(self, url, job_id, allow_browser, parent, page_no) -> Doc:
         self.charge('http', 1.0)
         r = self.net.get(url)
+        if r.blocked:
+            kind = 'fail_login_page' if r.error == 'login_page' else 'fail_blocked'
+            return self._fail(job_id, r.final_url, 'html', kind, r, error=r.error, parent=parent, page_no=page_no)
         if r.status == 0:
-            kind = {'banned': 'fail_banned', 'robots': 'fail_robots', 'domain_paused': 'fail_blocked'}.get(r.error, 'fail_network')
+            kind = {'banned': 'fail_banned', 'robots': 'fail_robots'}.get(r.error, 'fail_network')
             return self._fail(job_id, url, 'html', kind, r, error=r.error, parent=parent, page_no=page_no)
-        if r.status in (429, 403, 503):
-            return self._fail(job_id, url, 'html', 'fail_blocked', r, error=f'http_{r.status}', parent=parent, page_no=page_no)
         if r.status >= 400:
             return self._fail(job_id, url, 'html', 'fail_http', r, error=f'http_{r.status}', parent=parent, page_no=page_no)
         if not r.body:
             return self._fail(job_id, url, 'html', 'fail_empty', r, error='empty_body', parent=parent, page_no=page_no)
-        if looks_like_challenge(r):
-            return self._fail(job_id, url, 'html', 'fail_blocked', r, error='challenge_page', parent=parent, page_no=page_no)
+        url = r.final_url
         ct = r.ctype
         body_text = r.text() if ct.startswith(('text/', 'application/xml', 'application/json', 'application/rss', 'application/atom')) or ct == '' else ''
         # ── feed / sitemap / API json ──
@@ -205,46 +211,13 @@ class Fetcher:
         doc = parse_html(html, r.final_url or url)
         method = 'jsonld' if doc['jsonld_types'] and len(doc['text']) < MIN_TEXT_CHARS else 'html'
         text_chars = len(doc['text'])
-        if looks_like_login(r.final_url or url, html, text_chars):
-            return self._fail(job_id, url, 'html', 'fail_login_page', r, error='login_page_with_200', parent=parent, page_no=page_no)
-        if text_chars < MIN_TEXT_CHARS and is_js_shell(html, text_chars):
-            host = host_of(url)
-            may = allow_browser if allow_browser is not None else host in BROWSER_HOSTS
-            if may and self.browser:
-                self.charge('browser', 1.0)
-                try:
-                    rendered = self.browser(url)
-                except Exception as e:  # noqa: BLE001
-                    rendered = ''
-                    err = type(e).__name__
-                if rendered:
-                    html = rendered
-                    doc = parse_html(html, url)
-                    text_chars = len(doc['text'])
-                    method = 'browser'
+        if unreadable_js_shell(url, html, doc['text'], allow_browser):
+            return self._fail(job_id, url, 'html', 'fail_empty', r, error='js_renderer_unavailable', parent=parent, page_no=page_no)
         if text_chars < MIN_TEXT_CHARS:
-            return self._fail(job_id, url, method if method == 'browser' else 'html', 'fail_empty', r, error=f'thin_or_empty_body:{text_chars}', parent=parent, page_no=page_no)
+            return self._fail(job_id, url, 'html', 'fail_empty', r, error=f'thin_or_empty_body:{text_chars}', parent=parent, page_no=page_no)
         # Publisher attribution uses the successful destination after the normal transport redirect checks.
-        url = r.final_url or url
-        raw_ref, h = self.raw.put(host_of(url), html.encode('utf-8') if method == 'browser' else r.body, 'html')
+        raw_ref, h = self.raw.put(host_of(url), r.body, 'html')
         unchanged = self._unchanged(url, h)
         fid = self._record(job_id, url, method, 'ok', r=r, text=doc['text'], raw_ref=raw_ref, content_hash=h, published=doc['published_at'], parent=parent, page_no=page_no)
         return Doc(fid, url, canonicalize_url(url), host_of(url), method, 'ok', text=doc['text'], title=doc['title'], published_at=doc['published_at'], links=doc['links'],
                    images=doc['images'], next_url=doc['next_url'], content_hash=h, unchanged=unchanged, page_no=page_no or 1)
-
-
-def playwright_browser(timeout_ms=20000):
-    """Browser rendering for DYNAMIC pages only. Same UA, same robots rules (checked by the caller before), no stealth, no cookies, no solving anything."""
-    def render(url: str) -> str:
-        from playwright.sync_api import sync_playwright
-        from .net import UA
-        with sync_playwright() as p:
-            b = p.chromium.launch(headless=True)
-            try:
-                ctx = b.new_context(user_agent=UA, locale='ko-KR')
-                page = ctx.new_page()
-                page.goto(url, wait_until='networkidle', timeout=timeout_ms)
-                return page.content()
-            finally:
-                b.close()
-    return render

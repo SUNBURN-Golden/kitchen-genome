@@ -36,15 +36,16 @@ def main(argv=None) -> int:
     migrate(conn)
     data_dir = os.path.dirname(os.path.abspath(a.db))
     if a.cmd == 'cycle':
-        from .fetch import playwright_browser
-        browser = None
-        if not a.no_browser:
-            try:
-                browser = playwright_browser()
-            except Exception:  # noqa: BLE001
-                browser = None
-        bot = cycle.Bot(conn, data_dir=data_dir, units=a.units, browser=browser, deepseek=a.deepseek)
-        rep = cycle.run_cycle(bot, resume=not a.no_resume, cost_cap=a.cost_cap)
+        bot = cycle.Bot(conn, data_dir=data_dir, units=a.units, deepseek=a.deepseek)
+        from . import proxynet
+        daily_scope = os.environ.get('KG_WEB_RUN_ID')
+        bot.net.start_run(run_id=daily_scope, join=bool(daily_scope))
+        try:
+            proxynet.egress_ok(probe=lambda url, timeout: bot.net.get(url, diagnostic=True, timeout=timeout))
+            rep = cycle.run_cycle(bot, resume=not a.no_resume, cost_cap=a.cost_cap)
+            rep.update(egress=proxynet.DEFAULT_ROUTE.name, egress_reason=proxynet.DEFAULT_ROUTE.reason)
+        finally:
+            bot.net.finish_run()
         print(json.dumps(rep, ensure_ascii=False, indent=1))
         return 0 if rep['status'] in ('succeeded', 'locked', 'paused_cost_cap') else 1
     if a.cmd == 'status':

@@ -36,7 +36,6 @@ class Bot:
         self.data_dir = data_dir or os.path.join(ROOT, 'data_store')
         self.raw = RawStore(os.path.join(self.data_dir, 'raw'))
         self.net = net or PoliteNet(conn=conn)
-        self.browser = browser
         self.seeds = seeds or discover.load_seeds(seeds_path or discover.SEEDS_PATH)
         self.deepseek = deepseek
         self.ai = None
@@ -49,7 +48,6 @@ class Bot:
         self.registry_path = registry_path or evaluate.DISCOVERED_REGISTRY
         self.initial = discover.initial_hosts()
         net_mod.SEARCH_HOSTS.add(host_of(self.seeds['keyword_search']['endpoint'].format(q='x')))
-        self.job_hint_dirs = {d['url']: d for d in self.seeds.get('directories', [])}
 
     def gaz(self) -> Gazetteer:
         return Gazetteer(self.conn)
@@ -108,6 +106,10 @@ def stage_plan(ctx):
     qualified = corpus.qualified_targets()
     entity_targets = discover.eligible_entity_targets(conn, qualified)
     mother_counts, due_mother, mother_count = discover.reconcile_mother_jobs(conn, seed, bot.today, seeds, caps)
+    now_iso = now_dt.strftime('%Y-%m-%dT%H:%M:%SZ')
+    conn.execute("""UPDATE crawl_job SET state='queued', not_before=NULL
+                    WHERE state='blocked' AND not_before<=? AND
+                          (last_error LIKE 'fail_blocked: %' OR last_error LIKE 'fail_login_page: %')""", (now_iso,))
     new = {'directory_feed': 0, 'keyword': 0, 'entity_status': 0, 'official_roots': 0, 'gap': 0, 'mother_kitchen': mother_count}
     for j in discover.directory_and_feed_jobs(seeds):
         meta = j.pop('meta', None) or {}
@@ -214,7 +216,8 @@ def stage_fetch(ctx):
         conn.execute('INSERT INTO budget_ledger(cycle_id,pool,kind,units,job_id,at) VALUES (?,?,?,?,?,?)', (ctx.run_id, state['pool'], kind, UNIT_COSTS.get(kind, 1.0) * units, state['job'], utcnow()))
         conn.commit()
 
-    fetcher = Fetcher(conn, bot.net, bot.raw, charge=charge, browser=None if bot.net.conn is not None else bot.browser, ocr=bot.ocr)
+    directory_hints = {d['url']: d for d in bot.seeds.get('directories', [])}
+    fetcher = Fetcher(conn, bot.net, bot.raw, charge=charge, ocr=bot.ocr)
     gaz = bot.gaz()
     caps = bot.seeds['caps']
     stats = {'jobs_run': 0, 'ok_docs': 0, 'failed_docs': 0, 'blocked': 0, 'children_queued': 0, 'chain': {'subpages': 0, 'sns_leads': 0, 'booking_leads': 0, 'attachments': 0}, 'deferred_trial': 0}
@@ -232,9 +235,6 @@ def stage_fetch(ctx):
         state['pool'], state['job'] = plan['pool_of'][jid], jid
         host = host_of(job['url'] or '')
         prof = conn.execute('SELECT * FROM domain_profile WHERE host=?', (host,)).fetchone() if host else None
-        if prof and prof['state'] == 'blocked':
-            _finish_job(conn, jid, 'blocked', 'domain blocked by evaluator')
-            continue
         if prof and not prof['in_initial_registry'] and prof['state'] == 'trial' and conn.execute('SELECT COUNT(*) FROM fetch_record WHERE host=?', (host,)).fetchone()[0] >= evaluate.TRIAL_SAMPLE * 2:
             stats['deferred_trial'] += 1
             continue
@@ -243,7 +243,6 @@ def stage_fetch(ctx):
         if job['path'] == 'attachment' and not job['url']:
             _finish_job(conn, jid, 'dropped', 'no url')
             continue
-        allow_browser = True if bot.job_hint_dirs.get(job['url'], {}).get('browser') else None
         max_pages = caps['pagination_max_pages'] if job['path'] in ('directory',) else 1
         family = discover.query_family(job, plan.get('mother_counts', {}))
         if family:
@@ -253,7 +252,8 @@ def stage_fetch(ctx):
                 continue
             dispatches[family] += 1
         try:
-            docs = fetcher.fetch(job['url'], job_id=jid, allow_browser=allow_browser, max_pages=max_pages)
+            docs = fetcher.fetch(job['url'], job_id=jid,
+                                 allow_browser=bool(directory_hints.get(job['url'], {}).get('browser')), max_pages=max_pages)
         except DailyLimit:
             stats['deferred_daily_cap'] = True
             break
@@ -313,12 +313,23 @@ def stage_fetch(ctx):
             fatal = last.outcome in ('fail_blocked', 'fail_robots', 'fail_banned', 'fail_login_page')
             if job['path'] in ('keyword_search', 'reverse_gap', 'entity_followup') and last.error == 'feed_without_items':
                 _finish_job(conn, jid, 'done', 'no_results')       # zero search hits is an ANSWER (counts toward absent_in_source), not a failure
+            elif last.error in ('robots_unavailable', 'js_renderer_unavailable'):
+                # The job remains available for a later attempt once policy or rendering is available.
+                conn.execute('UPDATE crawl_job SET last_error=?, not_before=? WHERE job_id=?',
+                             (last.error, (bot.clock() + dt.timedelta(days=1)).strftime('%Y-%m-%dT%H:%M:%SZ'), jid))
             else:
                 if host and not discover.is_search_host(host):
                     conn.execute('UPDATE domain_profile SET fail_streak=fail_streak+1 WHERE host=?', (host,))
                 if fatal:
                     stats['blocked'] += 1
                     _finish_job(conn, jid, 'blocked', f'{last.outcome}: {last.error}')
+                    if last.outcome in ('fail_blocked', 'fail_login_page'):
+                        retry = conn.execute('SELECT retry_after_at FROM web_host_guard WHERE host=?', (last.host,)).fetchone()
+                        due = bot.clock()
+                        if retry and retry[0] is not None and retry[0] > due.timestamp():
+                            # Cap conversion at a representable UTC timestamp. The guard keeps the full hold.
+                            due = dt.datetime.fromtimestamp(min(retry[0], 253402300799), dt.timezone.utc)
+                        conn.execute('UPDATE crawl_job SET not_before=? WHERE job_id=?', (due.strftime('%Y-%m-%dT%H:%M:%SZ'), jid))
                 else:
                     att = job['attempts'] + 1
                     conn.execute('UPDATE crawl_job SET attempts=?, last_error=?, state=? WHERE job_id=?', (att, f'{last.outcome}: {last.error}', 'failed' if att >= 3 else 'queued', jid))
@@ -453,9 +464,6 @@ def stage_evaluate(ctx):
         if discover.is_search_host(h):
             continue
         res.append(evaluate.score_host(conn, h, bot.net, bot.raw, gaz, off, in_initial=h in bot.initial))
-    # deprioritised / blocked hosts: drop their queued discovery work; blocked also stops everything
-    for h in conn.execute("SELECT host, state FROM domain_profile WHERE state IN ('blocked')").fetchall():
-        conn.execute("UPDATE crawl_job SET state='blocked', last_error='domain blocked', finished_at=? WHERE state='queued' AND url LIKE ?", (utcnow(), f"%{h['host']}%"))
     promoted = evaluate.grow_registry(conn, bot.registry_path)
     conn.commit()
     new = [x for x in res if x.get('state') in ('promoted', 'deprioritized', 'blocked') and x.get('host') not in bot.initial]
@@ -532,7 +540,14 @@ HANDLERS = {k: _logged(v) for k, v in _H.items()}
 def run_cycle(bot: Bot, resume: bool = True, cost_cap: float | None = None, trigger: str = 'manual') -> dict:
     cfg = {'lock_name': 'kg-collect', 'daemon_name': 'kg-collect', 'cost_cap_units': (bot.units * 1.3 if cost_cap is None else cost_cap), 'unit_costs': UNIT_COSTS, 'max_attempts': 2, 'backoff_base_sec': 0.0, 'backoff_max_sec': 0.0}
     d = runner.Daemon(bot.conn, HANDLERS, cfg, env={'bot': bot}, stages=STAGES, sleep=lambda s: None)
-    rep = d.run(trigger=trigger, resume=resume)
+    owns_scope = bot.net.run_id is None
+    if owns_scope:
+        bot.net.start_run()
+    try:
+        rep = d.run(trigger=trigger, resume=resume)
+    finally:
+        if owns_scope:
+            bot.net.finish_run()
     rep['ai'] = bot.ai.client.status if bot.ai else 'disabled'
     if bot.ai:
         rep['ai_stats'] = dict(bot.ai.stats)

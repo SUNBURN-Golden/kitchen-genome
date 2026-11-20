@@ -1,56 +1,37 @@
-"""Kitchen Genome crawler. Deterministic, public sources only, robots.txt respected.
+"""Kitchen Genome crawler. Deterministic public HTTP reads under the shared access policy.
 Sources: (1) Bing News RSS per tracked restaurant (lead signal; the finding stores the publisher URL),
 (2) publisher RSS feeds in config.json, (3) the restaurant's own website (status only).
-Never fetches Instagram, Naver or guide.michelin.com (see config.json banned_note).
+Korean press uses robots and spacing. Every host is serialized and access refusals stop its run.
 Output: crawler/out/findings-YYYYMMDD.json  (list of {id, kind, url, host, date, title, new_name?})."""
-import json, os, re, sys, time, datetime as dt, urllib.request, urllib.parse, urllib.robotparser, xml.etree.ElementTree as ET
+import json, os, re, sys, datetime as dt, urllib.parse, xml.etree.ElementTree as ET
 from email.utils import parsedate_to_datetime
 H = os.path.dirname(os.path.abspath(__file__)); ROOT = os.path.dirname(H)
 C = json.load(open(os.path.join(H, 'config.json'), encoding='utf-8'))
-UA = C['user_agent']
-
-def host(u): return urllib.parse.urlparse(u).netloc.lower().removeprefix('www.')
-def banned(u): return any(b in host(u) for b in C['banned_hosts'])
-def allowed(u):
-    if banned(u):
-        return False
-    return network().robots_info(u)['allowed']
+sys.path.insert(0, os.path.join(ROOT, 'daemon'))
+from kg_collect.net import PoliteNet, host_of as host, is_banned as banned
+from kg_collect.limits import DailyLimit
+from kg_daemon.db import connect, migrate
 
 _net = None
-_limits = None
+
 
 def network():
-    global _net, _limits
+    global _net
     if _net is None:
-        sys.path.insert(0, os.path.join(ROOT, 'daemon'))
-        from kg_collect.net import PoliteNet
-        from kg_collect.limits import Limits
-        from kg_daemon.db import connect, migrate
         db_path = os.environ.get('KG_SERVICE_DB') or os.path.join(ROOT, 'data_store', 'kg_service.db')
-        if not os.path.isfile(db_path):
-            db_path = os.path.join(H, 'out', 'web_limits.sqlite')
         conn = connect(db_path)
-        # Local runtime schema only. The collector CLI uses this same migration set.
         migrate(conn)
-        _net, _limits = PoliteNet(conn=conn, timeout=20), Limits(conn)
+        _net = PoliteNet(conn=conn)
     return _net
 
 
 def get(u, timeout=20):
-    from_net = network()
-    if not _limits.admit(u):
-        return None, 'daily_cap'
-    _limits.conn.commit()
-    from kg_collect.limits import DailyLimit
     try:
-        response = from_net.get(u)
+        response = network().get(u, timeout=timeout)
     except DailyLimit:
         return None, 'daily_cap'
     if response.status != 200 or response.error:
         return None, response.error or response.status
-    from kg_collect.net import looks_like_challenge
-    if looks_like_challenge(response):
-        return None, 'domain_paused'
     return response.text(), response.status
 
 def rss_items(xml):
@@ -79,6 +60,21 @@ def chef_names(r):
     return [c for c in re.split(r'[·,/ ]+', re.sub(r'\(.*?\)', '', r.get('chef') or '')) if len(c) >= 2]
 
 def main(day=None):
+    from kg_collect.proxynet import DEFAULT_ROUTE
+
+    net = network()
+    daily_scope = os.environ.get('KG_WEB_RUN_ID')
+    net.start_run(run_id=daily_scope, join=bool(daily_scope))
+    try:
+        return collect(day)
+    finally:
+        if not daily_scope:
+            net.finish_run()
+        if DEFAULT_ROUTE.name:
+            print(f'egress={DEFAULT_ROUTE.name} egress_reason={DEFAULT_ROUTE.reason}')
+
+
+def collect(day=None):
     day = day or dt.date.today().isoformat()
     seed = json.load(open(os.path.join(ROOT, 'data', 'seed.json'), encoding='utf-8'))
     cutoff = (dt.date.fromisoformat(day) - dt.timedelta(days=C['lookback_days'])).isoformat()

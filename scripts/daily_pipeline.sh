@@ -20,7 +20,7 @@ exec 3>&1
 # Keep logging even if the caller closes its output pipe during a timeout.
 exec > >(trap '' HUP INT TERM; exec tee -ap "$KG_HOME/data_store/logs/daily_pipeline_$DAY.log" 3>&-) 2>&1
 LOG_PID=$!
-export KG_IG="${KG_IG:-0}"
+export KG_IG="${KG_IG:-1}"
 record_ai_reason() {
   local line="$1" reason=none token
   for token in $line; do
@@ -79,6 +79,7 @@ GIT_COMMON=$(git rev-parse --git-common-dir)
 exec 9>"$GIT_COMMON/kg_daily.lock"
 if ! flock -n 9; then FINAL=1; echo 'RESULT=SKIPPED reason=locked'; exit 0; fi
 export KG_DAILY_LOCK_FD=9
+export KG_WEB_RUN_ID="daily_${DAY}_$$_$(date +%s)"
 if ! git diff --quiet || ! git diff --cached --quiet; then echo 'FATAL: tracked changes present'; exit 2; fi
 to_main || { echo "FATAL: cannot check out origin/main"; exit 2; }
 BASE_SHA=$(git rev-parse HEAD)

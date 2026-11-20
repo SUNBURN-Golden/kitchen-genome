@@ -54,13 +54,10 @@
  ],
  "banned_hosts": [
   "instagram.com",
-  "naver.com",
-  "naver.me",
-  "guide.michelin.com",
-  "dcinside.com",
-  "yna.co.kr"
+  "place.naver.com",
+  "bluer.co.kr"
  ],
- "banned_note": "guide.michelin.com robots.txt prohibits automated browsing (legal notice) -> MICHELIN status is checked by hand only. Unattended crawler never fetches robots.txt-blocked hosts.",
+ "banned_note": "Instagram uses the dedicated reader. Naver Place is routed as a booking source. Blue Ribbon has a known access refusal.",
  "unreliable_hosts": [
   "tistory.com",
   "blog.",

@@ -80,8 +80,7 @@ if 'crawler/instagram_kg.py' in args and os.environ.get('TEST_IG_TIMEOUT'): sys.
 sys.exit(subprocess.call(args))
 ''',
       'python3':f'''if args and args[0]=='-c': sys.exit(subprocess.call([{sys.executable!r}]+args))
-if 'kg_collect.heavy' in args: print(os.environ.get('TEST_EGRESS','EGRESS=ok ip=49.50.131.207'))
-elif 'kg_collect' in args:
+if 'kg_collect' in args:
     if os.environ.get('TEST_SIGNAL'):
         import signal
         pathlib.Path('sources/registry.discovered.yaml').write_text('changed\\n')
@@ -114,7 +113,7 @@ elif 'scripts/build_deploy.py' in args:
     }
     for tool,script in scripts.items():
         path=bindir/tool; path.write_text(common+script); path.chmod(0o755)
-    env=dict(os.environ,PATH=str(bindir)+':'+os.environ['PATH'],TEST_LOG=str(log),KG_HOME=str(repo),KG_SERVICE_DB=str(repo/'data_store/state.db'),DEEPSEEK_API_KEY='synthetic-secret-never-output',KITCHENGENOME_IG_PASSWORD='synthetic-password-never-output')
+    env=dict(os.environ,PATH=str(bindir)+':'+os.environ['PATH'],TEST_LOG=str(log),KG_HOME=str(repo),KG_SERVICE_DB=str(repo/'data_store/state.db'),DEEPSEEK_API_KEY='synthetic-secret-never-output',KITCHENGENOME_IG_PASSWORD='synthetic-password-never-output',KG_CF_TOKEN_FILE=str(tmp_path/'missing-token'))
     def run(**opts):
         p=subprocess.run(['bash','-c','export TEST_PIPELINE_PID=$$; exec bash "$@"','--',str(SH),str(repo)],env={**env,**opts},capture_output=True,text=True,timeout=30)
         commands=log.read_text()
@@ -130,12 +129,23 @@ elif 'scripts/build_deploy.py' in args:
     return run
 
 
-@pytest.mark.parametrize('options,expected', [({},'IG_SKIPPED'),({'TEST_IG':'BLOCKED'},'IG_SKIPPED'),({'TEST_IG':'SKIPPED'},'IG_SKIPPED'),({'TEST_IG_TIMEOUT':'1'},'IG_SKIPPED'),({'TEST_COLLECT_RC':'124'},'COLLECT=failed'),({'KG_DEEPSEEK':'0'},'RESULT=NO_CHANGE')])
+@pytest.mark.parametrize('options,expected', [
+    ({}, 'IG_OK'), ({'TEST_IG': 'BLOCKED'}, 'IG_BLOCKED'), ({'TEST_IG': 'SKIPPED'}, 'IG_SKIPPED'),
+    ({'TEST_IG_TIMEOUT': '1'}, 'IG_FAILED account=kitchen.genome reason=timeout'),
+    ({'KG_IG': '0'}, 'IG_SKIPPED'), ({'TEST_COLLECT_RC': '124'}, 'COLLECT=failed'),
+    ({'KG_DEEPSEEK': '0'}, 'RESULT=NO_CHANGE'),
+])
 def test_pipeline_nonfatal_steps_have_exact_result(pipeline,options,expected):
     p,commands=pipeline(**options)
     assert p.returncode==0 and p.stdout.strip().splitlines()[-1]=='RESULT=NO_CHANGE reason=none'
     assert expected in p.stdout and 'gh pr create' not in commands and 'gh pr merge' not in commands
-    if options.get('KG_DEEPSEEK')=='0': assert '--deepseek' not in commands
+    assert '--mark-timeout' not in commands
+    assert not list((pipeline.repo / 'crawler/out').glob('ig*blocked.flag'))
+    if options.get('KG_DEEPSEEK') == '0':
+        assert '--deepseek' not in commands
+    if options.get('KG_IG') != '0':
+        ig_command = next(line for line in commands.splitlines() if 'crawler/instagram_kg.py' in line)
+        assert '--cost-cap' not in ig_command
 
 
 def test_pipeline_squash_merges_verified_crawl_without_deploy_when_web_is_unchanged(pipeline):
@@ -194,7 +204,7 @@ def test_collect_daily_runs_web_without_git_or_legacy_instagram(tmp_path):
         with open(os.environ['TEST_LOG'],'a') as f: f.write(tool+' '+' '.join(args)+'\\n')
     ''')
     (bindir / 'timeout').write_text(common + 'import subprocess,sys\nwhile args and args[0].startswith("--"): args.pop(0)\nargs.pop(0)\nsys.exit(subprocess.call(args))\n')
-    (bindir / 'python3').write_text(common + 'import json,subprocess,sys\nif args and args[0]=="-c": raise SystemExit(subprocess.call([sys.executable]+args))\nif "kg_collect.heavy" in args:\n print(os.environ.get("TEST_EGRESS","EGRESS=ok ip=49.50.131.207"))\nelif "kg_collect" in args:\n print(json.dumps({"status":"succeeded","run_id":"fixture","ai":"paused","ai_reason":"json_blank","cost_used":1,"ai_stats":{"considered":1,"skipped_filter":0,"called":1,"failed":1,"findings":0}}))\nelif "instagram_kg.py" in args: raise SystemExit("instagram was invoked")\n')
+    (bindir / 'python3').write_text(common + 'import json,subprocess,sys\nif args and args[0]=="-c": raise SystemExit(subprocess.call([sys.executable]+args))\nif "kg_collect" in args:\n print(json.dumps({"status":"succeeded","run_id":"fixture","ai":"paused","ai_reason":"json_blank","cost_used":1,"egress":os.environ.get("TEST_EGRESS","zecbot"),"egress_reason":"fixture","ai_stats":{"considered":1,"skipped_filter":0,"called":1,"failed":1,"findings":0}}))\nelif "instagram_kg.py" in args: raise SystemExit("instagram was invoked")\n')
     (bindir / 'git').write_text(common + 'raise SystemExit("git invoked")\n')
     for path in bindir.iterdir():
         path.chmod(0o755)
@@ -207,11 +217,10 @@ def test_collect_daily_runs_web_without_git_or_legacy_instagram(tmp_path):
     assert 'ai_docs=1/0/1/1/0' in p.stdout and 'IG_SKIPPED' in p.stdout
     assert '--deepseek' in commands and '--no-browser' in commands and 'instagram' not in commands and 'git ' not in commands
 
-    # zecbot tunnel down: web collection is skipped (never the box IP) and the reason is reported
     log.write_text('')
-    p = subprocess.run(['bash', str(script), str(repo)], env=dict(env, TEST_EGRESS='EGRESS=skip reason=proxy_down'), capture_output=True, text=True)
-    assert p.returncode == 0 and 'COLLECT=skipped reason=proxy_down' in p.stdout
-    assert 'kg_collect --db' not in log.read_text() and 'cycle' not in log.read_text()
+    p = subprocess.run(['bash', str(script), str(repo)], env=dict(env, TEST_EGRESS='box'), capture_output=True, text=True)
+    assert p.returncode == 0 and 'COLLECT=succeeded' in p.stdout and 'egress=box' in p.stdout
+    assert 'kg_collect --db' in log.read_text() and 'kg_collect.heavy' not in log.read_text()
 
 
 def test_build_failure_emits_one_failure_result(pipeline):
@@ -367,7 +376,7 @@ def test_balance_low_survives_all_result_branches(pipeline,phase,changes):
     p,commands=pipeline(**{f'TEST_{phase}_REASON':'balance_low',**changes})
     assert p.returncode==0 and p.stdout.strip().splitlines()[-1].endswith('reason=balance_low')
     assert 'build_weekly_digest.py' in commands and 'argon_review.sh' not in commands
-    assert 'instagram_kg.py' not in commands
+    assert 'instagram_kg.py' in commands
 
 
 def test_real_failure_keeps_primary_reason_and_ai_pause(pipeline):
@@ -378,7 +387,7 @@ def test_real_failure_keeps_primary_reason_and_ai_pause(pipeline):
 def test_instagram_default_and_flag_files_are_untouched():
     collect=(ROOT/'scripts/collect_daily.sh').read_text()
     daily=SH.read_text()
-    assert '${KG_IG:-0}' in collect and '${KG_IG:-0}' in daily
+    assert '${KG_IG:-0}' in collect and '${KG_IG:-1}' in daily
     for flag in ('ig_blocked.flag','ig_kg_blocked.flag'):
         assert flag not in collect+daily
 

@@ -1,10 +1,17 @@
-"""Tests may use local fixture HTTP, but never a live provider endpoint."""
+"""Use fake model transports and fixture credential paths."""
+from pathlib import Path
+import sys
 import urllib.request
 import pytest
 
+sys.path.insert(0, str(Path(__file__).resolve().parents[1] / 'daemon'))
+
 
 @pytest.fixture(autouse=True)
-def no_live_deepseek(monkeypatch):
+def no_live_deepseek(monkeypatch, tmp_path):
+    from kg_ai import deepseek
+
+    monkeypatch.setattr(deepseek, 'QWEN_KEY_PATH', str(tmp_path / 'missing-model-key'))
     original = urllib.request.OpenerDirector.open
     def guarded(opener, request, *args, **kwargs):
         url = request.full_url if isinstance(request, urllib.request.Request) else str(request)
@@ -12,4 +19,3 @@ def no_live_deepseek(monkeypatch):
             pytest.fail('live provider HTTP forbidden: inject both transports')
         return original(opener, request, *args, **kwargs)
     monkeypatch.setattr(urllib.request.OpenerDirector, 'open', guarded)
-    monkeypatch.setenv('KG_IG', '0')

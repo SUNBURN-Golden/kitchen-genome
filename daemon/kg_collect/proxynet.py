@@ -1,13 +1,8 @@
-"""Public-web egress through the zecbot SOCKS5 tunnel (owner order 2026-11-11 10:33 KST).
+"""HTTP transport with zecbot preferred and a box route for confirmed tunnel failures.
 
-Every public web request of the collector leaves through ``socks5h://127.0.0.1:1080`` (exit IP 49.50.131.207). There is NO direct
-fallback: when the tunnel is down a request fails with ``proxy_down`` and the caller skips. Loopback hosts (local fixture servers in
-tests) are not public web and stay local. DeepSeek / Tavily / GitHub / Cloudflare clients do not use this module (they stay direct),
-and Instagram never uses it. Stdlib only (no browser, no extra packages): survives box resets.
-
-Size guard (zecbot egress is billed over 20 GB/month): only text-like content types are read, Content-Length over the cap is not
-downloaded, bodies are read with a hard byte cap, and gzip is requested so the wire stays small."""
-import gzip
+The caller holds the shared host guard through transport selection and response classification.
+Response and traffic bounds apply on both routes.
+"""
 import http.client
 import ipaddress
 import json
@@ -31,7 +26,7 @@ SKIP_EXT = ('.jpg', '.jpeg', '.png', '.gif', '.webp', '.svg', '.bmp', '.ico', '.
 
 
 class ProxyDown(Exception):
-    """The SOCKS tunnel is unreachable or refused the CONNECT. Never answered by a direct connection."""
+    """Local tunnel connection or SOCKS greeting failure before contacting the target."""
 
 
 def proxy_url() -> str:
@@ -45,16 +40,6 @@ def _proxy_addr(url: str | None = None) -> tuple[str, int]:
     return p.hostname or '127.0.0.1', p.port or 1080
 
 
-def is_loopback(host: str) -> bool:
-    h = (host or '').strip('[]').lower()
-    if h in ('localhost', ''):
-        return True
-    try:
-        return ipaddress.ip_address(h).is_loopback
-    except ValueError:
-        return False
-
-
 def _recv_exact(s, n):
     buf = b''
     while len(buf) < n:
@@ -66,43 +51,57 @@ def _recv_exact(s, n):
 
 
 def socks5_connect(host: str, port: int, timeout: float = 20, proxy: str | None = None) -> socket.socket:
-    """RFC 1928 CONNECT with the HOSTNAME sent to the proxy (socks5h: DNS resolves on zecbot, no local DNS leak)."""
+    """RFC 1928 CONNECT to an address already resolved and checked by the caller."""
     ph, pp = _proxy_addr(proxy)
     try:
         s = socket.create_connection((ph, pp), timeout=timeout)
     except OSError as e:
         raise ProxyDown(f'connect:{type(e).__name__}') from None
     try:
-        s.sendall(b'\x05\x01\x00')
-        if _recv_exact(s, 2) != b'\x05\x00':
-            raise ProxyDown('socks_auth_rejected')
-        hb = host.encode('idna') if not host.isascii() else host.encode()
-        s.sendall(b'\x05\x01\x00\x03' + bytes([len(hb)]) + hb + struct.pack('>H', port))
+        try:
+            s.sendall(b'\x05\x01\x00')
+            if _recv_exact(s, 2) != b'\x05\x00':
+                raise ProxyDown('socks_auth_rejected')
+        except OSError:
+            raise ProxyDown('socks_greeting_failed') from None
+        address = ipaddress.ip_address(host)
+        atyp = 1 if address.version == 4 else 4
+        s.sendall(b'\x05\x01\x00' + bytes([atyp]) + address.packed + struct.pack('>H', port))
         rep = _recv_exact(s, 4)
         if rep[1] != 0:
-            s.close()
-            raise OSError(f'socks_connect_failed:{rep[1]}')          # target unreachable via proxy: a normal network error, NOT proxy down
-        atyp = rep[3]
-        _recv_exact(s, {1: 4, 4: 16}.get(atyp) or _recv_exact(s, 1)[0])
-        _recv_exact(s, 2)
+            raise OSError('socks_target_unreachable')
+        try:
+            atyp = rep[3]
+            _recv_exact(s, {1: 4, 4: 16}.get(atyp) or _recv_exact(s, 1)[0])
+            _recv_exact(s, 2)
+        except ProxyDown:
+            raise OSError('socks_connect_incomplete') from None
         return s
-    except (ProxyDown, OSError):
+    except BaseException:
         s.close()
         raise
-    except Exception as e:  # noqa: BLE001
-        s.close()
-        raise ProxyDown(f'socks_protocol:{type(e).__name__}') from None
 
 
-class _SocksHTTP(http.client.HTTPConnection):
-    def connect(self):
-        self.sock = socks5_connect(self.host, self.port, self.timeout)
+def _connection(host, port, address, secure, timeout, via_proxy):
+    cls = http.client.HTTPSConnection if secure else http.client.HTTPConnection
+    conn = cls(host, port, timeout=timeout, **({'context': _CTX} if secure else {}))
+
+    def dial(_target, timeout, _source):
+        if via_proxy:
+            return socks5_connect(address, port, timeout)
+        return socket.create_connection((address, port), timeout)
+
+    conn._create_connection = dial
+    return conn
 
 
-class _SocksHTTPS(http.client.HTTPSConnection):
-    def connect(self):
-        raw = socks5_connect(self.host, self.port, self.timeout)
-        self.sock = self._context.wrap_socket(raw, server_hostname=self.host)
+def _public_ip(host, port):
+    from .net import public_address
+
+    addresses = [row[4][0] for row in socket.getaddrinfo(host, port, type=socket.SOCK_STREAM)]
+    if not addresses or any(not public_address(ipaddress.ip_address(addr)) for addr in addresses):
+        return None
+    return next((addr for addr in addresses if ':' not in addr), addresses[0])
 
 
 _CTX = ssl.create_default_context()
@@ -142,29 +141,17 @@ def _decode(body: bytes, enc: str, cap: int = MAX_BODY) -> bytes:
         return b''
 
 
-def request(url: str, headers: dict | None = None, timeout: float = 20, method: str = 'GET', max_body: int | None = None, text_only: bool = True,
-            traffic: Traffic = TRAFFIC):
-    """-> (status, headers{lower}, body, error). Raises ProxyDown when the tunnel is unusable. Never follows redirects (caller decides)."""
-    p = urllib.parse.urlsplit(url)
-    host, port = p.hostname or '', p.port or (443 if p.scheme == 'https' else 80)
+def _send(p, host, port, address, headers, timeout, max_body, text_only, traffic, via_proxy, method):
     path = (p.path or '/') + (('?' + p.query) if p.query else '')
-    if p.scheme not in ('http', 'https'):
-        return 0, {}, b'', 'bad_scheme'
-    if text_only and p.path.lower().endswith(SKIP_EXT):
-        traffic.add(skipped_type=1)
-        return 0, {}, b'', 'skipped_binary_ext'
-    hdrs = {'Accept-Encoding': 'gzip', 'Connection': 'close', **(headers or {})}
-    local = is_loopback(host)
-    if local:
-        cls = http.client.HTTPSConnection if p.scheme == 'https' else http.client.HTTPConnection
-        conn = cls(host, port, timeout=timeout, **({'context': _CTX} if p.scheme == 'https' else {}))
-    else:
-        conn = (_SocksHTTPS(host, port, timeout=timeout, context=_CTX) if p.scheme == 'https' else _SocksHTTP(host, port, timeout=timeout))
+    hdrs = {'Accept-Encoding': 'gzip', 'Connection': 'close', **headers}
+    conn = _connection(host, port, address, p.scheme == 'https', timeout, via_proxy)
+    status, rh = 0, {}
     cap = max_body or MAX_BODY
     try:
         conn.request(method, path, headers=hdrs)
         out_bytes = len(method) + len(path) + sum(len(k) + len(v) + 4 for k, v in hdrs.items()) + 40
         r = conn.getresponse()
+        status = r.status
         rh = {k.lower(): v for k, v in r.getheaders()}
         head_bytes = sum(len(k) + len(v) + 4 for k, v in r.getheaders()) + 20
         ctype = (rh.get('content-type') or '').split(';')[0].strip().lower()
@@ -189,8 +176,8 @@ def request(url: str, headers: dict | None = None, timeout: float = 20, method: 
     except ProxyDown:
         traffic.add(proxy_errors=1)
         raise
-    except (OSError, http.client.HTTPException, ssl.SSLError) as e:
-        return 0, {}, b'', type(e).__name__
+    except (OSError, http.client.HTTPException, ValueError) as e:
+        return status, rh, b'', type(e).__name__
     finally:
         try:
             conn.close()
@@ -213,33 +200,92 @@ def proxy_alive(timeout: float = 5) -> bool:
         s.close()
 
 
-def exit_ip(timeout: float = 15) -> str | None:
-    """The public IP the target web sees for our proxied requests (via a public IP echo). None if unknown / proxy down."""
-    for url in IP_ECHO_URLS:
+class Route:
+    """Once box fallback is confirmed, use it for the rest of this invocation."""
+
+    def __init__(self):
+        self.lock = threading.Lock()
+        self.name = None
+        self.reason = 'no_dispatch'
+
+    def select(self, *, failed=False):
+        with self.lock:
+            if self.name is None or (failed and self.name == 'zecbot'):
+                if proxy_alive():
+                    self.name = 'zecbot'
+                    if self.reason == 'no_dispatch':
+                        self.reason = 'tunnel_healthy'
+                else:
+                    self.name, self.reason = 'box', 'tunnel_down'
+            return self.name
+
+    def request(self, url, headers=None, timeout=20, method='GET', max_body=None, text_only=True, traffic=TRAFFIC):
+        """Perform a single HTTP hop, with one fallback on a confirmed local failure."""
+        from .net import UA, valid_destination
+
+        if method not in ('GET', 'HEAD'):
+            return 0, {}, b'', 'unsupported_method'
+        if not valid_destination(url):
+            return 0, {}, b'', 'unsafe_destination'
+        p = urllib.parse.urlsplit(url)
+        host, port = p.hostname.rstrip('.'), p.port or (443 if p.scheme == 'https' else 80)
+        if text_only and p.path.lower().endswith(SKIP_EXT):
+            traffic.add(skipped_type=1)
+            return 0, {}, b'', 'skipped_binary_ext'
         try:
-            st, _, body, _ = request(url, {'User-Agent': 'KitchenGenomeBot/1.0'}, timeout=timeout, text_only=True)
+            address = _public_ip(host, port)
+        except OSError:
+            return 0, {}, b'', 'dns_error'
+        if address is None:
+            return 0, {}, b'', 'unsafe_destination'
+        headers = {k: v for k, v in (headers or {}).items() if k.lower() not in ('user-agent', 'host')}
+        headers['User-Agent'] = UA
+        args = (p, host, port, address, headers, timeout, max_body, text_only, traffic)
+        name = self.select()
+        try:
+            return _send(*args, via_proxy=name == 'zecbot', method=method)
         except ProxyDown:
+            if name == 'zecbot' and self.select(failed=True) == 'box':
+                return _send(*args, via_proxy=False, method=method)
+            return 0, {}, b'', 'proxy_failure'
+
+    def egress_ok(self, expected=None, probe=None):
+        if self.select() == 'box':
+            return True, self.reason
+        if probe is None:
+            from .net import PoliteNet, Response
+
+            def transport(url, headers, timeout):
+                status, headers, body, err = self.request(url, headers, timeout=timeout)
+                return Response(url, status, headers, body, error=err)
+            net = PoliteNet(transport=transport)
+            probe = lambda url, timeout: net.get(url, diagnostic=True, timeout=timeout)
+        ip = exit_ip(probe)
+        want = expected or os.environ.get('KG_WEB_EXPECTED_IP') or EXPECTED_EXIT_IP
+        with self.lock:
+            if self.name == 'zecbot':
+                self.reason = 'exit_ip_unknown' if ip is None else ('exit_ip_match' if ip == want else 'exit_ip_mismatch')
+            return True, self.reason
+
+
+DEFAULT_ROUTE = Route()
+request = DEFAULT_ROUTE.request
+egress_ok = DEFAULT_ROUTE.egress_ok
+
+
+def exit_ip(probe, timeout=15):
+    """One advisory read from an IP echo service. The address is never logged."""
+    for url in IP_ECHO_URLS:
+        response = probe(url, timeout)
+        if response.blocked:
             return None
-        if st != 200:
+        if response.status != 200:
             continue
         try:
-            ip = body.decode().strip() if url == IP_ECHO_URLS[-1] else json.loads(body.decode()).get('ip')
+            ip = response.text().strip() if url == IP_ECHO_URLS[-1] else json.loads(response.text()).get('ip')
             if isinstance(ip, str):
                 ipaddress.ip_address(ip)
                 return ip
         except (ValueError, AttributeError):
             continue
     return None
-
-
-def egress_ok(expected: str | None = None) -> tuple[bool, str]:
-    """Gate for every crawl run: tunnel answers AND the exit IP is zecbot's. (False, reason) means skip the run; never go direct."""
-    if not proxy_alive():
-        return False, 'proxy_down'
-    ip = exit_ip()
-    want = expected or os.environ.get('KG_WEB_EXPECTED_IP') or EXPECTED_EXIT_IP
-    if ip is None:
-        return False, 'exit_ip_unknown'
-    if ip != want:
-        return False, f'exit_ip_mismatch:{ip}'
-    return True, ip

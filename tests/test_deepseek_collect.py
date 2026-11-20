@@ -658,9 +658,9 @@ def test_web_daily_limits_pause_and_delay_persist(world):
     def transport(url,*args):
         calls.append((url,t[0])); return Response(url, 200, {'content-type':'text/plain'}, b'User-agent: *\nAllow: /\nCrawl-delay: 9' if url.endswith('robots.txt') else b'page')
     n=PoliteNet(transport=transport,clock=lambda:t[0],sleep=sleep,min_delay=0,conn=c)
-    n.get('https://x.test/a')
+    n.get('https://hankyung.com/a')
     n2=PoliteNet(transport=transport,clock=lambda:t[0],sleep=sleep,conn=c)
-    n2.get('https://x.test/b')
+    n2.get('https://hankyung.com/b')
     assert all(b[1]-a[1]>=5 for a,b in zip(calls,calls[1:]))
     assert calls[1][1]-calls[0][1]>=9
     n3=PoliteNet(transport=lambda u,*a:Response(u,429,{},b''), clock=lambda:t[0],sleep=sleep,conn=c)
@@ -671,7 +671,7 @@ def test_web_daily_limits_pause_and_delay_persist(world):
     assert limits.admit('a') and limits.admit('a') and limits.admit('b') and not limits.admit('c')
     limits.dispatch(); limits.dispatch()
     with pytest.raises(DailyLimit): Limits(c,day=lambda:'2026-11-01',fetches=2).dispatch()
-    assert not discover.enqueue(c,path='reverse_gap',pool='backfill',url='https://x.test/deep',depth=3,caps={'max_depth':99})
+    assert not discover.enqueue(c,path='reverse_gap',pool='backfill',url='https://hankyung.com/deep',depth=3,caps={'max_depth':99})
 
 
 def test_kg_and_model_findings_cannot_corroborate_seed_changes(tmp_path, monkeypatch):
