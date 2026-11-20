@@ -172,11 +172,11 @@ FIELD_QUERIES = {
 }
 
 
-def gap_jobs(conn, now=None, limit=60) -> list[dict]:
+def gap_jobs(conn, now=None) -> list[dict]:
     """Jobs for open gaps. inaccessible -> NO network job (review item instead). conflict -> review item. Others -> targeted reverse-search queries."""
     now = now or utcnow()
     jobs = []
-    for g in conn.execute("""SELECT g.*, t.name_ko, t.name_en, t.kind FROM gap g JOIN target t USING(target_id) WHERE g.state='open' ORDER BY g.attempts, g.opened_at LIMIT ?""", (limit * 3,)):
+    for g in conn.execute("""SELECT g.*, t.name_ko, t.name_en, t.kind FROM gap g JOIN target t USING(target_id) WHERE g.state='open' ORDER BY g.attempts, g.opened_at"""):
         if g['klass'] in ('inaccessible', 'conflict'):
             rid = stable_id('rev', 'gap', g['gap_id'], g['klass'])
             conn.execute("INSERT OR IGNORE INTO review_queue(review_id,reason,subject_type,subject_id,payload_json,dedupe_key,created_at) VALUES (?,?,?,?,?,?,?)",
@@ -186,8 +186,6 @@ def gap_jobs(conn, now=None, limit=60) -> list[dict]:
         for q in FIELD_QUERIES[g['field']][: 1 if g['klass'] == 'absent_in_source' else 2]:
             jobs.append({'path': 'reverse_gap', 'pool': 'backfill', 'query': q.format(name=name), 'target_id': g['target_id'], 'gap_id': g['gap_id'], 'field': g['field'],
                          'absent': g['klass'] == 'absent_in_source', 'attempts': g['attempts']})
-        if len(jobs) >= limit:
-            break
     conn.commit()
     return jobs
 

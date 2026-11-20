@@ -114,7 +114,7 @@ def incremental_fetch(ctx: StageContext) -> StageResult:
         if adapter == 'instagram_py':
             records = list(_instagram_records(ctx))
         elif fetcher:
-            records = records + list(fetcher(sid, s, ctx))        # network fetchers must call ctx.cost.charge('http_request') and honour halts
+            records = records + list(fetcher(sid, s, ctx))        # network fetchers report work through ctx.cost.charge('http_request')
         elif adapter == 'http_fetch':
             stubbed.append(sid)                                    # STUB: network fetch not wired in Phase 1 (local crawler output is still ingested)
         new = dup = 0
@@ -613,7 +613,7 @@ def quality_check(ctx: StageContext) -> StageResult:
         queue_review(ctx.conn, f'quality:{kind}', 'quality', subj, {'kind': kind}, dedupe_key=f'quality:{kind}:{subj}:{day[:7]}')
     ctx.conn.commit()
     if res['violations']:
-        raise NonRetryable(f'invariant violations: {res["violations"][:5]} (+{max(0, len(res["violations"]) - 5)} more)')
+        raise NonRetryable(res['violations'][0][0])
     from collections import Counter
     return StageResult({'warnings': dict(Counter(k for k, _ in res['warnings']))})
 

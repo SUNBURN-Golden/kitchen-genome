@@ -1,8 +1,7 @@
-"""Durable monthly published-target inspections, with bounded admission and review fairness."""
+"""Durable monthly published-target inspections and their pending review work."""
 import datetime as dt
 import hashlib
 import json
-import math
 from zoneinfo import ZoneInfo
 from kg_daemon.db import stable_id, utcnow
 from . import discover
@@ -44,27 +43,16 @@ def active_for_fetch(conn, fetch):
     return attempt if attempt and fetch['fetched_at'] >= attempt['queued_at'] else None
 
 
-def admit(conn, seeds, budget, *, now=None):
-    """Daily admission is atomic across reruns. A balance pause never creates new work."""
+def admit(conn, seeds, *, now=None):
+    """Queue each due target once across reruns."""
     now = now or dt.datetime.now(dt.timezone.utc)
     stamp, day = iso(now), now.astimezone(ZoneInfo('Asia/Seoul')).date().isoformat()
-    if budget is None:
-        return 0
-    previous = budget.workload
-    budget.workload = 'recheck'
-    room = budget.room_tokens()
-    budget.workload = previous
-    if room < 15000:
-        return 0
     conn.commit()
     try:
         conn.execute('BEGIN IMMEDIATE')
-        size = conn.execute('SELECT COUNT(*) FROM restaurant_recheck').fetchone()[0]
-        allowance = min(10, max(1, math.ceil(size / 30)))
-        used = conn.execute('SELECT COUNT(*) FROM restaurant_recheck_attempt WHERE day=?', (day,)).fetchone()[0]
         rows = conn.execute("""SELECT r.*,t.name_ko,t.attrs_json FROM restaurant_recheck r JOIN target t USING(target_id)
                                WHERE r.active_attempt_id IS NULL AND r.next_due_at<=? AND t.status='active'
-                               ORDER BY r.next_due_at,r.restaurant_id LIMIT ?""", (stamp, max(0, allowance-used))).fetchall()
+                               ORDER BY r.next_due_at,r.restaurant_id""", (stamp,)).fetchall()
         for r in rows:
             aid = stable_id('rck', r['restaurant_id'], r['next_due_at'])
             # Coalesce an ordinary pending source/status fetch when available.
@@ -82,7 +70,10 @@ def admit(conn, seeds, budget, *, now=None):
                 url = discover.search_url(seeds, query)
                 discover.enqueue(conn, path='entity_followup', pool='refresh', url=url, query=query,
                                  target_id=r['target_id'], relevance=.7, caps=seeds['caps'])
-                jid = discover.job_id('entity_followup', url)
+                job = conn.execute("SELECT job_id FROM crawl_job WHERE path='entity_followup' AND url=?", (url,)).fetchone()
+                if not job:
+                    continue
+                jid = job[0]
             if not conn.execute('SELECT 1 FROM crawl_job WHERE job_id=?', (jid,)).fetchone():
                 continue
             conn.execute("INSERT INTO restaurant_recheck_attempt(attempt_id,restaurant_id,due_period,day,queued_at) VALUES (?,?,?,?,?)",
@@ -109,35 +100,6 @@ def link_children(conn, parent):
         for j in children:
             if not conn.execute('SELECT 1 FROM restaurant_recheck_job WHERE attempt_id=? AND job_id=?', (attempt['attempt_id'],j['job_id'])).fetchone():
                 conn.execute('INSERT INTO restaurant_recheck_job(attempt_id,job_id) VALUES (?,?)', (attempt['attempt_id'],j['job_id']))
-
-
-def hold_review(conn, attempt, budget, tokens, *, extraction_tokens=0):
-    """Reserve review headroom before speculative extraction; holds are not billed usage."""
-    conn.commit()
-    try:
-        conn.execute('BEGIN IMMEDIATE')
-        old = conn.execute("SELECT * FROM ai_review_hold WHERE attempt_id=? AND day=? AND state='held'", (attempt,budget.day())).fetchone()
-        old_tokens = old['units'] / budget.meter.unit_costs['llm_tokens_k'] * 1000 if old else 0
-        tokens = max(tokens, old_tokens)
-        if tokens - old_tokens + extraction_tokens > budget.room_tokens():
-            conn.rollback()
-            return False
-        units = tokens / 1000 * budget.meter.unit_costs['llm_tokens_k']
-        conn.execute("INSERT INTO ai_review_hold(attempt_id,day,units,state) VALUES (?,?,?,'held') ON CONFLICT(attempt_id) DO UPDATE SET day=excluded.day,units=excluded.units,state='held',request_key=NULL", (attempt,budget.day(),units))
-        conn.commit()
-        return True
-    except Exception:
-        conn.rollback()
-        raise
-
-
-def restore_review_hold(conn, attempt, previous_units):
-    """Undo speculative headroom when extraction produced no reviewable rows."""
-    if previous_units is None:
-        conn.execute("UPDATE ai_review_hold SET state='released' WHERE attempt_id=? AND state='held'", (attempt,))
-    else:
-        conn.execute("UPDATE ai_review_hold SET units=? WHERE attempt_id=? AND state='held'", (previous_units, attempt))
-    conn.commit()
 
 
 def finish(conn, aid, outcome, *, now=None, completed=False):

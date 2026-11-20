@@ -146,6 +146,7 @@ def _send(p, host, port, address, headers, timeout, max_body, text_only, traffic
     hdrs = {'Accept-Encoding': 'gzip', 'Connection': 'close', **headers}
     conn = _connection(host, port, address, p.scheme == 'https', timeout, via_proxy)
     status, rh = 0, {}
+    out_bytes = head_bytes = 0
     cap = max_body or MAX_BODY
     try:
         conn.request(method, path, headers=hdrs)
@@ -168,15 +169,17 @@ def _send(p, host, port, address, headers, timeout, max_body, text_only, traffic
         wire_cap = min(MAX_WIRE, cap * 2) if rh.get('content-encoding') else cap
         raw = r.read(wire_cap + 1) if method != 'HEAD' else b''
         truncated = len(raw) > wire_cap
-        raw = raw[:wire_cap]
-        traffic.add(requests=1, bytes_in=head_bytes + len(raw), bytes_out=out_bytes, skipped_large=1 if truncated else 0)
-        body = _decode(raw, rh.get('content-encoding'), cap)
+        received = len(raw)
+        body = _decode(raw[:wire_cap], rh.get('content-encoding'), cap)
+        traffic.add(requests=1, bytes_in=head_bytes + received, bytes_out=out_bytes, skipped_large=int(truncated))
         rh.pop('content-encoding', None)
         return r.status, rh, body, ('truncated' if truncated else None)
     except ProxyDown:
         traffic.add(proxy_errors=1)
         raise
     except (OSError, http.client.HTTPException, ValueError) as e:
+        if out_bytes:
+            traffic.add(requests=1, bytes_in=head_bytes, bytes_out=out_bytes)
         return status, rh, b'', type(e).__name__
     finally:
         try:
@@ -219,7 +222,8 @@ class Route:
                     self.name, self.reason = 'box', 'tunnel_down'
             return self.name
 
-    def request(self, url, headers=None, timeout=20, method='GET', max_body=None, text_only=True, traffic=TRAFFIC):
+    def request(self, url, headers=None, timeout=20, method='GET', max_body=None, text_only=True, traffic=TRAFFIC,
+                on_traffic=None):
         """Perform a single HTTP hop, with one fallback on a confirmed local failure."""
         from .net import UA, valid_destination
 
@@ -240,13 +244,23 @@ class Route:
             return 0, {}, b'', 'unsafe_destination'
         headers = {k: v for k, v in (headers or {}).items() if k.lower() not in ('user-agent', 'host')}
         headers['User-Agent'] = UA
-        args = (p, host, port, address, headers, timeout, max_body, text_only, traffic)
+        def send(route):
+            local = Traffic()
+            try:
+                return _send(p, host, port, address, headers, timeout, max_body, text_only, local,
+                             via_proxy=route == 'zecbot', method=method)
+            finally:
+                snapshot = local.snapshot()
+                traffic.add(**snapshot)
+                if on_traffic and snapshot['requests']:
+                    on_traffic(route, snapshot)
+
         name = self.select()
         try:
-            return _send(*args, via_proxy=name == 'zecbot', method=method)
+            return send(name)
         except ProxyDown:
             if name == 'zecbot' and self.select(failed=True) == 'box':
-                return _send(*args, via_proxy=False, method=method)
+                return send('box')
             return 0, {}, b'', 'proxy_failure'
 
     def egress_ok(self, expected=None, probe=None):
@@ -289,3 +303,11 @@ def exit_ip(probe, timeout=15):
         except (ValueError, AttributeError):
             continue
     return None
+
+
+def record_traffic(conn, day, route, traffic):
+    with conn:
+        conn.execute("""INSERT INTO web_traffic_day(day,route,requests,bytes_in,bytes_out) VALUES (?,?,?,?,?)
+            ON CONFLICT(day,route) DO UPDATE SET requests=requests+excluded.requests,
+            bytes_in=bytes_in+excluded.bytes_in,bytes_out=bytes_out+excluded.bytes_out""",
+            (day, route, traffic['requests'], traffic['bytes_in'], traffic['bytes_out']))

@@ -77,6 +77,9 @@ def _apply(conn, raw):
     publication = site_publish.apply_ready(conn, seed, raw, now)
     if applied or publication['added'] or publication['upgraded']:
         site_publish.atomic_json(SEED, seed)
+    if conn:
+        from kg_collect.scoreboard import record_publication
+        record_publication(conn, seed)
     # pending queue: keep first_seen, replace content
     old = {(p['id'], p['kind'], p.get('new_name'), p.get('field')): p for p in load(os.path.join(H, 'pending.json'), [])}
     for p in pend:

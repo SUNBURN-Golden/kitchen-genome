@@ -6,6 +6,7 @@ import datetime as dt
 import json
 import os
 import re
+import time
 import urllib.parse
 from pathlib import Path
 
@@ -13,10 +14,10 @@ from kg_daemon import runner
 from kg_daemon.db import DEFAULT_DB, ROOT, connect, migrate, new_id, utcnow
 
 from . import EXTRACTOR_VERSION, apply as apply_mod, booking, discover, evaluate, gaps, official, review, scheduler, recheck, site_publish
-from .fetch import Doc, Fetcher, parse_feed
+from .fetch import Doc, Fetcher, canonicalize_url, parse_feed
 from .htmlx import parse_html
 from . import net as net_mod
-from .limits import DailyLimit
+from .guard import Guard
 from .net import PoliteNet, host_of
 from .pipeline import check_extractor_health, fetch_regression_alert, official_hosts, process_doc, reconcile_host_yield_alerts
 from .rawstore import RawStore
@@ -31,7 +32,7 @@ class Bot:
     """Collaborators. Everything the network touches is injectable (tests use a fixture server / fake clock)."""
 
     def __init__(self, conn, data_dir=None, net=None, browser=None, seeds=None, model_hook=None, today=None, ocr=True,
-                 units=60, registry_path=None, seeds_path=None, deepseek=False, seed_path=None, clock=None):
+                 registry_path=None, seeds_path=None, deepseek=False, seed_path=None, clock=None, deadline=None, fetch_deadline=None):
         self.conn = conn
         self.data_dir = data_dir or os.path.join(ROOT, 'data_store')
         self.raw = RawStore(os.path.join(self.data_dir, 'raw'))
@@ -44,10 +45,14 @@ class Bot:
         self.today = today or self.clock().astimezone(site_publish.KST).date()
         self.seed_path = Path(seed_path or Path(ROOT) / 'data' / 'seed.json')
         self.ocr = ocr
-        self.units = units
+        self.deadline, self.fetch_deadline = deadline, fetch_deadline or deadline
         self.registry_path = registry_path or evaluate.DISCOVERED_REGISTRY
         self.initial = discover.initial_hosts()
         net_mod.SEARCH_HOSTS.add(host_of(self.seeds['keyword_search']['endpoint'].format(q='x')))
+
+    def expired(self, deadline=None):
+        deadline = deadline if deadline is not None else self.deadline
+        return deadline is not None and time.monotonic() >= deadline
 
     def gaz(self) -> Gazetteer:
         return Gazetteer(self.conn)
@@ -93,6 +98,7 @@ def stage_plan(ctx):
         bot.ai = Adapters.for_meter(ctx.cost)
     if bot.ai:
         bot.ai.client.budget.meter = ctx.cost
+        bot.ai.client.deadline = bot.fetch_deadline
     caps = {**seeds['caps']}
     now_dt = bot.clock()
     seed = json.loads(bot.seed_path.read_text(encoding='utf-8'))
@@ -105,7 +111,7 @@ def stage_plan(ctx):
     corpus = site_publish.Corpus(conn, bot.raw, seeds, now_dt)
     qualified = corpus.qualified_targets()
     entity_targets = discover.eligible_entity_targets(conn, qualified)
-    mother_counts, due_mother, mother_count = discover.reconcile_mother_jobs(conn, seed, bot.today, seeds, caps)
+    mother_counts, _, mother_count = discover.reconcile_mother_jobs(conn, seed, bot.today, seeds, caps)
     now_iso = now_dt.strftime('%Y-%m-%dT%H:%M:%SZ')
     conn.execute("""UPDATE crawl_job SET state='queued', not_before=NULL
                     WHERE state='blocked' AND not_before<=? AND
@@ -123,9 +129,9 @@ def stage_plan(ctx):
         new['keyword'] += discover.enqueue(conn, **j, caps=caps)
     for j in discover.seed_official_site_jobs(conn):
         new['official_roots'] += discover.enqueue(conn, **j, caps=caps)
-    new['official_probes'] = sum(discover.enqueue(conn, **j, caps=caps) for j in discover.official_probe_jobs(conn, limit=caps.get('max_official_probes_per_cycle', 40)))
+    new['official_probes'] = sum(discover.enqueue(conn, **j, caps=caps) for j in discover.official_probe_jobs(conn))
     gaps.classify_gaps(conn)
-    for j in gaps.gap_jobs(conn, limit=60):
+    for j in gaps.gap_jobs(conn):
         g = {k: v for k, v in j.items() if k not in ('field', 'absent', 'attempts')}
         g['relevance'] = 0.7
         g['url'] = discover.search_url(seeds, g['query'])
@@ -138,32 +144,15 @@ def stage_plan(ctx):
     conn.commit()
     recheck.ensure_schedule(conn, seed)
     recheck.reconcile(conn)
-    if bot.ai and bot.ai.client.status == 'enabled':
-        if not bot.ai.client.check_balance():
-            new['monthly_rechecks'] = recheck.admit(conn, seeds, bot.ai.client.budget)
+    new['monthly_rechecks'] = recheck.admit(conn, seeds, now=now_dt)
     requeued = scheduler.requeue_due(conn, now_dt, mother_counts=mother_counts)
-    model_allowance = 0
-    if bot.ai and bot.ai.client.status == 'enabled':
-        budget = bot.ai.client.budget
-        daily_used = conn.execute('SELECT COALESCE(SUM(units),0) FROM ai_request WHERE day=?', (budget.day(),)).fetchone()[0]
-        model_allowance = max(0, budget.daily_cap - daily_used)
-    available_units = min(bot.units, max(0, ctx.cost.cap - ctx.cost.used - model_allowance)) if bot.ai and bot.ai.client.status == 'enabled' else bot.units
-    pl = scheduler.plan(conn, available_units, now_dt, mother_counts=mother_counts, due_mother=due_mother,
-                        query_caps=seeds['keyword_search'].get('daily_allowances'), entity_targets=entity_targets)
-    chosen = [jid for p in ('discovery', 'backfill', 'refresh') for jid in pl['chosen'][p]]
-    pri = {r['job_id']: r['priority'] for r in conn.execute('SELECT job_id, priority FROM crawl_job')}
-    reserved = {jid: i for i, jid in enumerate(pl['reserved_queries'])}
-    chosen.sort(key=lambda j: (reserved.get(j, len(reserved)), -pri.get(j, 0)))
-    return runner.StageResult({'new_jobs': new, 'requeued': requeued, 'budgets': pl['budgets'], 'queued_by_pool': pl['queued_by_pool'],
-                               'chosen_counts': {p: len(v) for p, v in pl['chosen'].items()}, 'order': chosen, 'mother_counts': mother_counts,
-                               'pool_of': {j: next(p for p in pl['chosen'] if j in pl['chosen'][p]) for j in chosen}})
+    pl = scheduler.plan(conn, now_dt, mother_counts=mother_counts, entity_targets=entity_targets)
+    return runner.StageResult({'new_jobs': new, 'requeued': requeued, 'queued_by_pool': pl['queued_by_pool'],
+                               'chosen_counts': {p: len(v) for p, v in pl['chosen'].items()}, 'order': pl['order'],
+                               'mother_counts': mother_counts, 'entity_targets': sorted(entity_targets)})
 
 
 # ───────────────────────── stage: fetch ─────────────────────────
-class PoolSkip(Exception):
-    pass
-
-
 def _finish_job(conn, jid, state, err=None):
     conn.execute('UPDATE crawl_job SET state=?, last_error=?, finished_at=? WHERE job_id=?', (state, err, utcnow(), jid))
 
@@ -174,11 +163,11 @@ def _host_feed_jobs(conn, bot, d, job, caps) -> int:
     urls = []
     try:
         urls += feed_links(bot.raw.read(conn.execute('SELECT raw_ref FROM fetch_record WHERE fetch_id=?', (d.fetch_id,)).fetchone()['raw_ref']).decode('utf-8', 'ignore'), d.url)
-        urls += bot.net.site_maps(d.url)[:2]
+        urls += bot.net.site_maps(d.url)
     except Exception:  # noqa: BLE001
         pass
     n = 0
-    for u in urls[:3]:
+    for u in urls:
         if host_of(u) == d.host and discover.enqueue(conn, path='sitemap' if 'sitemap' in u.lower() else 'feed', pool='discovery', url=u, depth=job['depth'], parent=job['job_id'], relevance=0.7, caps=caps):
             n += 1
     return n
@@ -210,9 +199,24 @@ def stage_fetch(ctx):
     plan = ctx.prev['plan']
     done = set(ctx.cursor.get('done', []))
     state = {'pool': None, 'job': None}
+    guard = Guard(conn, ctx.run_id, 'collector:fetch')
+    lanes = {}
+    visited = set()
+
+    def work():
+        # Replan after each batch so newly queued children drain in the same run.
+        order = plan['order']
+        while order and not bot.expired(bot.fetch_deadline):
+            yield from (jid for jid in order if jid not in done)
+            order = [jid for jid in scheduler.plan(conn, bot.clock(), mother_counts=plan.get('mother_counts'),
+                                                  entity_targets=plan.get('entity_targets'))['order'] if jid not in done]
+            if order and guard.runnable(order):
+                conn.commit()
+                break
+
 
     def charge(kind, units=1.0):
-        ctx.cost.charge(kind, units)                        # may raise CostCapExceeded -> daemon pauses this run (resumable)
+        ctx.cost.charge(kind, units)
         conn.execute('INSERT INTO budget_ledger(cycle_id,pool,kind,units,job_id,at) VALUES (?,?,?,?,?,?)', (ctx.run_id, state['pool'], kind, UNIT_COSTS.get(kind, 1.0) * units, state['job'], utcnow()))
         conn.commit()
 
@@ -220,43 +224,74 @@ def stage_fetch(ctx):
     fetcher = Fetcher(conn, bot.net, bot.raw, charge=charge, ocr=bot.ocr)
     gaz = bot.gaz()
     caps = bot.seeds['caps']
-    stats = {'jobs_run': 0, 'ok_docs': 0, 'failed_docs': 0, 'blocked': 0, 'children_queued': 0, 'chain': {'subpages': 0, 'sns_leads': 0, 'booking_leads': 0, 'attachments': 0}, 'deferred_trial': 0}
-    dispatches = stats['rss_queries'] = dict.fromkeys(discover.QUERY_CAPS, 0)
-    for jid in plan['order']:
-        if jid in done:
-            continue
+    stats = {'jobs_run': 0, 'ok_docs': 0, 'failed_docs': 0, 'blocked': 0, 'children_queued': 0, 'chain': {'subpages': 0, 'sns_leads': 0, 'booking_leads': 0, 'attachments': 0}}
+    dispatches = stats['rss_queries'] = dict.fromkeys(discover.QUERY_FAMILIES, 0)
+    def quarantine(job, attempts):
+        from kg_daemon.claims import queue_review
+        jid = job['job_id']
+        _finish_job(conn, jid, 'failed', 'attempts_exhausted')
+        queue_review(conn, 'guard_attempts_exhausted', 'crawl_job', jid,
+                     {'stage': 'fetch', 'attempts': attempts}, dedupe_key='guard-fetch:' + jid)
+
+    for jid in work():
+        if bot.expired(bot.fetch_deadline):
+            stats['deferred_deadline'] = True
+            break
+        done.add(jid)
         job = conn.execute('SELECT * FROM crawl_job WHERE job_id=?', (jid,)).fetchone()
         if job is None or job['state'] != 'queued':
             continue
-        if job['depth'] > min(2, caps.get('max_depth', 2)):
-            _finish_job(conn, jid, 'dropped', 'owner_depth_cap')
-            conn.commit()
-            continue
-        state['pool'], state['job'] = plan['pool_of'][jid], jid
+        state['pool'], state['job'] = job['pool'], jid
         host = host_of(job['url'] or '')
-        prof = conn.execute('SELECT * FROM domain_profile WHERE host=?', (host,)).fetchone() if host else None
-        if prof and not prof['in_initial_registry'] and prof['state'] == 'trial' and conn.execute('SELECT COUNT(*) FROM fetch_record WHERE host=?', (host,)).fetchone()[0] >= evaluate.TRIAL_SAMPLE * 2:
-            stats['deferred_trial'] += 1
+        if host not in lanes:
+            lanes[host] = Guard(conn, ctx.run_id, 'collector:fetch:' + host)
+        lane = lanes[host]
+        if lane.reason:
             continue
         if host and not discover.is_search_host(host):
             evaluate.ensure_profile(conn, host, in_registry=host in bot.initial)
-        if job['path'] == 'attachment' and not job['url']:
+        if not job['url']:
             _finish_job(conn, jid, 'dropped', 'no url')
             continue
-        max_pages = caps['pagination_max_pages'] if job['path'] in ('directory',) else 1
+        item = lane.item(jid)
+        if item and item['reason']:
+            quarantine(job, item['attempts'])
+            conn.commit()
+            continue
+
+        canonical = canonicalize_url(job['url'])
+        if canonical in visited:
+            continue
+        dispatched = False
+
+        def before_send():
+            nonlocal dispatched
+            if not dispatched:
+                dispatched = bool(lane.attempt(jid, previous=job['attempts']))
+                conn.commit()
+            return dispatched
+
         family = discover.query_family(job, plan.get('mother_counts', {}))
         if family:
-            if isinstance(ctx.cost, runner.CostMeter) and ctx.cost.used + UNIT_COSTS['http'] > ctx.cost.cap:
-                ctx.cost.charge('http')
-            if not discover.claim_query(conn, job, family, bot.clock(), bot.seeds['keyword_search'].get('daily_allowances')):
+            if not discover.claim_query(conn, job, family, bot.clock()):
                 continue
             dispatches[family] += 1
-        try:
-            docs = fetcher.fetch(job['url'], job_id=jid,
-                                 allow_browser=bool(directory_hints.get(job['url'], {}).get('browser')), max_pages=max_pages)
-        except DailyLimit:
-            stats['deferred_daily_cap'] = True
-            break
+        docs = fetcher.fetch(job['url'], job_id=jid,
+                             allow_browser=bool(directory_hints.get(job['url'], {}).get('browser')), before_send=before_send)
+        if dispatched:
+            visited.add(canonical)
+        if docs[-1].error in ('block_end', 'robots_unavailable', 'js_renderer_unavailable') or docs[-1].outcome in (
+            'fail_blocked', 'fail_login_page', 'fail_robots', 'fail_banned',
+        ):
+            if dispatched:
+                lane.defer(jid)
+        if docs[-1].error == 'block_end':
+            if family:
+                discover.release_query(conn, job, bot.clock())
+            conn.commit()
+            if bot.expired(bot.fetch_deadline):
+                break
+            continue
         stats['jobs_run'] += 1
         oks = [d for d in docs if d.ok]
         probe = (job['query'] or '').startswith('probe:')
@@ -271,16 +306,16 @@ def stage_fetch(ctx):
                     break
             if not oks:
                 stats['probes']['unreachable'] += 1
-                conn.execute("UPDATE crawl_job SET state='failed', attempts=3, last_error=?, finished_at=? WHERE job_id=?", (f'probe_unreachable: {docs[-1].outcome}', utcnow(), jid))
-                conn.commit(); done.add(jid); ctx.save_cursor({'done': sorted(done)})
-                continue
-            if not good:
+            elif not good:
                 stats['probes']['rejected'] += 1
                 _finish_job(conn, jid, 'dropped', f'probe_rejected: {why}')
-                conn.commit(); done.add(jid); ctx.save_cursor({'done': sorted(done)})
+                lane.complete(jid)
+                lane.progress(jid)
+                conn.commit()
                 continue
-            stats['probes']['verified'] += 1
-            official.register_site(conn, job['target_id'], good[0].url, job['query'].split(':', 1)[1], True, good[1], utcnow())
+            else:
+                stats['probes']['verified'] += 1
+                official.register_site(conn, job['target_id'], good[0].url, job['query'].split(':', 1)[1], True, good[1], utcnow())
         if oks:
             stats['ok_docs'] += len(oks)
             if host and not discover.is_search_host(host):
@@ -293,8 +328,12 @@ def stage_fetch(ctx):
                     stats['children_queued'] += r['queued']
                 if d.method in ('html', 'jsonld', 'browser') and d.host not in bot.initial and not discover.is_search_host(d.host):
                     stats['host_feeds'] = stats.get('host_feeds', 0) + _host_feed_jobs(conn, bot, d, jd, caps)
-                if job['path'] == 'directory' and d.links:
-                    stats['children_queued'] += discover.directory_link_jobs(conn, d, jd, bot.seeds, caps)
+                if job['path'] == 'directory' and d.host == host:
+                    if d.next_url and host_of(d.next_url) == host and not d.unchanged:
+                        stats['children_queued'] += discover.enqueue(conn, path='directory', pool=job['pool'], url=d.next_url,
+                            target_id=job['target_id'], depth=job['depth'] + 1, parent=jid, relevance=job['relevance'], caps=caps)
+                    if d.links:
+                        stats['children_queued'] += discover.directory_link_jobs(conn, d, jd, bot.seeds, caps)
                 if d.links and d.method in ('html', 'jsonld', 'browser') and job['path'] != 'official_chain':
                     stats['article_site_leads'] = stats.get('article_site_leads', 0) + _article_site_leads(conn, d, jd, gaz, bot.seeds)
                 if d.links or d.images:
@@ -304,6 +343,9 @@ def stage_fetch(ctx):
                         for k, v in r.items():
                             stats['chain'][k] += v
             _finish_job(conn, jid, 'done')
+            lane.progress(jid)
+            lane.complete(jid)
+            guard.progress(jid)
         else:
             stats['failed_docs'] += 1
             last = docs[-1]
@@ -312,6 +354,8 @@ def stage_fetch(ctx):
                 stats.setdefault('alerts', []).append(reg)
             fatal = last.outcome in ('fail_blocked', 'fail_robots', 'fail_banned', 'fail_login_page')
             if job['path'] in ('keyword_search', 'reverse_gap', 'entity_followup') and last.error == 'feed_without_items':
+                lane.progress(jid)
+                lane.complete(jid)
                 _finish_job(conn, jid, 'done', 'no_results')       # zero search hits is an ANSWER (counts toward absent_in_source), not a failure
             elif last.error in ('robots_unavailable', 'js_renderer_unavailable'):
                 # The job remains available for a later attempt once policy or rendering is available.
@@ -331,15 +375,31 @@ def stage_fetch(ctx):
                             due = dt.datetime.fromtimestamp(min(retry[0], 253402300799), dt.timezone.utc)
                         conn.execute('UPDATE crawl_job SET not_before=? WHERE job_id=?', (due.strftime('%Y-%m-%dT%H:%M:%SZ'), jid))
                 else:
-                    att = job['attempts'] + 1
-                    conn.execute('UPDATE crawl_job SET attempts=?, last_error=?, state=? WHERE job_id=?', (att, f'{last.outcome}: {last.error}', 'failed' if att >= 3 else 'queued', jid))
+                    lane.failure(last.error or last.outcome)
+                    terminal = last.error in ('http_404', 'http_410', 'unsafe_destination')
+                    if terminal:
+                        lane.complete(jid)
+                        _finish_job(conn, jid, 'failed', last.error)
+                    else:
+                        item = lane.item(jid)
+                        if item and item['reason']:
+                            quarantine(job, item['attempts'])
+                        else:
+                            if family:
+                                discover.release_query(conn, job, bot.clock())
+                            due = (bot.clock() + dt.timedelta(minutes=2)).strftime('%Y-%m-%dT%H:%M:%SZ')
+                            conn.execute('UPDATE crawl_job SET attempts=?,last_error=?,not_before=? WHERE job_id=?',
+                                         (item['attempts'] if item else job['attempts'], last.error, due, jid))
         recheck.link_children(conn, jid)
         if job['gap_id']:
             gaps.bump_attempts(conn, job['gap_id'])
         conn.commit()
-        done.add(jid)
-        ctx.save_cursor({'done': sorted(done)})
+        if hasattr(ctx, 'save_cursor'):
+            ctx.save_cursor({'last_committed': jid})
     stats['requests'] = bot.net.request_count
+    stats['guard_stops'] = {host: lane.reason for host, lane in lanes.items() if lane.reason}
+    if guard.reason:
+        stats['guard_stops']['fetch'] = guard.reason
     return runner.StageResult(stats)
 
 
@@ -386,13 +446,18 @@ def stage_extract(ctx):
         from .deepseek import Adapters
         bot.ai = bot.ai or Adapters.for_meter(ctx.cost)
         bot.ai.client.budget.meter = ctx.cost
+        bot.ai.client.deadline = bot.deadline
+        bot.ai.client.use_task('web-extract-2')
     tier_of = _tier_of(conn)
-    # Highest priority first (heavy collector scores; unscored rows weigh 0.75) so the fixed DeepSeek budget reaches the most promising pages.
+    # Highest priority first (heavy collector scores; unscored rows weigh 0.75).
     rows = conn.execute("""SELECT f.* FROM fetch_record f LEFT JOIN fetch_priority p ON p.fetch_id=f.fetch_id
                            WHERE f.outcome='ok' AND (f.extracted_at IS NULL OR f.extractor_version<>?)
                            ORDER BY COALESCE(p.score, 0.75) DESC, f.fetched_at, f.rowid""", (EXTRACTOR_VERSION,)).fetchall()
     stats = {'docs': 0, 'new_extractions': 0, 'labels': {}, 'alerts': []}
     for f in rows:
+        if bot.expired():
+            stats['deferred_deadline'] = True
+            break
         attempt = recheck.active_for_fetch(conn, f)
         if attempt and (not bot.ai or bot.ai.client.status != 'enabled'):
             continue
@@ -411,13 +476,12 @@ def stage_extract(ctx):
         r = process_doc(conn, doc, gaz, tier=tier_of(doc.host), ctx=jctx, via=f['url'], model_hook=bot.model_hook, model_adapter=bot.ai)
         if doc.links and doc.method in ('html', 'browser'):
             original_job = conn.execute('SELECT * FROM crawl_job WHERE job_id=?', (f['job_id'],)).fetchone()
-            if original_job and original_job['path'] != 'official_chain' and original_job['depth'] < 2:
+            if original_job and original_job['path'] != 'official_chain':
                 _article_site_leads(conn, doc, original_job, bot.gaz() if r['new'] else gaz, bot.seeds)
         n_all = conn.execute('SELECT COUNT(*) FROM extraction WHERE fetch_id=?', (f['fetch_id'],)).fetchone()[0]
         for a in check_extractor_health(conn, doc, n_all, bot.raw, gaz=gaz):
             stats['alerts'].append(a)
-        # A document the model could not afford stays unextracted so a later run can retry it.
-        # Deterministic rows already committed are idempotent. Other documents still finish.
+        # A temporarily unavailable model can resume after deterministic rows commit.
         if bot.ai and bot.ai.defer_extract:
             continue
         conn.execute('UPDATE fetch_record SET extracted_at=?, extractor_version=? WHERE fetch_id=?', (utcnow(), EXTRACTOR_VERSION, f['fetch_id']))
@@ -427,12 +491,12 @@ def stage_extract(ctx):
         for k, v in r['labels'].items():
             stats['labels'][k] = stats['labels'].get(k, 0) + v
     stats['host_alerts'] = reconcile_host_yield_alerts(conn, bot.raw, gaz)
-    stats['profile'] = profile_scan(conn, bot.raw)
+    stats['profile'] = profile_scan(conn, bot.raw, expired=bot.expired)
     recheck.reconcile(conn)
     return runner.StageResult(stats)
 
 
-def profile_scan(conn, raw) -> dict:
+def profile_scan(conn, raw, expired=lambda: False) -> dict:
     """Read every ok fetch made for a restaurant target with the profile extractor once per OFFICIAL_VERSION."""
     out = {'scanned': 0, 'facts_new': 0}
     rows = conn.execute("""SELECT f.*, j.target_id AS tid FROM fetch_record f JOIN crawl_job j ON j.job_id=f.job_id JOIN target t ON t.target_id=j.target_id
@@ -440,6 +504,8 @@ def profile_scan(conn, raw) -> dict:
                             AND NOT EXISTS (SELECT 1 FROM restaurant_recheck_job l WHERE l.job_id=f.job_id)
                             AND NOT EXISTS (SELECT 1 FROM profile_scan s WHERE s.fetch_id=f.fetch_id AND s.version=?) ORDER BY f.fetched_at""", (official.OFFICIAL_VERSION,)).fetchall()
     for f in rows:
+        if expired():
+            break
         t = conn.execute('SELECT * FROM target WHERE target_id=?', (f['tid'],)).fetchone()
         try:
             doc = load_doc(conn, raw, f)
@@ -518,27 +584,12 @@ def stage_quality(ctx):
     return runner.StageResult({'open_extractor_alerts': open_alerts, 'scoreboard': scoreboard(conn, bot)})
 
 
-def _logged(fn):
-    def w(ctx):
-        try:
-            return fn(ctx)
-        except (runner.CostCapExceeded, runner.NonRetryable):
-            raise
-        except Exception:
-            import sys
-            import traceback
-            traceback.print_exc(file=sys.stderr)       # the Daemon records the short error; the traceback goes to the log
-            raise
-    w.__name__ = fn.__name__
-    return w
+HANDLERS = {'plan': stage_plan, 'fetch': stage_fetch, 'extract': stage_extract, 'evaluate': stage_evaluate,
+            'gaps': stage_gaps, 'apply': stage_apply, 'quality': stage_quality}
 
 
-_H = {'plan': stage_plan, 'fetch': stage_fetch, 'extract': stage_extract, 'evaluate': stage_evaluate, 'gaps': stage_gaps, 'apply': stage_apply, 'quality': stage_quality}
-HANDLERS = {k: _logged(v) for k, v in _H.items()}
-
-
-def run_cycle(bot: Bot, resume: bool = True, cost_cap: float | None = None, trigger: str = 'manual') -> dict:
-    cfg = {'lock_name': 'kg-collect', 'daemon_name': 'kg-collect', 'cost_cap_units': (bot.units * 1.3 if cost_cap is None else cost_cap), 'unit_costs': UNIT_COSTS, 'max_attempts': 2, 'backoff_base_sec': 0.0, 'backoff_max_sec': 0.0}
+def run_cycle(bot: Bot, resume: bool = True, trigger: str = 'manual') -> dict:
+    cfg = {'lock_name': 'kg-collect', 'daemon_name': 'kg-collect', 'unit_costs': UNIT_COSTS, 'backoff_base_sec': 0.0, 'backoff_max_sec': 0.0}
     d = runner.Daemon(bot.conn, HANDLERS, cfg, env={'bot': bot}, stages=STAGES, sleep=lambda s: None)
     owns_scope = bot.net.run_id is None
     if owns_scope:
@@ -551,7 +602,7 @@ def run_cycle(bot: Bot, resume: bool = True, cost_cap: float | None = None, trig
     rep['ai'] = bot.ai.client.status if bot.ai else 'disabled'
     if bot.ai:
         rep['ai_stats'] = dict(bot.ai.stats)
-    if bot.ai and not bot.ai.client.key:
+    if bot.ai and not bot.ai.client.configured:
         rep['ai_reason'] = 'missing_key'
     elif bot.ai and bot.ai.client.stopped:
         rep['ai_reason'] = bot.ai.client.stopped

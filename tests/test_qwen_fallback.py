@@ -128,16 +128,16 @@ def test_primary_stays_paused_for_later_requests(conn, code):
     assert conn.execute("SELECT COUNT(*) FROM ai_request WHERE model='deepseek-chat'").fetchone()[0] == 1
 
 
-@pytest.mark.parametrize('code', ['cost_cap', 'usage_over_reservation', 'missing_key',
+@pytest.mark.parametrize('code', ['missing_key',
                                   'json_blank', 'quote_not_exact', 'schema_reject_limit', 'model_or_request_rejected'])
-def test_qwen_does_not_clear_run_halts(conn, code):
+def test_qwen_does_not_clear_a_faulty_task_halt(conn, code):
     qcalls = []
     client = fallback_client(conn, lambda *a: (503, b''), lambda *a: qcalls.append(1) or response())
     assert client.call('task', 'JSON', {}, lambda o: o) == {'ok': True}
     client.stopped = code
     assert client.status == 'paused'
     with pytest.raises(DeepSeekError, match='^' + code + '$'):
-        client.call('other', 'JSON', {}, lambda o: o)
+        client.call('task', 'JSON', {'other': 1}, lambda o: o)
     assert len(qcalls) == 1
 
 
@@ -287,7 +287,7 @@ def test_previous_definite_rejection_does_not_fall_back(conn):
     assert later.stopped == 'previous_attempt_unknown_or_failed'
     assert later.status == 'paused'
     with pytest.raises(DeepSeekError, match='previous_attempt_unknown_or_failed'):
-        later.call('other', 'JSON', {}, lambda o: o)
+        later.call('task', 'JSON', {'other': 1}, lambda o: o)
 
 
 def test_review_approves_via_qwen_after_primary_timeout(env):
@@ -378,27 +378,21 @@ def test_qwen_transport_uses_longer_timeout(monkeypatch):
     assert seen[ds.URL] == ds.DEEPSEEK_TIMEOUT_SEC == 30
 
 
-def test_publication_review_uses_qwen_for_candidate_targets(publication_world, monkeypatch):
-    from test_site_publication import FIRST, PRESS, app, article, bundled_seeds, process
-    w = publication_world
-    article(w, PRESS[0], FIRST)
-    assert process(w)[1]['checking'] == 1
-    assert w.conn.execute("SELECT status FROM target WHERE name_ko='오닐'").fetchone()[0] == 'candidate'
-    transports = []
+def test_qwen_only_reviews_without_deepseek_credentials(env, monkeypatch):
+    conn, seed, log, raw = env
+    add(conn, 'x_open', 'opening', '서울 한남동의 달빛정원은 2026-10-01 문을 열었다', rest='달빛정원', date='2026-10-01')
+    monkeypatch.setenv('KG_QWEN_MODEL', 'qwen-fixture-model')
 
-    def primary(*args):
-        transports.append('deepseek')
-        return 503, b''
+    def fallback(payload, key):
+        body = json.loads(payload)
+        assert body['model'] == 'qwen-fixture-model' and body['enable_thinking'] is False
+        ids = json.loads(body['messages'][2]['content'])['findings']
+        return response({'reviews': [{'id': f['id'], 'decision': 'approve', 'reason': 'source quote'} for f in ids]})
 
-    def fallback(body, _key):
-        prompt = json.loads(json.loads(body)['messages'][1]['content'])
-        transports.append('qwen')
-        assert prompt['evidence']['affiliation'][0]['quote'] == FIRST
-        return response({'reviews': [{'id': prompt['id'], 'decision': 'approve', 'reason': 'Evidence confirms the assertions'}]})
-
-    stats = rv.review(w.conn, w.seed_path, w.log, w.raw.root, client=fallback_client(w.conn, primary, fallback))
-    assert transports == ['deepseek', 'qwen'] and stats['bundle_approved'] == 1 and not stats['published']
-    entry = json.loads(w.log.read_text())
-    assert entry['model_meta']['model'] == QWEN_MODEL and SECRET not in w.log.read_text()
-    app(w, monkeypatch).main()
-    assert bundled_seeds(w)[0]['career_checking'] == ['kitchen']
+    client = Client(Budget(meter(conn)), key='', transport=lambda *a: pytest.fail('primary dispatched'),
+                    fallback_key=SECRET, fallback_transport=fallback)
+    assert client.status == 'enabled' and client.check_balance() is None
+    stats = rv.review(conn, seed, log, raw, client=client)
+    assert stats['approved'] == 1 and stats['reason'] == 'none'
+    assert tuple(conn.execute('SELECT provider,model FROM ai_request').fetchone()) == ('qwen', 'qwen-fixture-model')
+    assert SECRET not in log.read_text()

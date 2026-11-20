@@ -4,18 +4,10 @@
 version: "2026-11-11.1"
 
 caps:
-  daily_candidates: 4000        # new frontier URLs admitted per KST day
-  daily_content: 1200           # documents handed to the 07:00 extractor (kg_service fetch_record) per KST day
-  daily_requests: 6000          # HTTP requests per KST day (robots included)
-  daily_bytes: 400000000        # 400 MB/day wire cap
-  monthly_bytes: 10000000000    # 10 GB/month wire cap (zecbot is billed over 20 GB/month and shared with other bots)
   max_concurrency: 6            # requests in flight (= domains in flight; one request per domain at a time)
-  max_depth: 3
-  max_queries: 500
-  max_links_per_page: 15
   relevance_floor: 0.3
   lookback_days: 365
-  backlog_for_optional_block: 800   # the 22:00 block runs only when at least this many URLs are due
+  backlog_for_optional_block: 1     # the 22:00 block runs only when at least this many URLs are due
 
 search:
   - id: bing_news

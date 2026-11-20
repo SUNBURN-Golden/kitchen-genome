@@ -24,7 +24,6 @@ keyword_search:
   keywords: [오픈, 이전, 폐업, 출신, 수셰프, 헤드셰프]
   years_back: 1                    # current year and N previous
   keyword_weight: {폐업: 1.0, 이전: 0.95, 오픈: 0.9, 수셰프: 0.8, 헤드셰프: 0.8, 출신: 0.7}
-  daily_allowances: {mother: 8, entity: 8, general: 8}
 
 mother_kitchens:
   layeon: {ko: [라연], en: [La Yeon], context_ko: 신라호텔, context_en: Shilla}
@@ -60,13 +59,7 @@ sitemaps:
   - {country: KR, url: "https://bakerynews.co.kr/sitemap.xml", lookback_days: 45}
 
 caps:
-  max_depth: 2
   relevance_floor: 0.30
-  max_official_subpages: 6
-  max_followups_per_extraction: 3
-  max_queued_per_pool: {discovery: 400, backfill: 480, refresh: 200}
-  pagination_max_pages: 3
-  max_official_probes_per_cycle: 40   # guessed-domain probes for restaurants with open gaps (one GET each, verified before use)
 
 official_chain:
   subpage_hints: [about, story, chef, menu, news, press, notice, history, 소개, 메뉴, 셰프, 스토리, 공지]

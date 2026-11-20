@@ -206,13 +206,16 @@ def test_heavy_uses_box_for_confirmed_outage(world, monkeypatch, outage_at_start
     assert sum(relevant) == (0 if outage_at_start else 1)
 
 
-def test_block_end_and_caps(world):
+def test_block_end_and_old_traffic_thresholds(world):
     conn, tmp, clock, sleep, t = world
     hc, web = _crawler(world, default_routes)
     assert hc.run(clock() + 30)['reason'] == 'block_over'
-    hc, web = _crawler(world, default_routes, daily_requests=3)
+    hc.bump(requests=8_000, bytes_in=16_000_000_000, candidates=5_000, content=1_500)
+    hc.q.commit()
     rep = hc.run(clock() + 3600)
-    assert rep['reason'] == 'daily_request_cap' and len(web.calls) <= 3 + 6
+    assert rep['reason'] == 'queue_empty' and web.calls
+    assert rep['day_totals']['requests'] > 8_000 and rep['day_totals']['content'] > 1_500
+    assert rep['day_totals']['candidates'] > 5_000
 
 
 def test_deadline_is_a_hard_stop(world):
@@ -345,11 +348,23 @@ def test_robots_unreachable_is_not_cached_and_url_retries_later(world):
     assert world[0].execute("SELECT 1 FROM web_robots_cache WHERE origin='https://press.test'").fetchone() is None
 
 
-def test_caps_cannot_be_loosened_by_yaml():
+def test_executor_size_is_configurable_and_due_scan_passes_busy_hosts(tmp_path, world):
+    import yaml
+
     cfg = heavy.load_cfg()
-    for k, v in heavy.CEIL.items():
-        assert cfg['caps'][k] <= v
-    assert cfg['caps']['max_concurrency'] <= 6 and cfg['caps']['max_depth'] <= 3
+    cfg['caps']['max_concurrency'] = 12
+    fixture = tmp_path / 'config.yaml'
+    fixture.write_text(yaml.safe_dump(cfg))
+    assert heavy.load_cfg(fixture)['caps']['max_concurrency'] == 12
+    assert cfg['caps']['backlog_for_optional_block'] == 1
+
+    hc, _ = _crawler(world, default_routes)
+    hc.access = hc._net(world[0])
+    hc.stopped_hosts = set()
+    for i in range(425):
+        hc.add(f'https://busy.test/p/{i}', 'article', depth=i, score=.9)
+    hc.add('https://ready.test/final', 'article', score=.5)
+    assert [r['host'] for r in hc.pick({'busy.test'}, 1)] == ['ready.test']
 
 
 def test_crash_still_writes_traffic_log(world):
@@ -359,8 +374,9 @@ def test_crash_still_writes_traffic_log(world):
         raise RuntimeError('x')
     hc.handle = boom
     rep = hc.run(clock() + 3600)
-    assert rep['outcome'] == 'halted' and rep['reason'] == 'crash:RuntimeError'
-    assert json.loads(open(tmp / 'crawl_traffic.jsonl').read().splitlines()[-1])['reason'] == 'crash:RuntimeError'
+    assert rep['outcome'] == 'stopped' and rep['stats']['errors']
+    assert conn.execute("SELECT 1 FROM guard_lane WHERE signature='runtimeerror'").fetchone()
+    assert json.loads(open(tmp / 'crawl_traffic.jsonl').read().splitlines()[-1])['stats']['errors']
 
 
 def test_status_reader_is_not_blocked_by_a_running_block(world):
@@ -372,3 +388,11 @@ def test_status_reader_is_not_blocked_by_a_running_block(world):
     r = sqlite3.connect(str(tmp / 'q.db'), timeout=0.5)
     assert r.execute('SELECT COUNT(*) FROM frontier').fetchone()[0] > 0
     hc.q.commit()
+
+
+def test_heavy_keeps_relevant_feed_items_past_the_old_rss_slice(world):
+    hc, _ = _crawler(world, default_routes)
+    items = [(f'https://press.test/item/{i}', '테스트셰프B 셰프 가상식당1', '') for i in range(55)]
+    feed = {'url': 'https://press.test/rss.xml', 'target_id': None, 'query': None, 'depth': 0}
+    hc.process_feed(feed, _rss(items))
+    assert hc.q.execute("SELECT COUNT(*) FROM frontier WHERE state='queued'").fetchone()[0] == 55

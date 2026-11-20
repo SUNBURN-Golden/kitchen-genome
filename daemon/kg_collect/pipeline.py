@@ -73,7 +73,20 @@ def process_doc(conn, doc: Doc, gaz: Gazetteer, *, tier: str, ctx: dict | None =
                     recs_all.append({**r, **alt, 'asserted_by': 'ai_inference', 'pending_only': True})
     rule_inspected = bool(attempt and not any(needs_model(r) for r in recs_all))
     if model_adapter and not doc.items and not rule_inspected:
-        recs_all.extend(model_adapter.extract(doc, recs_all, gaz, ctx, workload=workload, attempt_id=attempt['attempt_id'] if attempt else None))
+        enabled = model_adapter.client.status == 'enabled'
+        before = dict(model_adapter.stats)
+        recs_all.extend(model_adapter.extract(doc, recs_all, gaz, ctx, workload=workload,
+                                              attempt_id=attempt['attempt_id'] if attempt else None))
+        if fr and enabled and not model_adapter.defer_extract:
+            if model_adapter.stats['failed'] > before['failed']:
+                disposition = 'failed'
+            elif model_adapter.stats['called'] > before['called'] or model_adapter.stats['findings'] > before['findings']:
+                disposition = 'completed'
+            else:
+                disposition = 'prefilter_miss'
+            conn.execute("""INSERT INTO model_document_sample(fetch_id,version,disposition) VALUES (?,? ,?)
+                ON CONFLICT(fetch_id,version) DO UPDATE SET disposition=excluded.disposition""",
+                         (doc.fetch_id, 'web-extract-2', disposition))
     new = 0
     labels: dict = {}
     for r in recs_all:

@@ -17,7 +17,8 @@ from .balance import BalanceGate, http_balance
 from .article import messages as article_messages
 import urllib.error
 import urllib.request
-from kg_daemon.runner import NonRetryable, CostCapExceeded
+from kg_daemon.runner import NonRetryable
+from kg_collect.guard import Guard
 
 URL = 'https://api.deepseek.com/chat/completions'
 QWEN_URL = 'https://token-plan.maas.qwencloudapi.com/compatible-mode/v1/chat/completions'
@@ -38,6 +39,8 @@ FALLBACK_CODES = (
 # Token count is at most one per payload byte, so this remains an upper bound.
 FRAME_TOKENS = 4096
 MAX_TASK_ATTEMPTS = 2
+MAX_INPUT_BYTES = 64_000
+MAX_OUTPUT_TOKENS = 4096
 SCHEMA_REJECT_LIMIT = 3
 MAX_JSON_WRAPPER = 400
 SCHEMA_CODES = (
@@ -47,10 +50,10 @@ SCHEMA_CODES = (
 )
 RETRYABLE = ('json_blank', 'invalid_task_json') + SCHEMA_CODES
 # These leave the client enabled: one document is skipped, other requests may continue.
-NONSTOP = {'cached_result_purged', 'task_previously_rejected', 'missing_key', 'input_limit', 'concurrent_attempt'}
+NONSTOP = {'cached_result_purged', 'task_previously_rejected', 'missing_key', 'input_limit', 'concurrent_attempt', 'attempts_exhausted', 'deadline'}
 # Definite primary rejections: the provider refused the request or answered invalidly.
 # A stored one of these never routes to the backup on a later attempt.
-NON_FALLBACK_CODES = ('cost_cap', 'usage_over_reservation', 'missing_key',
+NON_FALLBACK_CODES = ('missing_key',
                       'model_or_request_rejected', 'response_limit', 'invalid_response_or_usage',
                       'truncated_json', 'incomplete_output', 'schema_reject_limit') + RETRYABLE
 
@@ -165,7 +168,8 @@ def parse_json_content(content):
 
 class Client:
     def __init__(self, budget, *, key=None, model=None, transport=http_transport, balance_transport=None, clock=time.monotonic,
-                 fallback_key=None, fallback_model=None, fallback_transport=None):
+                 fallback_key=None, fallback_model=None, fallback_transport=None, deadline=None):
+        self.deadline = deadline
         self.key = os.environ.get('DEEPSEEK_API_KEY', '') if key is None else key
         self.model = model or os.environ.get('DEEPSEEK_MODEL', 'deepseek-chat')
         self.budget, self.transport, self.stopped = budget, transport, None
@@ -174,16 +178,22 @@ class Client:
         self._previous_fallback_worthy = False
         self.last_meta = {}
         self.balance = BalanceGate(balance_transport if balance_transport is not None else (http_balance if transport is http_transport else None), clock)
+        self._task = None
+        self._fatal_stops = {}
         # Custom transports (tests) stay primary-only unless a fallback is injected.
         auto = fallback_transport is None and transport is http_transport
-        self.fallback_model = fallback_model or QWEN_MODEL
+        self.fallback_model = fallback_model or os.environ.get('KG_QWEN_MODEL') or QWEN_MODEL
         self.fallback_key = load_qwen_key() if fallback_key is None and auto else (fallback_key or '')
         self.fallback_transport = (qwen_http_transport if auto and self.fallback_key else fallback_transport if self.fallback_key else None)
 
     @property
     def status(self):
         paused = self.stopped and not (self.fallback_available and self._fallback_stop)
-        return 'disabled' if not self.key else ('paused' if paused else 'enabled')
+        return 'disabled' if not self.configured else ('paused' if paused else 'enabled')
+
+    @property
+    def configured(self):
+        return bool(self.key or self.fallback_available)
 
     @property
     def fallback_available(self):
@@ -196,7 +206,7 @@ class Client:
 
     def check_balance(self):
         """Return a run-blocking balance reason, allowing a configured backup."""
-        if self.primary_paused and self.fallback_available:
+        if (self.primary_paused or not self.key) and self.fallback_available:
             return None
         reason = self.balance.check(self.key)
         if reason in FALLBACK_CODES and self.fallback_available:
@@ -237,6 +247,7 @@ class Client:
         row = self.budget.lookup(self._request_key(task, payload))
         if row and row['state'] == 'done' and row['result_json'] is not None:
             self._meta(task, payload, json.dumps(messages, ensure_ascii=False, sort_keys=True), provider=provider)
+            self.budget.cache_hit(row['request_key'])
             return json.loads(row['result_json'])
         return None
 
@@ -253,11 +264,21 @@ class Client:
             return failure_code(row['error'] if row else '') not in NON_FALLBACK_CODES
         return False
 
+    def use_task(self, task):
+        if self._task != task:
+            if self._task is not None:
+                self._fatal_stops[self._task] = self.stopped
+                self.stopped = self._fatal_stops.get(task)
+                self._schema_rejections = 0
+            self._task = task
+
     def call(self, task, instruction, data, validate, *, max_tokens=2048):
-        provider = 'qwen' if self.primary_paused and self.fallback_available else 'deepseek'
+        if type(max_tokens) is not int or not 0 < max_tokens <= MAX_OUTPUT_TOKENS:
+            raise DeepSeekError('input_limit')
+        self.use_task(task)
+        provider = 'qwen' if (self.primary_paused or not self.key) and self.fallback_available else 'deepseek'
         if self.stopped:
             if not (self.fallback_available and self._fallback_stop):
-                # Keep cached reads, but never turn a task rejection or cap halt into fallback.
                 return self._call(task, instruction, data, validate, max_tokens=max_tokens, provider=provider)
             self.primary_paused = self.primary_paused or self.stopped
             self.stopped = None
@@ -289,6 +310,10 @@ class Client:
             return cached
         if self.stopped:
             raise DeepSeekError(self.stopped)
+        guard = Guard(self.budget.conn, self.budget.meter.run_id, provider + ':' + task)
+        if guard.reason:
+            self.stopped = guard.reason
+            raise DeepSeekError(guard.reason)
         canonical = self.budget.lookup(self._request_key(task, self._payload(instruction, data, max_tokens, None, provider=provider)[1]))
         if canonical and canonical['state'] == 'failed':
             # A billed failure stays charged and is not replayed. Other documents may continue.
@@ -298,20 +323,15 @@ class Client:
         for attempt in range(MAX_TASK_ATTEMPTS):
             try:
                 return self._once(task, instruction, data, validate, max_tokens=max_tokens, correction=correction, provider=provider)
-            except CostCapExceeded:
-                # An unreservable correction ends this task, just like a final
-                # rejection. A smaller next document may still fit the cap.
-                # Usage past the reservation always stops the phase.
-                if correction and self.stopped != 'usage_over_reservation':
-                    self._reject_task()
-                    raise DeepSeekError(correction) from None
-                raise
             except DeepSeekError as exc:
                 code = failure_code(stored_error(exc))
                 if code in RETRYABLE and attempt + 1 < MAX_TASK_ATTEMPTS:
                     self.stopped = None
                     correction = code
                     continue
+                if code not in NONSTOP and code != 'task_previously_rejected':
+                    guard.failure(code)
+                    self.budget.conn.commit()
                 if code in RETRYABLE:
                     # _once already settled the billed failure. Skip this task,
                     # but stop a broken prompt from rejecting the whole queue.
@@ -324,22 +344,16 @@ class Client:
         self._schema_rejections += 1
         self.stopped = 'schema_reject_limit' if self._schema_rejections >= SCHEMA_REJECT_LIMIT else None
 
-    def _settle(self, key, usage, **kwargs):
-        try:
-            self.budget.settle(key, usage, **kwargs)
-        except CostCapExceeded:
-            self.stopped = 'usage_over_reservation'
-            raise
-
     def _once(self, task, instruction, data, validate, *, max_tokens, correction, provider='deepseek'):
         messages, payload = self._payload(instruction, data, max_tokens, correction, provider=provider)
-        if len(payload) > 64_000:
+        if len(payload) > MAX_INPUT_BYTES:
             raise DeepSeekError('input_limit')
         key = self._request_key(task, payload)
         self._meta(task, payload, json.dumps(messages, ensure_ascii=False, sort_keys=True), provider=provider)
         old = self.budget.lookup(key)
         if old:
             if old['state'] == 'done' and old['result_json'] is not None:
+                self.budget.cache_hit(key)
                 return json.loads(old['result_json'])
             if old['state'] == 'expired' or (old['state'] == 'done' and old['result_json'] is None):
                 # Retention may purge cached IG results after 30 days. That must not disable the
@@ -350,21 +364,43 @@ class Client:
             self._previous_fallback_worthy = failure_code(old['error']) not in NON_FALLBACK_CODES
             self.stopped = 'previous_attempt_unknown_or_failed'
             raise DeepSeekError(self.stopped)
+        if self.deadline is not None and time.monotonic() >= self.deadline:
+            raise DeepSeekError('deadline')
         if provider == 'deepseek':
             reason = self.balance.check(self.key)
             if reason:
                 self.stopped = reason
                 raise DeepSeekError(reason)
+        remaining = self.deadline - time.monotonic() if self.deadline is not None else None
+        if remaining is not None and remaining <= 0:
+            raise DeepSeekError('deadline')
         api_key = self.fallback_key if provider == 'qwen' else self.key
         transport = self.fallback_transport if provider == 'qwen' else self.transport
         model = self.fallback_model if provider == 'qwen' else self.model
-        # Byte ceiling, not a chars/4 guess: under-reserving pauses after the provider has billed.
         bound = reservation_tokens(payload, max_tokens)
-        if not self.budget.reserve(key, task, model, bound):
+        article = data.get('_article') if isinstance(data, dict) else None
+        if article and article.get('article_key'):
+            item = self._request_key(task, f"{article['article_key']}:{data.get('source_start', 0)}".encode())
+        else:
+            item = self._request_key(task, self._payload(instruction, data, max_tokens, None)[1])
+        registered = self.budget.reserve(key, task, model, bound, provider=provider, item=item)
+        if registered is None:
+            from kg_daemon.claims import queue_review
+            queue_review(self.budget.conn, 'guard_attempts_exhausted', 'ai_request', item,
+                         {'task': task}, dedupe_key='guard-ai:' + item)
+            self.budget.conn.commit()
+            raise DeepSeekError('attempts_exhausted')
+        if not registered:
             raise DeepSeekError('concurrent_attempt')
+        guard = Guard(self.budget.conn, self.budget.meter.run_id, provider + ':' + task)
         usage = None
         try:
-            status, raw = transport(payload, api_key)
+            if remaining is not None and transport is http_transport:
+                status, raw = transport(payload, api_key, timeout=min(DEEPSEEK_TIMEOUT_SEC, remaining))
+            elif remaining is not None and transport is qwen_http_transport:
+                status, raw = http_transport(payload, api_key, url=QWEN_URL, timeout=min(QWEN_TIMEOUT_SEC, remaining))
+            else:
+                status, raw = transport(payload, api_key)
             if status != 200:
                 raise DeepSeekError({400: 'model_or_request_rejected', 401: 'auth_failed', 404: 'model_unavailable', 429: 'rate_limited'}.get(status, 'provider_failed'))
             if len(raw) > MAX_BODY:
@@ -376,9 +412,10 @@ class Client:
                     raise ValueError()
             if usage['total_tokens'] != usage['prompt_tokens'] + usage['completion_tokens']:
                 raise ValueError()
-            cache = usage.get('prompt_cache_hit_tokens', 0)
+            cache = usage.get('prompt_cache_hit_tokens', (usage.get('prompt_tokens_details') or {}).get('cached_tokens', 0))
             if type(cache) is not int or not 0 <= cache <= usage['prompt_tokens']:
                 raise ValueError()
+            usage['prompt_cache_hit_tokens'] = cache
         except Exception as exc:
             code = str(exc) if isinstance(exc, DeepSeekError) else 'invalid_response_or_usage'
             self.stopped = code
@@ -395,11 +432,13 @@ class Client:
             result = validate(parse_json_content((choice.get('message') or {}).get('content')))
         except DeepSeekError as exc:
             self.stopped = failure_code(stored_error(exc))
-            self._settle(key, usage, error=stored_error(exc))
+            self.budget.settle(key, usage, error=stored_error(exc))
             raise
         except Exception:
             self.stopped = 'invalid_task_json'
-            self._settle(key, usage, error=self.stopped)
+            self.budget.settle(key, usage, error=self.stopped)
             raise DeepSeekError(self.stopped) from None
-        self._settle(key, usage, result=result)
+        guard.progress(key)
+        Guard(self.budget.conn, self.budget.meter.run_id, 'model:' + task).complete(item)
+        self.budget.settle(key, usage, result=result)
         return result

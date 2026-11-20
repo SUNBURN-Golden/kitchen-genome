@@ -295,4 +295,4 @@ def article_link_candidates(links, text, target, banned=()) -> list[str]:
             root = f'https://{h}/'
             if root not in out:
                 out.append(root)
-    return out[:2]
+    return out

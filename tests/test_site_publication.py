@@ -157,7 +157,7 @@ def test_extract_relabel_apply_and_render_two_reports(publication_world, monkeyp
         subprocess.run(['node', '-e', 'global.window={};\n' + data_js + '\n' + functions + '\n' + check,], check=True)
 
 
-def test_first_party_must_own_subject_and_can_verify_undated_profile(publication_world, monkeypatch):
+def test_owned_undated_profile_is_one_source(publication_world, monkeypatch):
     w = publication_world
     host = 'oneil.test'
     dest = upsert_target(w.conn, 'restaurant', '오닐', origin='discovered', status='candidate')
@@ -169,10 +169,10 @@ def test_first_party_must_own_subject_and_can_verify_undated_profile(publication
     official.register_site(w.conn, dest, f'https://{host}/about', 'article_link', True, 'publisher linked ownership', NOW)
     w.conn.commit()
     _, stats = process(w)
-    assert stats['verified'] == 1
+    assert stats['checking'] == 1 and stats['verified'] == 0
     app(w, monkeypatch).main()
     row, = bundled_seeds(w)
-    assert row['lineage_status'] == 'verified' and row['role'] == '수셰프'
+    assert row['lineage_status'] == 'unverified' and row['role'] == '수셰프'
     assert row['lineage_src'].startswith(f'https://{host}/')
     assert '주소: 서울특별시 용산구 한남로 12' in {e['quote'] for e in row['lineage_evidence']}
 
@@ -243,9 +243,10 @@ def test_unqualified_sources_cannot_create_verified_row(publication_world, monke
     _, stats = process(w)
     assert stats['verified'] == 0
     app(w, monkeypatch).main()
-    assert not bundled_seeds(w)
     if kind in ('syndicated', 'same_group', 'separate_edges'):
-        assert stats['checking'] == 1
+        assert stats['checking'] == 1 and bundled_seeds(w)[0]['lineage_status'] == 'unverified'
+    else:
+        assert not bundled_seeds(w)
     if kind == 'no_city':
         assert stats['missing_location'] == 1 and stats['gap_jobs'] >= 1
     if kind == 'closure':
@@ -266,38 +267,15 @@ def test_adjacent_past_guest_and_planned_clauses_do_not_bind_affiliation(publica
         assert all(a['label'] == 'career' for a in publication_assertions(quote, g)), quote
 
 
-def test_single_source_approval_upgrade_and_rollback(publication_world, monkeypatch):
-    from test_deepseek_client import meter, response
-    from tests_balance_fake import healthy_balance
-    from kg_ai.budget import Budget
-    from kg_ai.deepseek import Client
-
+def test_single_source_publishes_upgrades_and_rolls_back(publication_world, monkeypatch):
     w = publication_world
     article(w, PRESS[0], '김도훈 셰프는 미토우에서 수셰프로 일했다. ' + FIRST.replace('미토우 출신 ', ''))
     assert process(w)[1]['checking'] == 1
     entry = app(w, monkeypatch)
     entry.main()
-    assert not bundled_seeds(w)
-    disabled = Client(Budget(meter(w.conn)), key='', fallback_key='')
-    assert review.review(w.conn, w.seed_path, w.log, w.raw.root, client=disabled)['reason'] == 'missing_key'
-    assert review.review(w.conn, w.seed_path, w.log, w.raw.root, client=disabled, daily_cap=0)['bundle_remaining'] == 1
-    visits = []
-
-    def transport(payload, _key):
-        prompt = json.loads(json.loads(payload)['messages'][1]['content'])
-        visits.append(prompt)
-        return response({'reviews': [{'id': prompt['id'], 'decision': 'approve', 'reason': 'Both edges and city are stated'}]})
-
-    client = Client(Budget(meter(w.conn)), key='fixture-value', fallback_key='', transport=transport,
-                    balance_transport=healthy_balance)
-    assert review.review(w.conn, w.seed_path, w.log, w.raw.root, client=client)['bundle_approved'] == 1
-    assert visits[0]['proposed']['name'] == '오닐'
-    assert not json.loads(w.seed_path.read_text()).get('ai_reviewed_unlinked')
-    assert json.loads(w.log.read_text())['action'] == 'publication_approve'
-    entry.main()
     row, = bundled_seeds(w)
     rid = row['id']
-    assert row['lineage_status'] == 'unverified' and row['career_checking'] == ['kitchen', 'role']
+    assert row['lineage_status'] == 'unverified' and row['career_checking'] == ['kitchen', 'chef', 'role']
     run_build(w)
     for prefix, badge in (('', '확인 중'), ('en/', 'Checking')):
         markup = (w.repo / 'web' / prefix / 'r' / rid / 'index.html').read_text()
@@ -335,7 +313,7 @@ def test_single_source_approval_upgrade_and_rollback(publication_world, monkeypa
     assert {row[0] for row in w.conn.execute("SELECT json_extract(attrs_json,'$.published_to_site') FROM target WHERE target_id IN (?,?)", ids)} == {0}
 
 
-def test_twelve_per_kst_day_empty_kitchens_seoul_and_rollback_slot(publication_world, monkeypatch):
+def test_all_eligible_rows_publish_on_one_kst_day(publication_world, monkeypatch):
     w = publication_world
     names = ['김도훈', '최성진', '백은경', '문현우', '이지연', '엄준호', '김경민', '박도희',
              '나유진', '조영민', '강희진', '마재호', '이준영', '박규호', '홍도나']
@@ -350,22 +328,21 @@ def test_twelve_per_kst_day_empty_kitchens_seoul_and_rollback_slot(publication_w
     entry = app(w, monkeypatch)
     entry.main()
     rows = bundled_seeds(w)
-    assert len(rows) == site_publish.CAP == 12
+    assert len(rows) == 15
     assert rows[0]['city'] == '서울' and rows[1]['kitchen'] == 'layeon'
-    assert all(r['city'] == '서울' for r in rows[2:])
     assert all(r['checked'] == '2026-11-20' for r in rows)
     entry.main()
     assert bundled_seeds(w) == rows
-    site_publish.rollback(w.seed_path, rows[-1]['id'], 'reserved cap slot')
+    site_publish.rollback(w.seed_path, rows[-1]['id'], 'fixture correction')
     entry.main()
-    assert len(bundled_seeds(w)) == 11
+    assert len(bundled_seeds(w)) == 14
     real_instant = dt.datetime.fromisoformat(NEXT_DAY.replace('Z', '+00:00')).astimezone(site_publish.KST)
     monkeypatch.setattr(site_publish, 'instant', lambda now=None: real_instant if now is None else
                         (dt.datetime.fromisoformat(now.replace('Z', '+00:00')).astimezone(site_publish.KST)
                          if isinstance(now, str) else now.astimezone(site_publish.KST)))
     entry.main()
     restored = bundled_seeds(w)
-    assert len(restored) == 14 and sum(r['checked'] == '2026-11-21' for r in restored) == 3
+    assert len(restored) == 14 and all(r['checked'] == '2026-11-20' for r in restored)
     assert rows[-1]['id'] not in {r['id'] for r in restored}
 
 
@@ -430,32 +407,49 @@ def test_competing_apply_and_inherited_daily_lock(publication_world, monkeypatch
     assert len(json.loads((w.repo / 'crawler/applied.json').read_text())) == 1
 
 
-def test_fingerprint_reuses_refetch_and_requires_review_on_new_proof(publication_world, monkeypatch):
-    from kg_ai.budget import Budget
-    from kg_ai.deepseek import Client
-    from test_deepseek_client import meter, response
-    from tests_balance_fake import healthy_balance
-
+def test_fingerprint_reuses_refetch_and_prepares_new_source_without_ai(publication_world, monkeypatch):
     w = publication_world
     article(w, PRESS[0], FIRST, slug='original')
     process(w)
-    original = w.conn.execute("SELECT review_id,payload_json FROM review_queue WHERE reason=?", (site_publish.REASON,)).fetchone()
+    original, = approved_reviews(w)
 
-    def transport(body, _key):
-        prompt = json.loads(json.loads(body)['messages'][1]['content'])
-        return response({'reviews': [{'id': prompt['id'], 'decision': 'approve', 'reason': 'All stated'}]})
-
-    client = Client(Budget(meter(w.conn)), key='fixture', fallback_key='', transport=transport, balance_transport=healthy_balance)
-    assert review.review(w.conn, w.seed_path, w.log, w.raw.root, client=client)['bundle_approved'] == 1
     article(w, PRESS[0], FIRST, slug='original')
     process(w)
-    only, = approved_reviews(w)
-    assert only['review_id'] == original['review_id']
-    payload = json.loads(only['payload_json'])
-    assert payload['approval']['proofs']['lineage'][0]['fetch_id'] == 'f0'
+    same, = approved_reviews(w)
+    assert same['review_id'] == original['review_id']
+    assert json.loads(same['payload_json'])['approval']['proofs']['lineage'][0]['fetch_id'] == 'f0'
+
     article(w, PRESS[0], FIRST.replace('열었다', '오픈했다'), slug='second-story')
     assert process(w)[1]['checking'] == 1
     app(w, monkeypatch).main()
-    assert not bundled_seeds(w)
-    current = w.conn.execute("SELECT review_id FROM review_queue WHERE reason=? AND state='open'", (site_publish.REASON,)).fetchone()
-    assert current['review_id'] != original['review_id']
+    row, = bundled_seeds(w)
+    assert row['lineage_status'] == 'unverified'
+
+
+def test_attributed_source_with_missing_snapshot_can_only_publish_a_link(publication_world, monkeypatch):
+    w = publication_world
+    article(w, PRESS[0], '미토우 출신 김도훈 셰프.')
+    article(w, PRESS[1], FIRST.replace('미토우 출신 ', ''))
+    process(w)
+    w.conn.execute("UPDATE fetch_record SET raw_ref=NULL WHERE fetch_id='f0'")
+    w.conn.commit()
+    assert process(w)[1]['checking'] == 1
+    app(w, monkeypatch).main()
+    row, = bundled_seeds(w)
+    lineage, = [ref for ref in row['lineage_evidence'] if ref['kind'] == 'lineage']
+    assert row['lineage_status'] == 'unverified' and 'kitchen' in row['career_checking']
+    assert lineage == {'kind': 'lineage', 'src': row['lineage_src']}
+
+
+def test_corroborated_origin_with_single_affiliation_omits_structured_employment(publication_world, monkeypatch):
+    w = publication_world
+    article(w, PRESS[0], FIRST)
+    article(w, PRESS[1], '김도훈 셰프는 미토우에서 수셰프로 일했다.')
+    assert process(w)[1]['checking'] == 1
+    app(w, monkeypatch).main()
+    row, = bundled_seeds(w)
+    assert 'chef' in row['career_checking'] and 'kitchen' not in row['career_checking']
+    run_build(w)
+    for prefix in ('', 'en/'):
+        html = (w.repo / 'web' / prefix / 'r' / row['id'] / 'index.html').read_text()
+        assert '"worksFor"' not in html and '"alumniOf"' in html

@@ -17,7 +17,6 @@ from kg_collect import cycle
 from kg_collect.deepseek import normalize_finding
 from kg_daemon import db
 from kg_daemon.claims import queue_review
-from kg_daemon.runner import CostCapExceeded
 from test_deepseek_client import meter, response
 
 TEXT = ('서울 한남동의 달빛정원은 2026-10-01 문을 열었다. 한도윤 셰프가 총괄 셰프를 맡는다. '
@@ -98,23 +97,21 @@ def test_approve_publishes_with_badge_and_reject_closes(env):
     assert json.loads(log.read_text(encoding='utf-8').splitlines()[-1])['action'] == 'rollback'
 
 
-def test_unlinked_approval_and_cap_stop_leaves_rest_open(env):
+def test_unlinked_finding_reviews_regardless_of_accumulated_usage(env):
     conn, sp, log, raw = env
-    add(conn, 'x1', 'opening', '서울 한남동의 달빛정원은 2026-10-01 문을 열었다', chef=None, rest=None)
+    quote = '한도윤 셰프가 총괄 셰프를 맡는다.'
+    add(conn, 'x1', 'employment_claim', quote, chef='한도윤', rest=None, role='총괄 셰프')
     calls = []
-    client = client_for(conn, {'x1': 'approve'}, calls)
-    # The finding fits a fresh day's cap, but another task has used today's allowance.
-    client.budget.reserve('earlier-task', 'extract', 'deepseek-chat', 39_800)
-    s = rv.review(conn, str(sp), str(log), raw, client=client, daily_cap=20)
-    assert s['stopped'] == 'cost_cap' and s['remaining'] == 1 and s['approved'] == 0
-    assert s['deferred_budget'] == 1 and s['rejected'] == 0 and calls == []
-    assert conn.execute("SELECT state FROM review_queue WHERE subject_id='x1'").fetchone()[0] == 'open'
-    conn.execute("UPDATE ai_request SET day='2000-01-01'"); conn.commit()
-    s = rv.review(conn, str(sp), str(log), raw, client=client_for(conn, {'x1': 'approve'}, []), daily_cap=20)
-    assert s['approved'] == 1 and s['remaining'] == 0
-    seed = json.loads(sp.read_text(encoding='utf-8'))
-    # no restaurant/chef text: matched by nothing -> published to the unlinked list, still badged and sourced
-    assert seed['ai_reviewed_unlinked'][0]['badge'] == 'AI 검토'
+    base = client_for(conn, {'x1': 'approve'}, calls)
+    transport = base.transport
+    def expensive(payload, key):
+        status, body = transport(payload, key)
+        answer = json.loads(body)
+        answer['usage'] = {'prompt_tokens': 49_000, 'completion_tokens': 1000, 'total_tokens': 50_000}
+        return status, json.dumps(answer).encode()
+    base.transport = expensive
+    stats = rv.review(conn, str(sp), str(log), raw, client=base)
+    assert stats['approved'] == 1 and stats['remaining'] == 0 and stats['cost_used'] == 25
 
 
 def test_oversized_shared_context_uses_separate_minimal_contexts(env):
@@ -153,77 +150,6 @@ def test_oversized_shared_context_uses_separate_minimal_contexts(env):
     assert contexts[0] != contexts[1]
 
 
-@pytest.mark.parametrize('daily_cap', [5, 20])
-def test_never_fitting_finding_is_closed_without_cost_cap(env, daily_cap):
-    conn, sp, log, raw = env
-    quote = '달빛정원 특별 메뉴를 소개한다'
-    text = (quote + '. ' + '배경 설명이 이어진다. ' * 80) * 100
-    (Path(raw) / 'h/t.txt').write_text(text, encoding='utf-8')
-    add(conn, 'x_huge', 'menu', quote, rest='달빛정원')
-    calls = []
-    stats = rv.review(conn, str(sp), str(log), raw, client=client_for(conn, {}, calls), daily_cap=daily_cap)
-    assert (stats['calls'], stats['rejected'], stats['remaining'], stats['stopped']) == (0, 1, 0, None)
-    assert stats['cost_used'] == 0 and stats.get('deferred_budget', 0) == 0 and calls == []
-    row = conn.execute("SELECT state,payload_json FROM review_queue WHERE subject_id='x_huge'").fetchone()
-    assert row['state'] == 'dismissed'
-    assert json.loads(row['payload_json'])['ai_review']['reason'] == 'review_unavailable: context_too_large'
-    entry = json.loads(log.read_text(encoding='utf-8'))
-    assert (entry['action'], entry['reason'], entry['model_meta']) == ('reject', 'review_unavailable: context_too_large', None)
-    assert conn.execute('SELECT status FROM daemon_run WHERE run_id=?', (stats['run_id'],)).fetchone()[0] == 'succeeded'
-
-
-@pytest.mark.parametrize('daily_cap, expected', [(5, 'reject'), (20, 'approve')])
-def test_ever_fitting_bound_uses_configured_daily_cap(env, daily_cap, expected):
-    conn, sp, log, raw = env
-    quote = '달빛정원 특별 메뉴를 소개한다'
-    text = (quote + '. ' + '배경 설명이 이어진다. ' * 80) * 15
-    (Path(raw) / 'h/t.txt').write_text(text, encoding='utf-8')
-    add(conn, 'x1', 'menu', quote, rest='달빛정원')
-    calls = []
-    stats = rv.review(conn, str(sp), str(log), raw, client=client_for(conn, {'x1': 'approve'}, calls), daily_cap=daily_cap)
-    assert stats['remaining'] == 0 and stats['stopped'] is None
-    assert stats['approved'] == stats['calls'] == len(calls) == int(expected == 'approve')
-    assert stats['rejected'] == int(expected == 'reject')
-
-
-def test_recheck_never_fits_bound_uses_recheck_sub_cap(env):
-    conn, sp, log, raw = env
-    quote = '달빛정원 특별 메뉴를 소개한다'
-    text = (quote + '. ' + '배경 설명이 이어진다. ' * 80) * 15
-    (Path(raw) / 'h/t.txt').write_text(text, encoding='utf-8')
-    add(conn, 'x1', 'menu', quote, rest='달빛정원')
-    conn.execute("UPDATE extraction SET workload='recheck' WHERE extraction_id='x1'"); conn.commit()
-    calls = []
-    # Reservation sits between the recheck sub-cap (min(8, .4*20)=8 units -> 16k tokens)
-    # and the full 20-unit cap (40k tokens): a fresh finding this size is reviewed, a recheck never fits.
-    stats = rv.review(conn, str(sp), str(log), raw, client=client_for(conn, {'x1': 'approve'}, calls), daily_cap=20)
-    assert (stats['calls'], stats['rejected'], stats['remaining'], stats['stopped']) == (0, 1, 0, None)
-    assert stats['cost_used'] == 0 and stats.get('deferred_budget', 0) == 0 and calls == []
-    row = conn.execute("SELECT state,payload_json FROM review_queue WHERE subject_id='x1'").fetchone()
-    assert row['state'] == 'dismissed'
-    assert json.loads(row['payload_json'])['ai_review']['reason'] == 'review_unavailable: context_too_large'
-    assert conn.execute('SELECT status FROM daemon_run WHERE run_id=?', (stats['run_id'],)).fetchone()[0] == 'succeeded'
-
-
-@pytest.mark.parametrize('huge', [False, True])
-def test_zero_cap_defers_instead_of_closing(env, huge):
-    conn, sp, log, raw = env
-    quote = '달빛정원 특별 메뉴를 소개한다'
-    if huge:
-        text = (quote + '. ' + '배경 설명이 이어진다. ' * 80) * 100
-        (Path(raw) / 'h/t.txt').write_text(text, encoding='utf-8')
-        add(conn, 'x1', 'menu', quote, rest='달빛정원')
-    else:
-        add(conn, 'x1', 'opening', '서울 한남동의 달빛정원은 2026-10-01 문을 열었다', rest='달빛정원', date='2026-10-01')
-    calls = []
-    stats = rv.review(conn, str(sp), str(log), raw, client=client_for(conn, {'x1': 'approve'}, calls), daily_cap=0)
-    assert (stats['calls'], stats['rejected'], stats['remaining'], stats['stopped']) == (0, 0, 1, 'cost_cap')
-    assert stats['deferred_budget'] == 1 and stats['cost_used'] == 0 and calls == []
-    assert conn.execute("SELECT state FROM review_queue WHERE subject_id='x1'").fetchone()[0] == 'open'
-    assert not log.exists()
-    assert conn.execute('SELECT status FROM daemon_run WHERE run_id=?', (stats['run_id'],)).fetchone()[0] == 'paused_cost_cap'
-
-
 @pytest.mark.parametrize('missing', ['target', 'field'])
 def test_minimal_context_preserves_eligibility_and_precheck_guards(env, missing):
     conn, sp, log, raw = env
@@ -238,7 +164,7 @@ def test_minimal_context_preserves_eligibility_and_precheck_guards(env, missing)
     assert json.loads(log.read_text(encoding='utf-8'))['reason'] == 'review_unavailable: context_too_large'
 
 
-def test_review_batch_splitting_preserves_schema_rejection_brake(env):
+def test_review_batch_splitting_cannot_reset_document_attempts(env):
     conn, sp, log, raw = env
     add(conn, 'x_open', 'opening', '서울 한남동의 달빛정원은 2026-10-01 문을 열었다', rest='달빛정원', date='2026-10-01')
     add(conn, 'x_rep', 'employment_claim', '한도윤 셰프가 총괄 셰프를 맡는다', chef='한도윤', role='총괄 셰프')
@@ -248,39 +174,10 @@ def test_review_batch_splitting_preserves_schema_rejection_brake(env):
                     balance_transport=healthy_balance, fallback_key='fixture-backup',
                     fallback_transport=lambda *a: qcalls.append(1) or response())
     stats = rv.review(conn, str(sp), str(log), raw, client=client)
-    assert len(calls) == 6 and qcalls == []
-    assert client.stopped == stats['stopped'] == 'schema_reject_limit'
-    assert client.status == 'paused' and stats['remaining'] == 1 and stats['published'] == 0
-
-
-def test_daily_cap_is_clamped_to_20(env):
-    conn, sp, log, raw = env
-    add(conn, 'x1', 'opening', '서울 한남동의 달빛정원은 2026-10-01 문을 열었다', rest='달빛정원')
-    s = rv.review(conn, str(sp), str(log), raw, client=client_for(conn, {'x1': 'approve'}, []), daily_cap=500)
-    run = conn.execute('SELECT cost_cap_units FROM daemon_run WHERE run_id=?', (s['run_id'],)).fetchone()[0]
-    assert run == 20
-
-
-def test_daily_cap_override_env_bypasses_clamp(env, monkeypatch):
-    conn, sp, log, raw = env
-    add(conn, 'x1', 'opening', '서울 한남동의 달빛정원은 2026-10-01 문을 열었다', rest='달빛정원')
-    monkeypatch.setenv('KG_AI_DAILY_COST_CAP_OVERRIDE', '500')
-    s = rv.review(conn, str(sp), str(log), raw, client=client_for(conn, {'x1': 'approve'}, []), daily_cap=500)
-    run = conn.execute('SELECT cost_cap_units FROM daemon_run WHERE run_id=?', (s['run_id'],)).fetchone()[0]
-    assert run == 500 and s['approved'] == 1 and s['stopped'] is None
-    # Budget must honor the override too, or reservations would still stop at 20.
-    b = Budget(meter(conn, cap=500), daily_cap=500)
-    assert b.daily_cap == 500
-    assert b.reserve('over20', 'task', 'deepseek-chat', 50_000) is True   # 25 units: impossible under the clamp
-    monkeypatch.setenv('KG_AI_DAILY_COST_CAP_OVERRIDE', '')
-    assert Budget(meter(conn), daily_cap=500).daily_cap == 20
-    monkeypatch.delenv('KG_AI_DAILY_COST_CAP_OVERRIDE')
-    b2 = Budget(meter(conn, cap=500), daily_cap=500)
-    assert b2.daily_cap == 20
-    with pytest.raises(CostCapExceeded):
-        b2.reserve('over20b', 'task', 'deepseek-chat', 50_000)
-    monkeypatch.setenv('KG_AI_DAILY_COST_CAP_OVERRIDE', '-5')
-    assert Budget(meter(conn), daily_cap=500).daily_cap == 0
+    assert len(calls) == 3 and qcalls == []
+    assert client.stopped is None and stats['quarantined'] == 2
+    assert client.status == 'enabled' and stats['remaining'] == 2 and stats['published'] == 0
+    assert conn.execute("SELECT COUNT(*) FROM review_queue WHERE reason='guard_attempts_exhausted'").fetchone()[0] == 1
 
 
 def test_repeated_identical_quote_no_longer_aborts_extraction():

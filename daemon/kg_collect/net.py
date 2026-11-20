@@ -20,7 +20,7 @@ import uuid
 import yaml
 
 from kg_daemon.db import ROOT
-from .limits import DailyLimit, Limits
+from .limits import record_dispatch
 
 CFG = json.load(open(os.path.join(ROOT, 'crawler', 'config.json'), encoding='utf-8'))
 UA = CFG['user_agent']
@@ -168,10 +168,10 @@ _busy = {}
 _busy_lock = threading.Lock()
 
 
-def default_transport(url, headers, timeout):
+def default_transport(url, headers, timeout, *, on_traffic=None):
     from . import proxynet
 
-    status, headers, body, error = proxynet.request(url, headers, timeout=timeout, text_only=False, max_body=8_000_000)
+    status, headers, body, error = proxynet.request(url, headers, timeout=timeout, text_only=False, max_body=8_000_000, on_traffic=on_traffic)
     return Response(url, status, headers, body, error=error)
 
 
@@ -179,7 +179,7 @@ class PoliteNet:
     """Serialize dispatch and block recording by normalized host across all web collectors."""
 
     def __init__(self, transport=default_transport, sleep=time.sleep, clock=time.time, min_delay=None, timeout=20, conn=None,
-                 *, korean_press_hosts=(), extra_banned=(), count_limits=True, run_id=None, deadline=None):
+                 *, korean_press_hosts=(), extra_banned=(), run_id=None, deadline=None):
         self.conn = conn
         self.transport, self.sleep, self.clock, self.timeout = transport, sleep, clock, timeout
         self.min_delay = max(5, CFG['min_delay_sec'] if min_delay is None else min_delay)
@@ -187,7 +187,6 @@ class PoliteNet:
         self.extra_banned = extra_banned
         self.run_id = run_id
         self.deadline = deadline
-        self.count_limits = count_limits
         self._robots = {}
         self._last = {}
         self._retry_until = {}
@@ -309,7 +308,7 @@ class PoliteNet:
                     (host, retry_until))
             self.conn.commit()
 
-    def _dispatch(self, url, headers, *, robots=False, delay=None, diagnostic=False, timeout=None):
+    def _dispatch(self, url, headers, *, robots=False, delay=None, diagnostic=False, timeout=None, before_send=None):
         host = host_of(url)
         if res := self.blocked_response(url):
             return res
@@ -326,11 +325,13 @@ class PoliteNet:
             return Response(url, 0, {}, b'', error='block_end')
         if wait:
             self.sleep(wait)
-        if self.count_limits and self.conn is not None and not diagnostic:
-            limits = Limits(self.conn)
-            if not robots and not limits.admit(url):
-                raise DailyLimit('web_daily_candidate_cap')
-            limits.dispatch(robots=robots)
+        if before_send and not before_send():
+            return Response(url, 0, {}, b'', error='attempts_exhausted')
+        if self.conn is not None:
+            day = dt.datetime.fromtimestamp(self.clock(), dt.timezone(dt.timedelta(hours=9))).date().isoformat()
+            if not diagnostic:
+                from .fetch import canonicalize_url
+                record_dispatch(self.conn, canonicalize_url(url), robots=robots, day=day)
         if press:
             now = self.clock()
             self._last[host] = now
@@ -341,7 +342,13 @@ class PoliteNet:
         self.request_count += not diagnostic
         self.robots_count += robots
         headers = {k: v for k, v in headers.items() if k.lower() not in ('user-agent', 'host')}
-        r = self.transport(url, {**headers, 'User-Agent': UA}, timeout)
+        headers['User-Agent'] = UA
+        if self.transport is default_transport and self.conn is not None:
+            from .proxynet import record_traffic
+            r = self.transport(url, headers, timeout,
+                               on_traffic=lambda route, counters: record_traffic(self.conn, day, route, counters))
+        else:
+            r = self.transport(url, headers, timeout)
         reason = block_reason(r)
         if reason:
             self._record_block(host, reason, retry_after(r.headers.get('retry-after'), self.clock()))
@@ -426,7 +433,7 @@ class PoliteNet:
         rp, _ = self._robots_for(url)
         return list(rp.site_maps() or []) if rp else []
 
-    def get(self, url, extra_headers=None, *, method='GET', diagnostic=False, timeout=None):
+    def get(self, url, extra_headers=None, *, method='GET', diagnostic=False, timeout=None, before_send=None):
         if method != 'GET':
             return Response(url, 0, {}, b'', error='unsupported_method')
         self._ensure_run()
@@ -452,7 +459,7 @@ class PoliteNet:
             with self._host_lock(host) as locked:
                 if not locked:
                     return Response(url, 0, {}, b'', error='block_end')
-                r = self._dispatch(url, headers, delay=delay, diagnostic=diagnostic, timeout=timeout)
+                r = self._dispatch(url, headers, delay=delay, diagnostic=diagnostic, timeout=timeout, before_send=before_send)
             if not _redirect(r):
                 return r
             try:

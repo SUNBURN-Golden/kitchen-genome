@@ -177,11 +177,16 @@ def test_permanent_failure_is_bounded_goes_to_failure_queue_and_resumes_from_fai
     assert rep['stages']['extraction'] == 'done' and rep['stages']['entity_resolution'] == 'failed' and rep['stages']['quality_check'] == 'pending'
     fq = c.execute("SELECT * FROM failure_queue WHERE state='open'").fetchall()
     assert len(fq) == 1 and fq[0]['stage'] == 'entity_resolution' and fq[0]['attempts'] == 3
-    # fix + rerun: earlier stages are NOT re-run
+    # A lease takeover cannot give the exhausted stage another attempt.
+    blocked = d.run()
+    assert blocked['status'] == 'failed' and calls['entity_resolution'] == 3
+    # Requeue after repair. Completed checkpoints carry forward.
+    c.execute("UPDATE failure_queue SET state='requeued' WHERE failure_id=?", (fq[0]['failure_id'],))
+    c.commit()
     ran = []
     wrapped = {s: (lambda s: (lambda ctx: (ran.append(s), HANDLERS[s](ctx))[1]))(s) for s in STAGES}
     rep2 = daemon(c, env, wrapped).run()
-    assert rep2['status'] == 'succeeded' and rep2['resumed_from'] == rep['run_id']
+    assert rep2['status'] == 'succeeded' and rep2['resumed_from'] == blocked['run_id']
     assert ran == list(STAGES[STAGES.index('entity_resolution'):])
 
 
@@ -205,16 +210,15 @@ def paid_fetcher(n):
     return f
 
 
-def test_cost_cap_pauses_resumably_and_a_raised_cap_completes(world):
+def test_resumes_legacy_cost_paused_run_and_only_meters(world):
     c, env, _ = world
-    env['fetchers'] = {'http_fetch': paid_fetcher(5)}
-    rep = daemon(c, env, cost_cap_units=3).run()
-    assert rep['status'] == 'paused_cost_cap' and rep['failed_stage'] == 'incremental_fetch' and rep['cost_used'] == 3
-    assert c.execute("SELECT COUNT(*) FROM failure_queue").fetchone()[0] == 0           # a pause is not a failure
-    assert c.execute("SELECT COUNT(*) FROM cost_ledger").fetchone()[0] == 3
-    rep2 = daemon(c, env, cost_cap_units=50).run()
-    assert rep2['status'] == 'succeeded' and rep2['resumed_from'] == rep['run_id']
-    assert c.execute("SELECT COUNT(*) FROM document WHERE url LIKE 'https://official.example.com/p%'").fetchone()[0] == 5   # no dupes, none lost
+    env['fetcher'] = paid_fetcher(25)
+    previous = daemon(c, env)._start_run('fixture', False)
+    c.execute("UPDATE daemon_run SET cost_cap_units=3,status='paused_cost_cap' WHERE run_id=?", (previous,))
+    c.commit()
+    resumed = daemon(c, env).run()
+    assert resumed['resumed_from'] == previous and resumed['status'] == 'succeeded'
+    assert c.execute('SELECT cost_cap_units FROM daemon_run WHERE run_id=?', (resumed['run_id'],)).fetchone()[0] == 0
 
 
 def test_instagram_paused_by_flag_is_skipped_and_never_worked_around(world):
@@ -359,15 +363,12 @@ def test_reposted_article_is_one_independent_source():
     assert independent_sources([('https://a.example/1', q), ('https://a.example/2', '다른 문장으로 쓴 같은 매체 기사입니다.')]) == 1
 
 
-def test_collect_plan_with_zero_budget_does_not_divide_by_zero():
-    import sqlite3
+def test_collect_plan_yields_normally_when_idle():
     from kg_collect import scheduler
-    from kg_daemon.db import migrate
-    c = sqlite3.connect(':memory:')
-    c.row_factory = sqlite3.Row
+    from kg_daemon.db import connect, migrate
+    c = connect(':memory:')
     migrate(c)
-    pl = scheduler.plan(c, 0)
-    assert all(v == 0 for v in pl['budgets'].values())
+    assert scheduler.plan(c)['order'] == []
 
 
 def test_verbatim_repost_does_not_verify_a_move(world):

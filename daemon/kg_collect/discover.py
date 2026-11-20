@@ -1,11 +1,11 @@
 """Source discoverer. Six paths, all driven by the TARGET LIST (regions x cuisines x restaurants x chefs, KR/EN names + aliases):
  1 keyword_search   combined keywords (오픈/이전/폐업/출신/수셰프/헤드셰프) x region x year (+ x cuisine, + x restaurant)
- 2 directory        official/reference directories (hotel & restaurant-group pages, Wikipedia rosters; MICHELIN is manual-only: robots forbids bots)
+ 2 directory        official/reference directories (hotel and restaurant-group pages, Wikipedia rosters, Michelin)
  3 feed/sitemap     RSS, sitemaps, pagination -> article jobs
  4 entity_followup  'A came from B' spawns jobs to verify A's official bio, B's past pages, and the tenure
  5 official_chain   official site -> subpages -> SNS (lead only) -> booking (lead only) -> attachments (PDF/menu images)
  6 reverse_gap      empty fields (see gaps.py)
-Every job is capped on relevance (floor), depth (max_depth) and pool queue size, and is idempotent by job_id."""
+Jobs are filtered by relevance and deduplicated by canonical URL and path."""
 import datetime as dt
 import json
 import os
@@ -18,6 +18,7 @@ import yaml
 from kg_ai import pending
 from kg_daemon.db import ROOT, stable_id, utcnow
 
+from .fetch import canonicalize_url
 from .net import CFG, SEARCH_HOSTS, host_of, is_banned, is_search_host  # noqa: F401  (re-exported)
 from .targets import Gazetteer, norm, tid
 
@@ -60,27 +61,23 @@ def initial_hosts() -> set:
 
 
 def job_id(path: str, key: str) -> str:
-    return stable_id('job', path, key)
+    return stable_id('job', path, canonicalize_url(key))
 
 
 def enqueue(conn, *, path, pool, url=None, query=None, target_id=None, gap_id=None, depth=0, parent=None, relevance=0.5, caps=None, state='queued', error=None, now=None) -> bool:
-    """Idempotent. Returns True if a NEW job row was created. Enforces depth cap, relevance floor, queue cap (discovery is never starved by backfill: separate caps)."""
+    """Idempotent. Returns True if a NEW job row was created. Enforces the configured relevance floor."""
     caps = caps or {}
     if state == 'queued':
-        if depth > min(2, caps.get('max_depth', 2)):
-            return False
         if relevance < caps.get('relevance_floor', 0.30):
             return False
         if url and is_banned(url):
             state, error = 'skipped', 'banned_host: excluded by collection policy'
-        else:
-            cap = caps.get('max_queued_per_pool', {}).get(pool, 400)
-            if conn.execute("SELECT COUNT(*) FROM crawl_job WHERE pool=? AND state='queued'", (pool,)).fetchone()[0] >= cap:
-                return False
-    # Candidate-URL budget is spent when a request is actually dispatched (PoliteNet.get), not
-    # when a URL is enumerated or queued: a feed-heavy day must not exhaust the quota with links
-    # that are never fetched.
-    jid = job_id(path, url or query or '')
+    # A pre-G1 job may use the original URL as its ID key.
+    key = url or query or ''
+    jid = job_id(path, key)
+    legacy = stable_id('job', path, key)
+    if legacy != jid and conn.execute('SELECT 1 FROM crawl_job WHERE job_id=?', (legacy,)).fetchone():
+        return False
     cur = conn.execute("""INSERT OR IGNORE INTO crawl_job(job_id,path,pool,url,query,target_id,gap_id,depth,parent_job_id,relevance,state,last_error,created_at,finished_at)
                           VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?)""",
                        (jid, path, pool, url, query, target_id, gap_id, depth, parent, relevance, state, error, now or utcnow(), (now or utcnow()) if state != 'queued' else None))
@@ -95,7 +92,7 @@ def search_url(seeds, q: str, lang='ko') -> str:
 
 
 # ── path 1: combined keyword search ──
-def keyword_jobs(conn, seeds, today: dt.date | None = None, limit: int | None = None) -> list[dict]:
+def keyword_jobs(conn, seeds, today: dt.date | None = None) -> list[dict]:
     today = today or dt.date.today()
     ks = seeds['keyword_search']
     years = [today.year - i for i in range(ks['years_back'] + 1)]
@@ -115,12 +112,12 @@ def keyword_jobs(conn, seeds, today: dt.date | None = None, limit: int | None = 
             for y in years:
                 q = f'{region} {kw} 셰프 {y}'
                 jobs.append({'path': 'keyword_search', 'pool': 'discovery', 'query': q, 'url': search_url(seeds, q), 'relevance': round(min(1.0, w * rw + (0.05 if y == today.year else 0)), 3)})
-    for c in cuisines[:12]:
+    for c in cuisines:
         for kw in ('오픈', '출신'):
             q = f'{c} 셰프 {kw} 서울'
             jobs.append({'path': 'keyword_search', 'pool': 'discovery', 'query': q, 'url': search_url(seeds, q), 'relevance': round(0.35 + 0.3 * ks['keyword_weight'].get(kw, .6), 3)})
     jobs.sort(key=lambda j: -j['relevance'])
-    return jobs[:limit] if limit else jobs
+    return jobs
 
 
 def eligible_entity_targets(conn, qualified=()):
@@ -153,7 +150,7 @@ def entity_status_jobs(conn, seeds, qualified=(), *, contexts=None) -> list[dict
 
 
 MOTHER_LOOKBACK = 365
-QUERY_CAPS = {'mother': 8, 'entity': 8, 'general': 8}
+QUERY_FAMILIES = ('mother', 'entity', 'general')
 KST = ZoneInfo('Asia/Seoul')
 MOTHER_TEMPLATES = {
     'ko': ('{name} 출신 셰프 서울', '{name} 수셰프 독립', '{name} 출신 셰프 오픈 인터뷰'),
@@ -168,9 +165,6 @@ def mother_kitchen_jobs(seed, today, seeds=None):
     counts = kitchen_counts(seed)
     jobs = []
     for k in sorted(seed.get('kitchens', []), key=lambda k: (counts[k['id']], k['id'])):
-        count = counts[k['id']]
-        if count >= 3:
-            continue
         spec = seeds.get('mother_kitchens', {}).get(k['id'], {})
         for lang in ('ko', 'en'):
             canonical = k['name'] if lang == 'ko' else k.get('en') or k.get('name_en') or k['name']
@@ -181,7 +175,7 @@ def mother_kitchen_jobs(seed, today, seeds=None):
             phrase = f'"{name}"' + (f' "{context}"' if context else '')
             query = MOTHER_TEMPLATES[lang][rotation % 3].format(name=phrase)
             jobs.append({'path': 'keyword_search', 'pool': 'backfill', 'query': query,
-                         'url': search_url(seeds, query, lang), 'target_id': tid('restaurant', k['name']), 'relevance': .8})
+                         'url': search_url(seeds, query, lang), 'target_id': tid('restaurant', k['name']), 'relevance': .8 if counts[k['id']] < 3 else .35})
     return jobs
 
 
@@ -191,14 +185,11 @@ def reconcile_mother_jobs(conn, seed, today, seeds, caps):
     counts = kitchen_counts(seed)
     by_target = {tid('restaurant', k['name']): counts[k['id']] for k in seed.get('kitchens', [])}
     active = [j for j in mother_kitchen_jobs(seed, today, seeds) if j['target_id'] in by_target]
-    current_due = {job_id(j['path'], j['url']) for j in active}
+    current_due = {job_id(j['path'], canonicalize_url(j['url'])) for j in active}
     for row in conn.execute("SELECT * FROM crawl_job WHERE path='keyword_search' AND state IN ('queued','dropped') AND query LIKE ?", ('"%',)):
         if query_family(row, by_target) != 'mother':
             continue
-        filled = by_target[row['target_id']] >= 3
-        if filled and row['state'] == 'queued':
-            conn.execute("UPDATE crawl_job SET state='dropped',last_error='mother_kitchen_filled' WHERE job_id=?", (row['job_id'],))
-        elif not filled and row['job_id'] in current_due and row['last_error'] == 'mother_kitchen_filled':
+        if row['state'] == 'dropped' and job_id(row['path'], row['url']) in current_due and row['last_error'] == 'mother_kitchen_filled':
             conn.execute("UPDATE crawl_job SET state='queued',last_error=NULL WHERE job_id=?", (row['job_id'],))
     count = sum(enqueue(conn, **job, caps=caps) for job in active)
     return by_target, current_due, count
@@ -220,64 +211,19 @@ def query_family(job, mother_targets):
     return 'general'
 
 
-def mother_language(query):
-    return 'en' if re.search(r'" (?:former|alumni) ', query) else 'ko'
-
-
-class QuerySlots:
-    """In-memory planning view and durable, transactional dispatch claims."""
-
-    def __init__(self, conn, now, caps=None, *, history=True):
-        self.day = now.astimezone(KST).date().isoformat()
-        self.caps = caps or QUERY_CAPS
-        self.used = dict.fromkeys(QUERY_CAPS, 0)
-        self.targets = {}
-        self.languages = set()
-        self.queries = set()
-        self.last_target = {}
-        self.last_query = {}
-        rows = (conn.execute('SELECT * FROM discovery_query_dispatch') if history else
-                conn.execute('SELECT * FROM discovery_query_dispatch WHERE day=?', (self.day,)))
-        for row in rows:
-            family, target, query, day = row['family'], row['target_id'], row['canonical_query'], row['day']
-            self.last_query[query] = max(day, self.last_query.get(query, ''))
-            if family == 'entity' and target:
-                self.last_target[target] = max(day, self.last_target.get(target, ''))
-            if day == self.day:
-                self.consume(family, target, query)
-
-    def consume(self, family, target, query):
-        self.used[family] += 1
-        self.queries.add(query)
-        if family == 'entity' and target:
-            self.targets[target] = self.targets.get(target, 0) + 1
-        if family == 'mother':
-            self.languages.add((target, mother_language(query)))
-
-    def allows(self, family, target, query, reserve=0):
-        if query in self.queries:
-            return False
-        if family == 'mother':
-            return (self.used['mother'] < self.caps['mother'] and (target, mother_language(query)) not in self.languages
-                    and self.used['mother'] + self.used['entity'] < self.caps['mother'] + self.caps['entity'])
-        if family == 'entity':
-            spare = max(0, self.caps['mother'] - self.used['mother'] - reserve)
-            return self.used['entity'] < self.caps['entity'] + spare and self.targets.get(target, 0) < 2
-        return self.used['general'] < self.caps['general']
-
-
-def claim_query(conn, job, family, now, caps=None, reserve=0):
-    """Claim one canonical query before dispatch, including across processes and restarts."""
-    query, target = canonical_query(job['query']), job['target_id']
+def claim_query(conn, job, family, now):
+    # Claim one canonical query per freshness day across invocations.
+    day = now.astimezone(KST).date().isoformat()
+    query = canonical_query(job['query'])
+    cur = conn.execute('INSERT OR IGNORE INTO discovery_query_dispatch(day,canonical_query,family,target_id,job_id) VALUES (?,?,?,?,?)', (day, query, family, job['target_id'], job['job_id']))
     conn.commit()
-    with conn:
-        conn.execute('BEGIN IMMEDIATE')
-        slots = QuerySlots(conn, now, caps, history=False)
-        if not slots.allows(family, target, query, reserve):
-            return False
-        conn.execute("INSERT INTO discovery_query_dispatch(day,canonical_query,family,target_id,job_id) VALUES (?,?,?,?,?)",
-                     (slots.day, query, family, target, job['job_id']))
-    return True
+    return bool(cur.rowcount)
+
+
+def release_query(conn, job, now):
+    day = now.astimezone(KST).date().isoformat()
+    conn.execute('DELETE FROM discovery_query_dispatch WHERE day=? AND canonical_query=? AND job_id=?',
+                 (day, canonical_query(job['query']), job['job_id']))
 
 
 # ── paths 2-3: directories, feeds, sitemaps ──
@@ -302,7 +248,7 @@ def item_relevance(gaz: Gazetteer, title: str, summary: str, url: str) -> float:
     return round(min(1.0, rel), 3)
 
 
-def expand_items(conn, doc, parent_job, gaz, caps, lookback_days=120, today=None, unknown_cap=40) -> dict:
+def expand_items(conn, doc, parent_job, gaz, caps, lookback_days=120, today=None) -> dict:
     """feed/sitemap/search-result items -> article jobs (depth+1), filtered by relevance and recency."""
     today = today or dt.date.today()
     made = skipped = 0
@@ -334,15 +280,13 @@ def expand_items(conn, doc, parent_job, gaz, caps, lookback_days=120, today=None
 CHROME_HOSTS = ('wikipedia.org', 'wikimedia.org', 'wikidata.org', 'mediawiki.org', 'wikimediafoundation.org', 'creativecommons.org')
 
 
-def directory_link_jobs(conn, doc, parent_job, seeds, caps, limit=20) -> int:
-    """A directory/roster page is curated: its out-links to articles and to same-host restaurant/dining pages are follow-up jobs (depth+1, capped).
+def directory_link_jobs(conn, doc, parent_job, seeds, caps) -> int:
+    """A directory/roster page is curated: its out-links to articles and to same-host restaurant/dining pages are follow-up jobs.
     SNS and booking links are leads only (official_chain_jobs handles those); banned hosts are skipped by enqueue."""
     oc = seeds['official_chain']
     skip_hosts = tuple(oc['sns_hosts']) + tuple(oc['booking_hosts'])
     made = 0
     for url, anchor, _rel in doc.links:
-        if made >= limit:
-            break
         uh = host_of(url)
         if not uh or any(uh == s or uh.endswith('.' + s) for s in skip_hosts) or is_search_host(uh):
             continue
@@ -354,7 +298,7 @@ def directory_link_jobs(conn, doc, parent_job, seeds, caps, limit=20) -> int:
             rel = 0.6
         else:
             rel = 0.5
-        if enqueue(conn, path='directory', pool='discovery', url=url, depth=parent_job['depth'] + 1, parent=parent_job['job_id'], relevance=rel, caps=caps, target_id=parent_job.get('target_id')):
+        if enqueue(conn, path='directory' if uh == doc.host else 'feed', pool='discovery', url=url, depth=parent_job['depth'] + 1, parent=parent_job['job_id'], relevance=rel, caps=caps, target_id=parent_job.get('target_id')):
             made += 1
     conn.commit()
     return made
@@ -364,7 +308,6 @@ def directory_link_jobs(conn, doc, parent_job, seeds, caps, limit=20) -> int:
 def followup_jobs(conn, seeds, ext_rows, parent_depth: int = 0, gaz=None) -> list[dict]:
     """career(A came from B) -> verify A's official bio, B's past pages, and A's tenure at B. employment_claim -> A's bio + the employer's official site."""
     jobs = []
-    cap = seeds['caps']['max_followups_per_extraction']
     from .extract import clean_venue, publication_assertions
     from .review import reject_reason
     gaz = gaz or Gazetteer(conn)
@@ -394,7 +337,7 @@ def followup_jobs(conn, seeds, ext_rows, parent_depth: int = 0, gaz=None) -> lis
             mine = [(f'"{a}" "{r}" 셰프 소개', .7)]
         # A source-derived search can start its own root when the article is already deep in a link chain.
         depth = 0 if parent_depth >= 1 else 1
-        for q, rel in mine[:cap]:
+        for q, rel in mine:
             jobs.append({'path': 'entity_followup', 'pool': 'backfill', 'query': q, 'url': search_url(seeds, q),
                          'relevance': rel, 'depth': depth,
                          'target_id': e['resolved_chef_target'], 'source_extraction': e['extraction_id']})
@@ -407,7 +350,6 @@ def official_chain_jobs(conn, doc, parent_job, seeds, caps) -> dict:
     sns, booking = tuple(oc['sns_hosts']), tuple(oc['booking_hosts'])
     made = {'subpages': 0, 'sns_leads': 0, 'booking_leads': 0, 'attachments': 0}
     h = doc.host
-    subs = 0
     for url, anchor, _rel in doc.links:
         uh = host_of(url)
         low = url.lower().split('?')[0]
@@ -424,10 +366,9 @@ def official_chain_jobs(conn, doc, parent_job, seeds, caps) -> dict:
         elif low.endswith('.pdf'):
             if enqueue(conn, path='attachment', pool='discovery', url=url, depth=parent_job['depth'] + 1, parent=parent_job['job_id'], relevance=0.7, caps=caps, target_id=parent_job.get('target_id')):
                 made['attachments'] += 1
-        elif uh == h and any(k in low or k in anchor.lower() for k in oc['subpage_hints']) and subs < caps.get('max_official_subpages', 6):
+        elif uh == h and any(k in low or k in anchor.lower() for k in oc['subpage_hints']):
             if enqueue(conn, path='official_chain', pool='discovery', url=url, depth=parent_job['depth'] + 1, parent=parent_job['job_id'], relevance=0.6, caps=caps, target_id=parent_job.get('target_id')):
                 made['subpages'] += 1
-                subs += 1
     for src, alt in doc.images:
         if re.search(r'menu|메뉴|poster|포스터|course|코스', (src + ' ' + alt).lower()):
             if enqueue(conn, path='attachment', pool='discovery', url=src, depth=parent_job['depth'] + 1, parent=parent_job['job_id'], relevance=0.6, caps=caps, target_id=parent_job.get('target_id')):
@@ -447,7 +388,7 @@ def seed_official_site_jobs(conn) -> list[dict]:
 
 
 # ── path 5b: find the restaurant's OWN site (domain probe / press-article link), verified before use ──
-def official_probe_jobs(conn, limit: int = 40) -> list[dict]:
+def official_probe_jobs(conn) -> list[dict]:
     """Restaurants with open gaps and no verified official site -> guessed-domain probe jobs (query='probe:probe_verified').
     Each probe is one polite GET; the page must pass official.verify_site or it is discarded (never used as evidence)."""
     from . import official
@@ -459,6 +400,4 @@ def official_probe_jobs(conn, limit: int = 40) -> list[dict]:
     for t in rows:
         for u in official.probe_candidates(t):
             jobs.append({'path': 'official_chain', 'pool': 'discovery', 'url': u, 'query': 'probe:probe_verified', 'target_id': t['target_id'], 'relevance': 0.55})
-        if len(jobs) >= limit:
-            break
-    return jobs[:limit]
+    return jobs

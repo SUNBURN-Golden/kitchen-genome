@@ -23,16 +23,12 @@ def conn():
 
 
 # ── discover / scheduler ──
-def test_enqueue_is_idempotent_and_capped(conn):
-    caps = {'max_depth': 1, 'relevance_floor': 0.3, 'max_queued_per_pool': {'discovery': 2}}
-    assert discover.enqueue(conn, path='feed', pool='discovery', url='https://a.test/1', relevance=0.9, caps=caps)
-    assert not discover.enqueue(conn, path='feed', pool='discovery', url='https://a.test/1', relevance=0.9, caps=caps)       # same job id
-    assert not discover.enqueue(conn, path='feed', pool='discovery', url='https://a.test/2', depth=2, relevance=0.9, caps=caps)   # depth cap
-    assert not discover.enqueue(conn, path='feed', pool='discovery', url='https://a.test/3', relevance=0.1, caps=caps)             # relevance floor
-    assert discover.enqueue(conn, path='feed', pool='discovery', url='https://a.test/4', relevance=0.9, caps=caps)
-    assert not discover.enqueue(conn, path='feed', pool='discovery', url='https://a.test/5', relevance=0.9, caps=caps)             # queue cap
-    assert discover.enqueue(conn, path='feed', pool='discovery', url='https://www.instagram.com/x', relevance=0.9, caps={}) and \
-        conn.execute("SELECT state FROM crawl_job WHERE url='https://www.instagram.com/x'").fetchone()[0] == 'skipped'
+def test_enqueue_deduplicates_unseen_urls_at_any_depth(conn):
+    for i in range(525):
+        url = f'https://fixture.test/route/{i}'
+        assert discover.enqueue(conn, path='feed', pool='discovery', url=url, depth=i)
+        assert not discover.enqueue(conn, path='feed', pool='discovery', url=url + '/#ref', depth=i)
+    assert conn.execute("SELECT COUNT(*) FROM crawl_job").fetchone()[0] == 525
 
 
 def test_keyword_jobs_combine_keyword_region_year(conn):
@@ -41,14 +37,13 @@ def test_keyword_jobs_combine_keyword_region_year(conn):
     assert '성수 폐업 셰프 2026' in qs and '한남 오픈 셰프 2025' in qs
 
 
-def test_discovery_budget_is_reserved_against_a_huge_backfill_backlog(conn):
-    caps = {'max_queued_per_pool': {'backfill': 9999, 'discovery': 9999, 'refresh': 9999}}
-    for i in range(300):
-        discover.enqueue(conn, path='feed', pool='backfill', url=f'https://old{i % 7}.test/{i}', relevance=0.95, caps=caps)
-    for i in range(30):
-        discover.enqueue(conn, path='feed', pool='discovery', url=f'https://new{i}.test/{i}', relevance=0.5, caps=caps)
-    pl = scheduler.plan(conn, 100, dt.datetime.now(dt.timezone.utc))
-    assert len(pl['chosen']['discovery']) >= 30 * 1 and pl['budgets']['discovery'] >= 30
+def test_discovery_rotates_with_a_large_backfill_backlog(conn):
+    for i in range(500):
+        discover.enqueue(conn, path='feed', pool='backfill', url=f'https://fixture.test/backfill/{i}')
+    discover.enqueue(conn, path='directory', pool='discovery', url='https://directory.test/list')
+    plan = scheduler.plan(conn)
+    assert len(plan['order']) == 501
+    assert plan['chosen']['discovery'][0] in plan['order'][:2]
 
 
 def test_priority_penalises_failures_and_known_duplicates(conn):
@@ -90,11 +85,6 @@ def test_directory_links_skip_wiki_chrome(conn):
     assert n == 1 and urls == ['https://news.example-press.test/a/1']
 
 
-def test_zero_unit_plan_is_empty_not_a_crash(conn):
-    pl = scheduler.plan(conn, 0)
-    assert all(not v for v in pl['chosen'].values()) if isinstance(pl.get('chosen'), dict) else True
-
-
 def test_candidate_review_drops_acronyms_and_institutions_and_queues_the_rest(conn):
     from kg_collect import review
     from kg_collect.targets import upsert_target
@@ -117,7 +107,7 @@ def test_plan_fetches_a_url_only_once_even_if_queued_in_two_pools(conn):
     assert discover.enqueue(conn, path='keyword_search', pool='refresh', url=u, query='핀즈 폐업', relevance=0.7, caps=caps)
     assert discover.enqueue(conn, path='reverse_gap', pool='backfill', url=u, query='핀즈 폐업', relevance=0.7, caps=caps)
     conn.commit()
-    pl = scheduler.plan(conn, 100, dt.datetime.now(dt.timezone.utc))
+    pl = scheduler.plan(conn, dt.datetime.now(dt.timezone.utc))
     chosen = [j for p in pl['chosen'].values() for j in p]
     urls = [conn.execute('SELECT url FROM crawl_job WHERE job_id=?', (j,)).fetchone()['url'] for j in chosen]
     assert urls.count(u) == 1

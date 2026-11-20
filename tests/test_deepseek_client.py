@@ -12,14 +12,14 @@ from kg_ai.deepseek import (Client, DeepSeekError, MAX_BODY, NoRedirect, RETRYAB
                             SCHEMA_REJECT_LIMIT, TaskReject, URL, failure_code,
                             parse_json_content, stored_error)
 from kg_daemon.db import connect, migrate, new_id, utcnow
-from kg_daemon.runner import CostCapExceeded, CostMeter
+from kg_daemon.runner import CostMeter
 
 
 def meter(conn, cap=100):
     run = new_id('run')
     conn.execute('INSERT INTO daemon_run(run_id,daemon,status,cost_cap_units,started_at) VALUES (?,?,?,?,?)', (run, 'test', 'running', cap, utcnow()))
     conn.commit()
-    return CostMeter(conn, run, cap, {'llm_tokens_k': .5})
+    return CostMeter(conn, run, {'llm_tokens_k': .5})
 
 
 @pytest.fixture
@@ -34,7 +34,7 @@ def response(data=None, usage=None, finish='stop'):
                             'choices': [{'finish_reason': finish, 'message': {'content': json.dumps(data if data is not None else {'ok': True})}}]}).encode()
 
 
-def test_measured_usage_cache_and_zero_cap(conn):
+def test_measured_usage_and_cache(conn):
     calls = []
     def transport(payload, key):
         calls.append((json.loads(payload), key)); return response()
@@ -50,8 +50,8 @@ def test_measured_usage_cache_and_zero_cap(conn):
     assert calls[0][0]['max_tokens'] == 2048 and calls[0][1] == 'synthetic-key'
     assert calls[0][0]['thinking'] == {'type': 'disabled'} and calls[0][0]['temperature'] == 0
     assert 'reasoning_effort' not in calls[0][0] and calls[0][0]['response_format'] == {'type': 'json_object'}
-    c2 = Client(Budget(meter(conn, 0)), key='dummy', transport=lambda *a: pytest.fail('paid request at zero cap'), balance_transport=healthy_balance)
-    with pytest.raises(CostCapExceeded): c2.call('zero', 'JSON', {}, lambda o: o)
+    assert r['provider'] == 'deepseek'
+    assert conn.execute('SELECT SUM(hits) FROM ai_cache_day').fetchone()[0] == 1
 
 
 @pytest.mark.parametrize('status,code', [(400, 'model_or_request_rejected'), (401, 'auth_failed'), (404, 'model_unavailable'), (429, 'rate_limited'), (503, 'provider_failed'), (302, 'provider_failed')])
@@ -70,18 +70,18 @@ def test_lost_response_survives_new_run(conn):
     client = Client(Budget(meter(conn)), key='dummy', transport=lost, balance_transport=healthy_balance)
     with pytest.raises(DeepSeekError, match='invalid_response_or_usage'): client.call('task', 'JSON', {}, lambda o: o)
     used = client.budget.meter.used
-    assert used > 0
+    assert used == 0
     next_client = Client(Budget(meter(conn)), key='dummy', transport=lambda *a: pytest.fail('unknown attempt replayed'), balance_transport=healthy_balance)
     with pytest.raises(DeepSeekError, match='previous_attempt'): next_client.call('task', 'JSON', {}, lambda o: o)
     assert conn.execute('SELECT SUM(units) FROM ai_request').fetchone()[0] == used
 
 
 @pytest.mark.parametrize('raw', [b'not-json', b'x' * (MAX_BODY+1), response(usage={'prompt_tokens': True, 'completion_tokens': 1, 'total_tokens': 2})[1]])
-def test_invalid_response_keeps_reservation(conn, raw):
+def test_invalid_response_records_unknown_usage(conn, raw):
     client = Client(Budget(meter(conn)), key='dummy', transport=lambda *a: (200, raw), balance_transport=healthy_balance)
     with pytest.raises(DeepSeekError): client.call('task', 'JSON', {}, lambda o: o)
     assert conn.execute('SELECT state,units FROM ai_request').fetchone()['state'] == 'unknown'
-    assert client.budget.meter.used > 0
+    assert client.budget.meter.used == 0
 
 
 def test_invalid_schema_and_truncation_charge_actual_without_partial_cache(conn):
@@ -101,29 +101,34 @@ def test_missing_key_and_redirects(conn):
     assert URL == 'https://api.deepseek.com/chat/completions'
 
 
-def test_reservation_day_cap_is_atomic_across_connections(tmp_path):
-    path = str(tmp_path / 'state.db'); c = connect(path); migrate(c)
-    runs = [meter(c).run_id for _ in range(2)]; c.close()
-    def reserve(run):
+def test_registration_is_atomic_without_a_day_cap(tmp_path):
+    path = str(tmp_path / 'state.db')
+    c = connect(path)
+    migrate(c)
+    runs = [meter(c).run_id for _ in range(2)]
+    c.close()
+
+    def register(run):
         conn = connect(path)
         try:
-            b = Budget(CostMeter(conn, run, 100, {'llm_tokens_k': .5}), daily_cap=5, day=lambda: '2026-11-05')
-            return b.reserve(run, 'task', 'deepseek-chat', 8000)
-        except CostCapExceeded:
-            return False
+            b = Budget(CostMeter(conn, run, {'llm_tokens_k': .5}), day=lambda: '2026-11-05')
+            return b.reserve(run, 'task', 'deepseek-chat', 50_000), b.reserve('shared', 'task', 'deepseek-chat', 50_000)
         finally:
             conn.close()
+
     with concurrent.futures.ThreadPoolExecutor(2) as pool:
-        results = list(pool.map(reserve, runs))
-    assert sorted(results) == [False, True]
-    c = connect(path)
-    assert c.execute('SELECT SUM(units) FROM ai_request').fetchone()[0] == 4
+        outcomes = list(pool.map(register, runs))
+    assert all(distinct for distinct, _ in outcomes)
+    assert sum(shared for _, shared in outcomes) == 1
+    with connect(path) as c:
+        assert c.execute('SELECT COUNT(*) FROM ai_request').fetchone()[0] == 3
 
 
 def test_usage_above_bound_is_recorded_in_full(conn):
     client = Client(Budget(meter(conn)), key='dummy', transport=lambda *a: response(usage={'prompt_tokens': 100000, 'completion_tokens': 0, 'total_tokens': 100000}), balance_transport=healthy_balance)
-    with pytest.raises(CostCapExceeded): client.call('task', 'JSON', {}, lambda o: o)
-    assert client.budget.meter.used == 50
+    assert client.call('task', 'JSON', {}, lambda o: o) == {'ok': True}
+    assert client.call('next', 'JSON', {}, lambda o: o) == {'ok': True}
+    assert client.budget.meter.used == 100
 
 
 def test_task_specific_output_limit_and_purged_cache_does_not_disable_run(conn):
@@ -364,49 +369,3 @@ def test_wrapped_json_still_passes_through_validation(conn):
         client.call('task', 'JSON', {}, validate)
     assert seen == [{'ok': True}, {'ok': True}]
     assert client._schema_rejections == 1 and client.stopped is None
-
-
-def test_unreservable_corrections_count_once_per_document_toward_limit(conn, monkeypatch):
-    budget = Budget(meter(conn))
-    reserve = budget.reserve
-    attempts = []
-    def bounded_reserve(*args):
-        attempts.append(args)
-        if len(attempts) % 2 == 0:
-            raise CostCapExceeded('concurrent reservation consumed retry room')
-        return reserve(*args)
-    monkeypatch.setattr(budget, 'reserve', bounded_reserve)
-    client = Client(budget, key='dummy', transport=lambda *a: envelope('{bad}'),
-                    balance_transport=healthy_balance)
-    for n in range(SCHEMA_REJECT_LIMIT):
-        with pytest.raises(DeepSeekError, match='^invalid_task_json$'):
-            client.call('task', 'JSON', {'document': n}, lambda o: o)
-        assert client._schema_rejections == n + 1
-        assert client.stopped == ('schema_reject_limit' if n + 1 == SCHEMA_REJECT_LIMIT else None)
-        if client.stopped is None:
-            with pytest.raises(DeepSeekError, match='^task_previously_rejected$'):
-                client.call('task', 'JSON', {'document': n}, lambda o: o)
-            assert len(attempts) == (n + 1) * 2 and client._schema_rejections == n + 1
-    assert len(attempts) == 6
-    assert conn.execute('SELECT COUNT(*) FROM ai_request').fetchone()[0] == 3
-
-
-@pytest.mark.parametrize('on_retry', [False, True])
-@pytest.mark.parametrize('invalid_output', [False, True])
-def test_over_reservation_stops_even_when_settling_invalid_json(conn, on_retry, invalid_output):
-    calls = []
-    def transport(*args):
-        calls.append(1)
-        if on_retry and len(calls) == 1:
-            return envelope('{bad}')
-        return envelope('{bad}' if invalid_output else '{}',
-                        usage={'prompt_tokens': 100000, 'completion_tokens': 0, 'total_tokens': 100000})
-    client = Client(Budget(meter(conn)), key='dummy', transport=transport, balance_transport=healthy_balance)
-    with pytest.raises(CostCapExceeded):
-        client.call('task', 'JSON', {}, lambda o: o)
-    assert client.stopped == 'usage_over_reservation' and client.status == 'paused'
-    assert client._schema_rejections == 0
-    assert client.budget.meter.used >= 50
-    with pytest.raises(DeepSeekError, match='^usage_over_reservation$'):
-        client.call('task', 'JSON', {'next': True}, lambda o: o)
-    assert len(calls) == (2 if on_retry else 1)

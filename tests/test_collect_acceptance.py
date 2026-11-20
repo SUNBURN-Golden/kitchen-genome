@@ -26,7 +26,7 @@ def world(tmp_path):
     cycle.init_db(conn, seed=SEED)
     seed_path = tmp_path / 'seed.json'
     seed_path.write_text(json.dumps(SEED, ensure_ascii=False), encoding='utf-8')
-    bot = cycle.Bot(conn, data_dir=str(tmp_path), net=web.net(), seeds=seeds_for_world(), today=TODAY, units=80,
+    bot = cycle.Bot(conn, data_dir=str(tmp_path), net=web.net(), seeds=seeds_for_world(), today=TODAY,
                     registry_path=str(tmp_path / 'registry.discovered.yaml'), seed_path=seed_path, ocr=True)
     return conn, web, bot, tmp_path
 
@@ -186,10 +186,14 @@ def test_broken_extractor_is_detected(world):
     assert rep['outputs']['quality']['open_extractor_alerts'] >= 1
 
 
-def test_resume_from_checkpoint_after_cost_cap(world):
+def test_resume_from_legacy_checkpoint_after_cost_pause(world):
     conn, web, bot, tmp = world
-    r1 = run(bot, cost_cap=4)
-    assert r1['status'] == 'paused_cost_cap', r1['status']
+    from kg_daemon import runner
+    daemon = runner.Daemon(conn, cycle.HANDLERS, {'daemon_name': 'kg-collect'}, stages=cycle.STAGES)
+    previous = daemon._start_run('fixture', False)
+    conn.execute("UPDATE daemon_run SET status='paused_cost_cap',cost_cap_units=4 WHERE run_id=?", (previous,))
+    conn.commit()
+    r1 = {'run_id': previous}
     done_before = q(conn, "SELECT COUNT(*) n FROM crawl_job WHERE state IN ('done','failed','blocked')")[0]['n']
     fetched = {r['url'] for r in q(conn, 'SELECT url FROM fetch_record')}
     r2 = run(bot)

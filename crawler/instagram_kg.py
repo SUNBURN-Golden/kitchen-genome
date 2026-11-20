@@ -20,7 +20,7 @@ from kg_ai.deepseek import Client, DeepSeekError
 from kg_daemon.claims import queue_review
 from kg_daemon.db import DEFAULT_DB, connect, new_id, stable_id, utcnow
 from kg_daemon.registry import IG_FLAG
-from kg_daemon.runner import CostCapExceeded, CostMeter, DEFAULT_CONFIG
+from kg_daemon.runner import CostMeter, DEFAULT_CONFIG
 from kg_collect.net import UA
 from privacy_filter import sanitize_before_store
 
@@ -242,9 +242,6 @@ def model_call(client, task, instruction, data, validate, default):
         return default
     try:
         return client.call(task, instruction, data, validate, max_tokens=2048)
-    except CostCapExceeded:
-        client.stopped = client.stopped or 'cost_cap'
-        return default
     except DeepSeekError:
         # Real failures already set client.stopped; a purged cache entry or one bad task
         # must not disable model calls for the rest of the run.
@@ -450,9 +447,9 @@ def main(argv=None):
         conn.execute('INSERT INTO daemon_run(run_id,daemon,status,trigger,cost_cap_units,started_at) VALUES (?,?,?,?,?,?)',
                      (run, 'instagram_kg', 'running', 'daily', 0, utcnow()))
         conn.commit()
-        meter = CostMeter(conn, run, float('inf'), DEFAULT_CONFIG['unit_costs'])
+        meter = CostMeter(conn, run, DEFAULT_CONFIG['unit_costs'])
         meter.stage = 'instagram_kg'
-        client = Client(Budget(meter, os.environ.get('KG_AI_DAILY_COST_CAP', '20'))) if args.deepseek else None
+        client = Client(Budget(meter)) if args.deepseek else None
         seed = json.loads((ROOT / 'data/seed.json').read_text())
         handles = [{'handle': r['instagram'].lstrip('@'), 'target_id': r['id'], 'name': r['name']} for r in seed['restaurants'] if r.get('instagram') and not r.get('closed_at')]
         def terminate(signum, frame):
