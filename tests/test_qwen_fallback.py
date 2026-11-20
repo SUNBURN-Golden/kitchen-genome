@@ -2,6 +2,7 @@
 import json
 from pathlib import Path
 import pytest
+from test_site_publication import publication_world  # noqa: F401
 from kg_ai.budget import Budget
 from kg_ai.deepseek import (Client, DeepSeekError, FALLBACK_CODES, QWEN_MODEL, QWEN_URL,
                             qwen_http_transport, MAX_BODY)
@@ -375,3 +376,29 @@ def test_qwen_transport_uses_longer_timeout(monkeypatch):
     ds.http_transport(b'{}', 'k')
     assert seen[ds.QWEN_URL] == ds.QWEN_TIMEOUT_SEC >= 120
     assert seen[ds.URL] == ds.DEEPSEEK_TIMEOUT_SEC == 30
+
+
+def test_publication_review_uses_qwen_for_candidate_targets(publication_world, monkeypatch):
+    from test_site_publication import FIRST, PRESS, app, article, bundled_seeds, process
+    w = publication_world
+    article(w, PRESS[0], FIRST)
+    assert process(w)[1]['checking'] == 1
+    assert w.conn.execute("SELECT status FROM target WHERE name_ko='오닐'").fetchone()[0] == 'candidate'
+    transports = []
+
+    def primary(*args):
+        transports.append('deepseek')
+        return 503, b''
+
+    def fallback(body, _key):
+        prompt = json.loads(json.loads(body)['messages'][1]['content'])
+        transports.append('qwen')
+        assert prompt['evidence']['affiliation'][0]['quote'] == FIRST
+        return response({'reviews': [{'id': prompt['id'], 'decision': 'approve', 'reason': 'Evidence confirms the assertions'}]})
+
+    stats = rv.review(w.conn, w.seed_path, w.log, w.raw.root, client=fallback_client(w.conn, primary, fallback))
+    assert transports == ['deepseek', 'qwen'] and stats['bundle_approved'] == 1 and not stats['published']
+    entry = json.loads(w.log.read_text())
+    assert entry['model_meta']['model'] == QWEN_MODEL and SECRET not in w.log.read_text()
+    app(w, monkeypatch).main()
+    assert bundled_seeds(w)[0]['career_checking'] == ['kitchen']

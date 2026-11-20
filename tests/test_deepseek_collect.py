@@ -679,6 +679,9 @@ def test_kg_and_model_findings_cannot_corroborate_seed_changes(tmp_path, monkeyp
     import importlib.util
     spec=importlib.util.spec_from_file_location('seed_apply',Path(__file__).resolve().parents[1]/'crawler/apply.py')
     module=importlib.util.module_from_spec(spec); spec.loader.exec_module(module)
+    import subprocess
+    subprocess.run(['git','init','-q',str(tmp_path)], check=True)
+    monkeypatch.setattr(module,'ROOT',str(tmp_path))
     crawler=tmp_path/'crawler'; (crawler/'out').mkdir(parents=True)
     seed=tmp_path/'seed.json'; seed.write_text(json.dumps({'restaurants':[{'id':'r','name':'Fixture'}]}))
     original=seed.read_bytes()
@@ -700,6 +703,9 @@ def test_two_reliable_sources_publish_while_model_rows_stay_out(tmp_path, monkey
     import importlib.util
     spec = importlib.util.spec_from_file_location('seed_apply_pub', Path(__file__).resolve().parents[1]/'crawler/apply.py')
     module = importlib.util.module_from_spec(spec); spec.loader.exec_module(module)
+    import subprocess
+    subprocess.run(['git','init','-q',str(tmp_path)], check=True)
+    monkeypatch.setattr(module,'ROOT',str(tmp_path))
     crawler = tmp_path/'crawler'; (crawler/'out').mkdir(parents=True)
     seed = tmp_path/'seed.json'
     seed.write_text(json.dumps({'restaurants':[{'id':'r','name':'Fixture'}]}))

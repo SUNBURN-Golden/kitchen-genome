@@ -59,7 +59,7 @@ def _table_text(t) -> str:
     return '\n'.join(rows)
 
 
-def parse_html(html: str, url: str) -> dict:
+def parse_html(html: str, url: str, *, include_jsonld_text=True) -> dict:
     soup = BeautifulSoup(html, 'lxml')
     ld = jsonld_blocks(soup)
     title = None
@@ -135,7 +135,7 @@ def parse_html(html: str, url: str) -> dict:
         for k in ('headline', 'name', 'description', 'articleBody'):
             if isinstance(d.get(k), str) and len(d[k]) > 8:
                 ld_text.append(d[k])
-    if len(text) < 150 and ld_text:      # JSON-LD fallback for thin pages
+    if include_jsonld_text and len(text) < 150 and ld_text:      # JSON-LD fallback for thin pages
         text = (text + '\n' + '\n'.join(dict.fromkeys(ld_text))).strip()
     return {'title': title, 'text': text.strip(), 'published_at': published, 'links': links, 'next_url': next_url,
             'jsonld_types': sorted({str(d.get('@type')) for d in ld if d.get('@type')}), 'jsonld': ld, 'images': images}

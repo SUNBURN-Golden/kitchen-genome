@@ -55,23 +55,59 @@ def chef_names(raw_ko: str | None, raw_en: str | None) -> list[tuple[str, str | 
 
 def load_seed_targets(conn, seed: dict, now=None) -> dict:
     n = {'restaurant': 0, 'chef': 0, 'region': 0, 'cuisine': 0}
+    generated = {r['id']: r['publication'] for r in seed.get('restaurants', []) if r.get('publication')}
+    tombstones = seed.get('publication_rollbacks', [])
+    managed_ids = set(generated)
+    managed_ids.update(t['id'] for t in tombstones)
+    keys = ('chef_target_id', 'restaurant_target_id')
+    rolled_back_targets = {t[key] for t in tombstones for key in keys}
+    for t in conn.execute("SELECT target_id,attrs_json FROM target WHERE origin='discovered'"):
+        a = json.loads(t['attrs_json'])
+        if a.get('published_to_site'):
+            if a.get('seed_id'):
+                managed_ids.add(a['seed_id'])
+            managed_ids.update(i for i in a.get('restaurants', []) if i.startswith('alumni-'))
+    published_targets = {m[key] for m in generated.values() for key in keys}
+    for t in conn.execute("SELECT target_id,attrs_json FROM target WHERE origin='discovered'"):
+        a = json.loads(t['attrs_json'])
+        if not a.get('published_to_site') and t['target_id'] not in rolled_back_targets:
+            continue
+        a['published_to_site'] = t['target_id'] in published_targets
+        if not a['published_to_site'] and a.get('seed_id') in managed_ids:
+            a.pop('seed_id')
+        if not a['published_to_site']:
+            conn.execute("UPDATE target SET status='candidate' WHERE target_id=? AND status='active'", (t['target_id'],))
+        if 'restaurants' in a:
+            a['restaurants'] = [i for i in a['restaurants'] if i not in managed_ids or
+                                i in generated and generated[i]['chef_target_id'] == t['target_id']]
+        _write_attrs(conn, t['target_id'], a)
     for k in seed.get('kitchens', []):
-        upsert_target(conn, 'restaurant', k['name'], k.get('en') or k.get('name_en'), attrs={'role': 'origin_kitchen', 'seed_id': k['id']}, now=now)
+        upsert_target(conn, 'restaurant', k['name'], k.get('en') or k.get('name_en'), aliases=k.get('aliases', ()),
+                      attrs={'role': 'origin_kitchen', 'seed_id': k['id'], 'city': k.get('city')}, now=now)
         n['restaurant'] += 1
     regions, cuisines = set(), set()
     for r in seed.get('restaurants', []):
-        official = r.get('official_source_url') or ''
         attrs = {'seed_id': r['id'], 'area': r.get('area'), 'cuisine': r.get('cuisine'), 'kitchen': r.get('kitchen'), 'opened': r.get('opened'), 'site': r.get('url'),
-                 'role': r.get('role'), 'chef': r.get('chef')}
-        rt = upsert_target(conn, 'restaurant', r['name'], r.get('name_en'), attrs=attrs, aliases=r.get('prev_names') or (), now=now)
+                 'role': r.get('role'), 'chef': r.get('chef'), 'city': r.get('city'), 'address': r.get('address'), 'branch': r.get('branch')}
+        aliases = r.get('prev_names') or ()
+        marker = generated.get(r['id'])
+        if marker:
+            _load_publication_target(conn, marker['restaurant_target_id'], 'restaurant', r['name'],
+                                     r.get('name_en'), {**attrs, 'published_to_site': True}, aliases, now)
+        else:
+            upsert_target(conn, 'restaurant', r['name'], r.get('name_en'), attrs=attrs, aliases=aliases, now=now)
         n['restaurant'] += 1
         for ko, en in chef_names(r.get('chef'), r.get('chef_en')):
-            ct = upsert_target(conn, 'chef', ko, en, attrs={'restaurants': [r['id']], 'origin_kitchen': r.get('kitchen')}, now=now)
+            if marker:
+                ct = marker['chef_target_id']
+                _load_publication_target(conn, ct, 'chef', ko, en, {'published_to_site': True}, (), now)
+            else:
+                ct = upsert_target(conn, 'chef', ko, en, attrs={'restaurants': [r['id']], 'origin_kitchen': r.get('kitchen')}, now=now)
             row = conn.execute('SELECT attrs_json FROM target WHERE target_id=?', (ct,)).fetchone()
             a = json.loads(row['attrs_json'])
             if r['id'] not in a.get('restaurants', []):
                 a.setdefault('restaurants', []).append(r['id'])
-                conn.execute('UPDATE target SET attrs_json=? WHERE target_id=?', (json.dumps(a, ensure_ascii=False, sort_keys=True), ct))
+                _write_attrs(conn, ct, a)
             n['chef'] += 1
         if r.get('area'):
             regions.add(re.split(r'[ (/]', r['area'])[0])
@@ -84,6 +120,28 @@ def load_seed_targets(conn, seed: dict, now=None) -> dict:
     conn.commit()
     n['region'], n['cuisine'] = len(regions), len(cuisines)
     return n
+
+
+def _write_attrs(conn, target, attrs):
+    conn.execute('UPDATE target SET attrs_json=? WHERE target_id=?',
+                 (json.dumps(attrs, ensure_ascii=False, sort_keys=True), target))
+
+
+def _load_publication_target(conn, target, kind, ko, en, attrs, aliases, now):
+    row = conn.execute('SELECT kind,attrs_json FROM target WHERE target_id=?', (target,)).fetchone()
+    if row:
+        if row['kind'] != kind:
+            raise ValueError('Publication target kind mismatch')
+        _write_attrs(conn, target, {**json.loads(row['attrs_json']), **attrs})
+        conn.execute("""UPDATE target SET name_ko=?, name_en=COALESCE(?,name_en),
+                        status=CASE WHEN status='rejected' THEN status ELSE 'active' END WHERE target_id=?""", (ko, en, target))
+    else:
+        conn.execute("""INSERT INTO target(target_id,kind,name_ko,name_en,origin,discovered_at,status,attrs_json)
+                        VALUES (?,?,?,?,'discovered',?,'active',?)""",
+                     (target, kind, ko, en, now or utcnow(), json.dumps(attrs, ensure_ascii=False)))
+    for name in (ko, en, *romanization_variants(en), *aliases):
+        if name and len(name) >= 2:
+            conn.execute('INSERT OR IGNORE INTO target_alias(target_id,alias,lang) VALUES (?,?,?)', (target, name, 'x'))
 
 
 class Gazetteer:

@@ -4,6 +4,11 @@ import os, re, json, shutil, sys
 from html import escape as e
 sys.path.insert(0,os.path.dirname(os.path.abspath(__file__)))
 from en_terms import AREA, CITY, CUISINE, ROLE, michelin, VSTAT
+from lineage_evidence import evidence_html
+CHK='<span class="tag">Checking</span>'
+def chk(r,f): return (' '+CHK) if f in (r.get('career_checking') or []) else ''
+def lineage(r):
+    return evidence_html(r, 'Lineage evidence', {'lineage':'Origin kitchen', 'affiliation':'Opening or affiliation', 'location':'Location'}, 'Source')
 BASE='https://kitchengenome.soulbound.co.kr'
 here=os.path.dirname(os.path.abspath(__file__)); root=os.path.join(here,'..'); web=os.path.join(root,'web')
 d=json.load(open(os.path.join(root,'data','seed.json'),encoding='utf-8'))
@@ -11,7 +16,7 @@ K={k['id']:k for k in d['kitchens']}; R=d['restaurants']
 kn=lambda k:k.get('name_en') or k.get('en') or k['name']
 def kof(r): return K.get(r.get('kitchen'))
 def area(r):
-    a=AREA.get(r.get('area')); return a or CITY.get(r.get('city'))
+    a=AREA.get(r.get('area')); return a or CITY.get(r.get('city')) or r.get('city')
 def cuisine(r): return CUISINE.get(r.get('cuisine'))
 def role(r): return ROLE.get(r.get('role'))
 def opened(r):
@@ -57,7 +62,7 @@ def rpage(r):
     LBL={'romanized':' <small class="muted">(romanized)</small>','transliterated':' <small class="muted">(transliterated)</small>'}
     nm_note=LBL.get(r.get('name_en_type'),'')
     rows=[('Chef',e(c)+LBL.get(r.get('chef_en_type'),'') if c else 'Not confirmed'),
-          ('Trained at',f'<a href="/en/k/{k["id"]}/">{e(kn(k))}</a>' if k else 'Not confirmed'),('Role there',e(role(r) or 'Not stated in sources')),
+          ('Trained at',(f'<a href="/en/k/{k["id"]}/">{e(kn(k))}</a>' if k else 'Not confirmed')+chk(r,'kitchen')),('Role there',e(role(r) or 'Not stated in sources')+chk(r,'role')),
           ('Location',e(area(r) or 'Not confirmed')),('Cuisine',e(cuisine(r) or 'Not confirmed')),('Opened',e(opened(r) or 'Not confirmed'))]
     if r.get('closed_at'): rows.append(('Closed',e(r['closed_at'])))
     if michelin(r.get('michelin')): rows.append(('MICHELIN',e(michelin(r['michelin']))))
@@ -65,10 +70,10 @@ def rpage(r):
     sib=[x for x in R if k and x.get('kitchen')==k['id'] and x['id']!=r['id']]
     sibs=('<section class="card"><h2>Other '+e(kn(k))+' alumni</h2><ul>'+''.join(f'<li><a href="/en/r/{x["id"]}/">{e(x["name_en"])}</a>'+(f' · Chef {e(x["chef_en"])}' if x.get('chef_en') else '')+'</li>' for x in sib)+'</ul></section>') if sib else ''
     body=f'''<article class="card"><p class="muted">{('<a href="/en/k/'+k['id']+'/">'+e(kn(k))+' lineage</a> · ') if k else ''}Restaurant</p>
-<h1>{e(r['name_en'])}{nm_note}{' <span class="tag">Closed</span>' if r.get('closed_at') else ''}</h1>
+<h1>{e(r['name_en'])}{nm_note}{(' <span class="tag v">Source verified</span>' if r.get('lineage_status')=='verified' else ' '+CHK) if r.get('lineage_evidence') else ''}{' <span class="tag">Closed</span>' if r.get('closed_at') else ''}</h1>
 <p class="lead">{e(rdesc(r))}</p>
 <dl>{''.join(f'<dt>{a}</dt><dd>{b}</dd>' for a,b in rows)}</dl>
-{('<h2>Chef employment history</h2><ul>'+''.join(f'<li>{e(c["date"])} · {e(c["text_en"])} ({link(c["src"],"source" if True else "")})</li>' for c in r.get('chef_career',[]))+'</ul>') if r.get('chef_career') else ''}{('<h2>Mentorship</h2><ul>'+''.join(f'<li>{e(c.get("text_en",""))} ({link(c["src"],"source")})</li>' for c in r.get('chef_mentorship',[]))+'</ul>') if r.get('chef_mentorship') else ''}{aisec(r)}<h2>Sources</h2><ul>{''.join(f'<li>{link(u,lab)}</li>' for lab,u in srcs(r)) or '<li>Collecting public sources</li>'}</ul>
+{('<h2>Chef employment history</h2><ul>'+''.join(f'<li>{e(c["date"])} · {e(c["text_en"])} ({link(c["src"],"source" if True else "")})</li>' for c in r.get('chef_career',[]))+'</ul>') if r.get('chef_career') else ''}{('<h2>Mentorship</h2><ul>'+''.join(f'<li>{e(c.get("text_en",""))} ({link(c["src"],"source")})</li>' for c in r.get('chef_mentorship',[]))+'</ul>') if r.get('chef_mentorship') else ''}{lineage(r)}{aisec(r)}<h2>Sources</h2><ul>{''.join(f'<li>{link(u,lab)}</li>' for lab,u in srcs(r)) or '<li>Collecting public sources</li>'}</ul>
 <p class="cta"><a class="btn p" href="/#/r/{e(r['id'])}">Open in the interactive map (Korean)</a>{f' <a class="btn g" href="/en/k/{k["id"]}/">All {e(kn(k))} alumni</a>' if k else ''}</p></article>{sibs}'''
     rest={'@type':'Restaurant','@id':BASE+'/en'+kp+'#restaurant','name':r['name_en'],'alternateName':r['name'],'url':BASE+'/en'+kp,'inLanguage':'en'}
     if cuisine(r): rest['servesCuisine']=cuisine(r)
@@ -76,9 +81,10 @@ def rpage(r):
     if r.get('url'): rest['sameAs']=[r['url']]
     g=[rest]
     if c:
-        p={'@type':'Person','name':c,'jobTitle':'Chef','worksFor':{'@id':rest['@id']}}
+        p={'@type':'Person','name':c,'jobTitle':'Chef'}
+        if 'kitchen' not in (r.get('career_checking') or []): p['worksFor']={'@id':rest['@id']}
         if not bad_chef(r): p['alternateName']=re.sub(r'\s*\(.*?\)','',r['chef']).strip()
-        if k: p['alumniOf']={'@type':'Organization','name':kn(k),'url':f'{BASE}/en/k/{k["id"]}/'}
+        if k and 'kitchen' not in (r.get('career_checking') or []): p['alumniOf']={'@type':'Organization','name':kn(k),'url':f'{BASE}/en/k/{k["id"]}/'}
         g.append(p)
     return '/en'+kp,page(kp,rtitle(r),rdesc(r),body,{'@context':'https://schema.org','@graph':g})
 def bad_chef(r): return bool(re.search('미기재|출신|팀',r.get('chef') or ''))
@@ -87,7 +93,7 @@ def kpage(k):
     title=f"{kn(k)} Alumni Restaurants in Seoul — {len(al)} Places by {kn(k)}-Trained Chefs | Kitchen Genome"
     mi=michelin(k.get('michelin'))
     desc=f"Where did chefs from {kn(k)} go? {len(al)} restaurants opened or led by {kn(k)} alumni, with sources."+(f" {kn(k)}: {mi}." if mi else '')
-    lis=''.join(f'<li><a href="/en/r/{r["id"]}/">{e(r["name_en"])}</a>{" <span class=tag>Closed</span>" if r.get("closed_at") else ""}'+(f' · Chef {e(r["chef_en"])}' if r.get('chef_en') else '')+(f' · {e(role(r))}' if role(r) else '')+(f' · {e(area(r))}' if area(r) else '')+'</li>' for r in al)
+    lis=''.join(f'<li><a href="/en/r/{r["id"]}/">{e(r["name_en"])}</a>{" <span class=tag>Closed</span>" if r.get("closed_at") else ""}'+(f' · Chef {e(r["chef_en"])}' if r.get('chef_en') else '')+(f' · {e(role(r))}' if role(r) else '')+(f' · {e(area(r))}' if area(r) else '')+((' '+CHK) if r.get('career_checking') else '')+'</li>' for r in al)
     body=f'''<article class="card"><p class="muted">Origin kitchen</p><h1>{e(kn(k))} <small class="muted" lang="ko">{e(k['name'])}</small></h1>
 <p class="lead">{e(desc)}</p><dl><dt>MICHELIN</dt><dd>{e(mi or 'Not confirmed')}{(' · '+link(k['michelin_src'].replace('/kr/ko/','/kr/en/'),'source')) if k.get('michelin_src') else ''}</dd><dt>Data checked</dt><dd>{e(k.get('checked') or d['generated'])}</dd></dl>
 <h2>Restaurants by {e(kn(k))} alumni</h2><ul>{lis or '<li>No records yet</li>'}</ul>{aisec(k)}
@@ -104,12 +110,12 @@ def aisec(x):
             +'</ul><p class="muted">Published automatically after an AI review of the original quote; not yet checked by a person. Quotes are shown in the original Korean.</p>')
 def dirpage():
     kp='/directory/'; desc=f"All {len(R)} restaurants opened or led by alumni of {len(K)} top Seoul kitchens, grouped by where the chef trained."
-    sec=''.join(f'<section class="card"><h2><a href="/en/k/{k["id"]}/">{e(kn(k))}</a> <small class="muted">{sum(r.get("kitchen")==k["id"] for r in R)}</small></h2><ul>'+''.join(f'<li><a href="/en/r/{r["id"]}/">{e(r["name_en"])}</a>'+(f' · Chef {e(r["chef_en"])}' if r.get('chef_en') else '')+'</li>' for r in R if r.get('kitchen')==k['id'])+'</ul></section>' for k in d['kitchens'])
+    sec=''.join(f'<section class="card"><h2><a href="/en/k/{k["id"]}/">{e(kn(k))}</a> <small class="muted">{sum(r.get("kitchen")==k["id"] for r in R)}</small></h2><ul>'+''.join(f'<li><a href="/en/r/{r["id"]}/">{e(r["name_en"])}</a>'+(f' · Chef {e(r["chef_en"])}' if r.get('chef_en') else '')+((' '+CHK) if r.get('career_checking') else '')+'</li>' for r in R if r.get('kitchen')==k['id'])+'</ul></section>' for k in d['kitchens'])
     body=f'<h1>Directory</h1><p class="lead">{e(desc)}</p>{sec}'
     return '/en'+kp,page(kp,'Seoul Chef Lineage Directory — Restaurants by Alumni of Top Kitchens | Kitchen Genome',desc,body,{'@context':'https://schema.org','@type':'CollectionPage','name':'Kitchen Genome directory','url':BASE+'/en'+kp,'inLanguage':'en'})
 def home():
     sr=[r for r in R if r.get('city')=='서울']
-    desc=f"Who trained where, and who opened what in Seoul: {len(R)} restaurants by alumni of {len(K)} acclaimed kitchens such as Mingles, Jungsik and Mosu, each with sources."
+    desc=f"Who trained where, and which restaurants they opened or lead: {len(R)} restaurants by alumni of {len(K)} acclaimed kitchens such as Mingles, Jungsik and Mosu, each with sources."
     ks=''.join(f'<li><a href="/en/k/{k["id"]}/">{e(kn(k))}</a> · {sum(r.get("kitchen")==k["id"] for r in R)} alumni restaurants</li>' for k in d['kitchens'])
     body=f'''<section class="card"><h1>Kitchen Genome: Seoul’s chef family tree</h1>
 <p class="lead">Great restaurants train great cooks, and many of them go on to open places of their own. Kitchen Genome follows those paths: which chefs worked at Seoul’s most acclaimed kitchens, and where they cook now.</p>

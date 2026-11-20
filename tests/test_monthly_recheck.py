@@ -395,7 +395,7 @@ def test_date_migration_repairs_pending_rules_without_repairing_model_evidence(t
         conn.execute("UPDATE review_queue SET payload_json=? WHERE subject_id=?",
                      (json.dumps({'finding':{'date_text':'2026년 10월 1일'}}),xid))
     conn.execute("UPDATE extraction SET extractor='rule:closure' WHERE extraction_id='legacy_rule'");conn.commit()
-    assert db.migrate(conn)==['0009_extraction_verbatim_dates.sql', '0010_fetch_priority.sql']
+    assert db.migrate(conn)==['0009_extraction_verbatim_dates.sql', '0010_fetch_priority.sql', '0011_collect_discovery_scope.sql']
     rule=conn.execute("SELECT * FROM extraction WHERE extraction_id='legacy_rule'").fetchone()
     assert (rule['date_text'],rule['date_iso'])==('2026년 10월 1일','2026-10-01')
     model=conn.execute("SELECT * FROM extraction WHERE extraction_id='legacy_model'").fetchone()
