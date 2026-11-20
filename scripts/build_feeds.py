@@ -3,9 +3,10 @@ Run by scripts/build_deploy.py so feeds always match the deployed data.
 Public fields only: never verdicts (과대평가/저평가), gap scores, or newsletter content."""
 import os, re, json, datetime
 from xml.sax.saxutils import escape as x
+from lineage_evidence import is_alum, public_seed, status
 BASE='https://kitchengenome.soulbound.co.kr'
 here=os.path.dirname(os.path.abspath(__file__)); root=os.path.join(here,'..')
-d=json.load(open(os.path.join(root,'data','seed.json'),encoding='utf-8'))
+d=public_seed(json.load(open(os.path.join(root,'data','seed.json'),encoding='utf-8')))
 web=os.path.join(root,'web'); gen=d['generated']
 K={k['id']:k for k in d['kitchens']}; R=d['restaurants']
 def ymd(s):
@@ -18,7 +19,7 @@ def lastmod(*vals):
 urls=[(BASE+'/',lastmod(gen,*[r.get('checked') for r in R],*[r.get('contacted_at') for r in R],*[r.get('closed_at') for r in R])),
       (BASE+'/directory/',lastmod(gen,*[r.get('checked') for r in R],*[r.get('closed_at') for r in R]))]
 for k in d['kitchens']:
-    rs=[r for r in R if r['kitchen']==k['id']]
+    rs=[r for r in R if is_alum(r, k['id'])]
     urls.append((f"{BASE}/k/{k['id']}/",lastmod(k.get('checked'),*[r.get('checked') for r in rs],*[r.get('contacted_at') for r in rs],*[r.get('closed_at') for r in rs])))
 for r in R: urls.append((f"{BASE}/r/{r['id']}/",lastmod(r.get('checked'),r.get('contacted_at'),r.get('confirmed_at'),r.get('closed_at'))))
 def alt(u):
@@ -32,12 +33,24 @@ open(os.path.join(web,'sitemap.xml'),'w',encoding='utf-8').write('\n'.join(sm))
 def pub(r):
     dt=ymd(r.get('contacted_at')) or ymd(r.get('opened')) or ymd(gen)
     return datetime.datetime(dt.year,dt.month,dt.day,9,0,tzinfo=datetime.timezone(datetime.timedelta(hours=9)))
+def career_status(r, english=False):
+    rows = []
+    for edge in (*r['origins'], *r.get('career_affiliations', [])):
+        tag = status(edge, english)
+        if edge.get('role') and 'role' in edge.get('career_checking', []) or edge.get('period') and 'period' in edge.get('career_checking', []):
+            tag = ' · '.join(dict.fromkeys(filter(None, (tag, 'Checking' if english else '확인 중'))))
+        k = K.get(edge.get('kitchen_id'), {})
+        name = (k.get('name_en') if english else None) or k.get('name') or edge.get('chef_name')
+        if tag and name:
+            rows.append(f'{name} ({tag})')
+    return ' / '.join(dict.fromkeys(rows))
+
 def desc(r):
     bad=lambda v:not v or re.search('미확인|미기재',str(v))
     k=K.get(r.get('kitchen'),{}).get('name'); role=r.get('role')
     head=(f"{r['chef']} 셰프" if not bad(r.get('chef')) else '셰프 이름 미확인')
     if k: head+=f" · {k} 출신"+(f" ({role})" if not bad(role) and role!='출신' else '')
-    p=[head]
+    p=[head,career_status(r)]
     p.append(' · '.join(v for v in (r.get('city'),r.get('area'),r.get('cuisine')) if v and v!='미확인'))
     if ymd(r.get('opened')): p.append(f"오픈 {r['opened']}")
     if r.get('closed_at'): p.append(f"폐업 {r['closed_at']}")
@@ -61,6 +74,7 @@ en=['<?xml version="1.0" encoding="UTF-8"?>','<rss version="2.0" xmlns:atom="htt
 for r in items:
     kk=K.get(r.get('kitchen'),{}); kname=kk.get('name_en') or kk.get('en')
     dsc=(f"Chef {r['chef_en']}" if r.get('chef_en') else 'Chef not confirmed')+(f", trained at {kname}" if kname else '')+(f". Opened {ymd(r.get('opened')).isoformat()[:7]}" if ymd(r.get('opened')) else '')+(f". Closed {r['closed_at']}" if r.get('closed_at') else '')+'.'
+    if career_status(r, True): dsc += ' ' + career_status(r, True)
     en.append(f"<item><title>{x(r['name_en'])}</title><link>{BASE}/en/r/{x(r['id'])}/</link><guid isPermaLink=\"false\">kitchengenome:en:{x(r['id'])}</guid><pubDate>{fmt(pub(r))}</pubDate><description>{x(dsc)}</description></item>")
 en+=['</channel></rss>','']
 os.makedirs(os.path.join(web,'en'),exist_ok=True); open(os.path.join(web,'en','rss.xml'),'w',encoding='utf-8').write('\n'.join(en))

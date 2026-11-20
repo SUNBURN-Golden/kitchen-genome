@@ -3,6 +3,7 @@ import os, base64, json, subprocess, sys
 from blake3 import blake3
 here=os.path.dirname(os.path.abspath(__file__))
 repo=os.path.join(here,'..')
+subprocess.run([sys.executable, os.path.join(repo,'data','enrich_en.py'), '--public-only'], check=True)
 for _s in ('build_pages.py','build_pages_en.py','build_feeds.py'):
     subprocess.run([sys.executable, os.path.join(here,_s)], check=True)
 root=os.path.join(repo,'web')

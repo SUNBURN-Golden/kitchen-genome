@@ -240,8 +240,11 @@ edges independently of (a); a stall in one workstream never blocks acceptance of
   publisher-group and scope registry to foreign press. Store attributed claims from newly encountered publishers as
   checking and count them toward verification once their coverage and independence are established.
 - Call `kg_collect/deepseek.py:Adapters` and `kg_ai/article.py`/`Client` with versioned tasks, bounded paragraph windows and
-  stable content hashes. Four concurrent model workers by default (`heavy_sources.yaml caps.model_workers: 4`, shared across drainers), independent
-  of the single-request-per-web-host rule. Preserve source spellings and the original quote language. One assertion contains
+  stable content hashes. Four concurrent model workers by default (`heavy_sources.yaml caps.model_workers: 4`), independent
+  of the single-request-per-web-host rule. Implementation decision (G3 review, 2026-11-20): the default is a shared bounded
+  slot pool (`HeavyCrawler.model_slots`) gating extraction across the heavy executor's drainers on the shared cross-host
+  executor, so model calls overlap web fetches without a separate model-only pool; the daily `cycle.stage_extract` lane
+  stays sequential for cost fairness. Preserve source spellings and the original quote language. One assertion contains
   `{chef_text, venue_text, relation, role_text, from_text, to_text, period_precision, quote, source_span}`. Relations separate
   explicit current employment, former employment, training/stage and opening. Dates retain stated precision or null.
   A former stint with no end date uses `valid_to_kind=unknown`; a source explicitly saying the chef currently works there

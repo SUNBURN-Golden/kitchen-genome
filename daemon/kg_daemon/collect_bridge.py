@@ -162,3 +162,52 @@ def candidates(body, today) -> list[tuple]:
     if pending(x) and not out:
         out.append(('menu', {**base, 'label': lab}, loc, quote))
     return out
+
+
+def persist_career_span(conn, fetch, text, row, now):
+    """Bridge a checked publisher span directly into the immutable source ontology."""
+    from . import claims
+    from .db import stable_id
+    from kg_collect.apply import ensure_source
+
+    start, end = row['span_start'], row['span_end']
+    if not (0 <= start < end <= len(text) and text[start:end] == row['quote'] and end - start <= 200):
+        raise ValueError('career evidence does not match the stored publisher span')
+    evidence_id = stable_id('evd', 'career', row['canonical_url'], row['content_hash'], str(start), str(end))
+    sid = ensure_source(conn, fetch['host'], row['source_tier'], now)
+    return claims.add_evidence(
+        conn, evidence_id=evidence_id, source_id=sid, source_url=row['canonical_url'], quote=row['quote'],
+        collected_at=fetch['fetched_at'], published_at=row['published_at'],
+        locator={'fetch_id': fetch['fetch_id'], 'span_start': start, 'span_end': end,
+                 'content_hash': row['content_hash'], 'normalization': 'NFC'})
+
+
+def persist_career_claim(conn, row, now):
+    from . import claims, ontology
+    from .db import stable_id
+
+    assertion_id = row['assertion_id']
+    opening = row['relation'] == 'opening'
+    claim_id = claims.create_claim(
+        conn, 'status_event' if opening else 'employment', 'source_claim', 'collect:career-span',
+        claim_id=stable_id('clm', assertion_id), now=now)
+    claims.link_evidence(conn, claim_id, row['evidence_id'])
+    employment_id = None
+    if opening:
+        date = ontology.parse_iso_date(row['valid_from'])
+        conn.execute('''INSERT OR IGNORE INTO restaurant_status_event(
+            event_id,branch_id,kind,effective_date,effective_precision,by_chef_id,claim_id,seed_ref,created_at)
+            VALUES (?,?,'open',?,?,?,?,?,?)''',
+                     (stable_id('evt', assertion_id), row['branch_id'], *(date or (None, None)),
+                      row['chef_id'], claim_id, assertion_id, now))
+    else:
+        open_ended = row['relation'] == 'current'
+        employment_id = ontology.add_employment(
+            conn, chef_id=row['chef_id'], branch_id=row['branch_id'], claim_id=claim_id,
+            role_id=row['role_id'], role_text=row['role_text'],
+            tenure_text=' – '.join(filter(None, (row['from_text'], row['to_text']))) or None,
+            valid_from=row['valid_from'], valid_to=row['valid_to'],
+            valid_to_kind='known' if row['valid_to'] else 'open' if open_ended else 'unknown',
+            last_confirmed_at=(row['published_at'] or row['fetched_at']) if open_ended else None,
+            seed_ref=assertion_id, now=now, employment_id=stable_id('emp', assertion_id))
+    return claim_id, employment_id

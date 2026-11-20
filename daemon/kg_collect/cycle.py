@@ -411,31 +411,31 @@ def stage_fetch(ctx):
 def load_doc(conn, raw: RawStore, f) -> Doc:
     text = raw.read_text(f['text_ref']) if f['text_ref'] else ''
     items, links, images = [], [], []
-    html, jsonld, title = '', [], ''
+    html, jsonld, title, lang = '', [], '', ''
     if f['method'] in ('feed', 'sitemap') and f['raw_ref']:
         items = parse_feed(raw.read(f['raw_ref']), f['url'])
     elif f['method'] in ('html', 'jsonld', 'browser') and f['raw_ref'] and f['raw_ref'].endswith('.html'):
         html = raw.read(f['raw_ref']).decode('utf-8', 'ignore')
         p = parse_html(html, f['url'])
         links, images = p['links'], p['images']
-        jsonld, title = p['jsonld'], p['title'] or ''
+        jsonld, title, lang = p['jsonld'], p['title'] or '', p['language']
     d = Doc(f['fetch_id'], f['url'], f['canonical_url'], f['host'], f['method'], f['outcome'], text=text, published_at=f['published_at'], links=links, items=items, images=images,
             content_hash=f['content_hash'], error=f['error'], page_no=f['page_no'] or 1)
-    d.html, d.jsonld, d.title = html, jsonld, title
+    d.html, d.jsonld, d.title, d.language = html, jsonld, title, lang
     return d
 
 
-def extract_roster(conn, raw, fetch, gaz, adapter, deadline):
-    """Shared Korean article extraction. The caller checkpoints completion in its lease."""
+def extract_roster(conn, raw, fetch, gaz, adapter, deadline, focus=()):
+    """Shared article extraction. The caller checkpoints completion in its lease."""
     if deadline is not None and time.monotonic() >= deadline:
         return False
+    doc = load_doc(conn, raw, fetch)
     if adapter:
         adapter.client.deadline = deadline
-        adapter.client.use_task('web-extract-2')
         adapter.defer_extract = False
-    doc = load_doc(conn, raw, fetch)
-    process_doc(conn, doc, gaz, tier=_tier_of(conn)(doc.host), via=fetch['url'], model_adapter=adapter)
-    return not adapter or not adapter.defer_extract
+    result = process_doc(conn, doc, gaz, tier=_tier_of(conn)(doc.host), via=fetch['url'], model_adapter=adapter,
+                         lineage_focus=focus, lineage_required=True)
+    return result['lineage_complete'] and (not adapter or not adapter.defer_extract)
 
 
 def refresh_roster(bot, meter):
@@ -449,12 +449,12 @@ def refresh_roster(bot, meter):
         michelin.bootstrap(conn, net.clock(), bot.roster_config, bot.seeds)
         roster = michelin.Roster(conn, net, bot.raw, bot.roster_config, bot.seeds)
 
-        def extract(fetch, gaz):
+        def extract(fetch, gaz, focus):
             if bot.deepseek and not bot.ai:
                 from .deepseek import Adapters
 
                 bot.ai = Adapters.for_meter(meter)
-            return extract_roster(conn, bot.raw, fetch, gaz, bot.ai, soft_stop)
+            return extract_roster(conn, bot.raw, fetch, gaz, bot.ai, soft_stop, focus)
 
         while time.monotonic() < soft_stop:
             job = global_queue.claim(conn, net.clock(), daily=True)
@@ -499,11 +499,17 @@ def stage_extract(ctx):
         bot.ai.client.deadline = bot.deadline
         bot.ai.client.use_task('web-extract-2')
     tier_of = _tier_of(conn)
+    from .lineage import VERSION as lineage_version
+
     # Highest priority first (heavy collector scores; unscored rows weigh 0.75).
     rows = conn.execute("""SELECT f.* FROM fetch_record f LEFT JOIN fetch_priority p ON p.fetch_id=f.fetch_id
-                           WHERE f.outcome='ok' AND (f.extracted_at IS NULL OR f.extractor_version<>?)
+                           WHERE f.outcome='ok' AND (f.extracted_at IS NULL OR f.extractor_version<>? OR
+                             (? AND f.text_ref IS NOT NULL AND f.method IN ('html','jsonld','browser','pdf','ocr')
+                              AND NOT EXISTS (SELECT 1 FROM career_document d WHERE d.fetch_id=f.fetch_id AND d.extractor_version=?)))
                              AND f.fetcher_version<>?
-                           ORDER BY COALESCE(p.score, 0.75) DESC, f.fetched_at, f.rowid""", (EXTRACTOR_VERSION, michelin.VERSION)).fetchall()
+                           ORDER BY COALESCE(p.score, 0.75) DESC, f.fetched_at, f.rowid""", (EXTRACTOR_VERSION,
+                               bool(bot.ai and hasattr(bot.ai, 'extract_lineage') and bot.ai.client.configured),
+                               lineage_version, michelin.VERSION)).fetchall()
     stats = {'docs': 0, 'new_extractions': 0, 'labels': {}, 'alerts': []}
     for f in rows:
         if bot.expired():
@@ -533,7 +539,7 @@ def stage_extract(ctx):
         for a in check_extractor_health(conn, doc, n_all, bot.raw, gaz=gaz):
             stats['alerts'].append(a)
         # A temporarily unavailable model can resume after deterministic rows commit.
-        if bot.ai and bot.ai.defer_extract:
+        if not r['lineage_complete'] or bot.ai and bot.ai.defer_extract:
             continue
         conn.execute('UPDATE fetch_record SET extracted_at=?, extractor_version=? WHERE fetch_id=?', (utcnow(), EXTRACTOR_VERSION, f['fetch_id']))
         conn.commit()

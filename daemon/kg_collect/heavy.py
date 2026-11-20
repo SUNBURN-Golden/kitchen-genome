@@ -5,7 +5,7 @@ are serialized and access refusals stop the host for the run. Egress uses zecbot
 when healthy and falls back to the box on a confirmed local tunnel failure.
 
 The Michelin frontier shares the service DB with the 07:00 collector. Eligible
-Korean article snapshots use the existing extractor and Qwen-first guarded model
+multilingual article snapshots use the shared extractor and Qwen-first guarded model
 chain. The block writes private collection state for subsequent integration."""
 import argparse
 import contextlib
@@ -17,6 +17,7 @@ import re
 import resource
 import sqlite3
 import sys
+import threading
 import time
 import urllib.parse
 import uuid
@@ -66,6 +67,7 @@ def load_cfg(path=SOURCES_PATH) -> dict:
     cfg = yaml.safe_load(open(path, encoding='utf-8'))
     caps = cfg['caps']
     caps['max_concurrency'] = max(1, int(caps.get('max_concurrency', 6)))
+    caps['model_workers'] = max(1, int(caps.get('model_workers', 4)))
     return cfg
 
 
@@ -97,6 +99,9 @@ class HeavyCrawler:
         self.svc_busy_timeout = 5000
         service_conn.execute(f'PRAGMA busy_timeout={self.svc_busy_timeout}')
         self.caps = self.cfg['caps']
+        # Shared model-worker pool: extraction (rules + model) across all drainers is
+        # bounded independently of the single-request-per-web-host rule.
+        self.model_slots = threading.BoundedSemaphore(max(1, int(self.caps.get('model_workers', 4))))
         self.q = sqlite3.connect(queue_path, timeout=30, check_same_thread=False)
         self.q.row_factory = sqlite3.Row
         self.q.execute('PRAGMA journal_mode=WAL')     # status readers never wait on the running block
@@ -205,16 +210,17 @@ class HeavyCrawler:
             net = self._net(conn, run_id=self.access.run_id, deadline=self.stop_at)
             roster = michelin.Roster(conn, net, self.raw, self.roster_config, self.roster_seeds)
 
-            def extract(fetch, gaz):
+            def extract(fetch, gaz, focus):
                 from .deepseek import Adapters
 
                 meter = CostMeter(conn, self.access.run_id, UNIT_COSTS)
                 meter.stage = 'extract'
                 adapter = Adapters.for_meter(meter)
-                deadline = time.monotonic() + max(0, min(global_queue.LEASE_SECONDS - 20,
-                                                          task['lease_expires_at'] - self.clock() - 10,
-                                                          self.stop_at - self.clock() - 5))
-                return extract_roster(conn, self.raw, fetch, gaz, adapter, deadline)
+                with self.model_slots:
+                    deadline = time.monotonic() + max(0, min(global_queue.LEASE_SECONDS - 20,
+                                                              task['lease_expires_at'] - self.clock() - 10,
+                                                              self.stop_at - self.clock() - 5))
+                    return extract_roster(conn, self.raw, fetch, gaz, adapter, deadline, focus)
 
             state = roster.work(task, extractor=extract)
             return state, net.request_count, net.robots_count

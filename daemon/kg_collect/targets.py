@@ -17,6 +17,12 @@ def norm(s: str) -> str:
     return re.sub(r'[\s\-\'’`.·]+', '', s)
 
 
+def name_key(text: str) -> str:
+    """Fold candidate spellings while keeping legacy target IDs on norm()."""
+    text = unicodedata.normalize('NFKD', unicodedata.normalize('NFKC', text or '').casefold())
+    return unicodedata.normalize('NFC', ''.join(c for c in text if c.isalnum()))
+
+
 def romanization_variants(en: str | None) -> set[str]:
     """'Eom Tae-cheol' -> {'Eom Tae-cheol','Eom Taecheol','Taecheol Eom','Tae-cheol Eom'}. Deterministic, order/hyphen only."""
     if not en:
@@ -152,16 +158,18 @@ class Gazetteer:
     def __init__(self, conn, kinds=('chef', 'restaurant')):
         self.conn = conn
         self.by_alias: dict[str, list[dict]] = {}
-        rows = conn.execute(f"""SELECT a.alias, t.target_id, t.kind, t.name_ko, t.name_en, t.origin, t.status, t.attrs_json FROM target_alias a JOIN target t USING(target_id)
+        rows = conn.execute(f"""SELECT a.alias, a.lang, t.target_id, t.kind, t.name_ko, t.name_en, t.origin, t.status, t.attrs_json FROM target_alias a JOIN target t USING(target_id)
                                 WHERE t.kind IN ({','.join('?' * len(kinds))}) AND t.status<>'rejected'""", kinds).fetchall()
+        self.folded_aliases: dict[str, list[dict]] = {}
         for r in rows:
+            self.folded_aliases.setdefault(name_key(r['alias']), []).append(dict(r))
             self.by_alias.setdefault(norm(r['alias']), []).append(dict(r))
         self.keys = sorted(self.by_alias, key=len, reverse=True)
         self._ko = [k for k in self.keys if re.search(r'[가-힣]', k)]
         self._en = [k for k in self.keys if not re.search(r'[가-힣]', k)]
 
     def lookup(self, text: str) -> list[dict]:
-        return self.by_alias.get(norm(text), [])
+        return self.by_alias.get(norm(text)) or self.folded_aliases.get(name_key(text), [])
 
     def find(self, sentence: str) -> list[dict]:
         """Mentions with offsets. Korean: substring with non-Hangul-or-particle boundary check on the left. Latin: word-boundary."""

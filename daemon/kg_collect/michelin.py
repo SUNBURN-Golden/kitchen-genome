@@ -846,10 +846,15 @@ class Roster:
                               chef=_text(soup, '[itemprop=chef], .chef-name'))
                 if _branch(self.conn, row, 'michelin', stamp) == focus['branch_id'] and row.chef:
                     self._seed(job, row, focus['branch_id'], now)
+        focus = _focus(self.conn, job['job_key'])
         for anchor in soup.select('a[href]'):
             label = norm(anchor.get_text(' ', strip=True))
             target = _linked_url(url, anchor['href'])
-            if target and (label in ('visit website', 'official website', 'website', 'site web', '웹사이트', '公式サイト')
+            official_link = label in ('visit website', 'official website', 'website', 'site web', '웹사이트', '公式サイト')
+            if target and official_link and len(focus) == 1 and host_of(target) != HOST:
+                self.conn.execute('INSERT OR IGNORE INTO career_official_branch VALUES (?,?,?)',
+                                  (focus[0]['branch_id'], host_of(target), fid))
+            if target and (official_link
                            or re.search(r'/(?:chef|team|about|bio|interview)(?:[/-]|$)', urlsplit(target).path, re.I)
                            and anchor.find_parent(['main', 'article'])):
                 if host_of(target) != HOST or '/article/' in urlsplit(target).path:
@@ -965,24 +970,20 @@ class Roster:
                 self._related(job, 'article', target, now, priority=28)
 
     def _extract(self, job, extractor):
-        from .targets import Gazetteer, eligibility
+        from .targets import Gazetteer
 
         fid = json.loads(job['cursor'])['fetch_id']
         fetch = self.conn.execute('SELECT * FROM fetch_record WHERE fetch_id=?', (fid,)).fetchone()
-        origins = _focus(self.conn, job['job_key'])
-        if not fetch or not origins or any(origin['country_code'] != 'KR' for origin in origins):
-            return {'state': 'deferred', 'available_at': float('inf'), 'reason': 'awaiting_g3_extractor', 'fetch_id': fid}
-        if fetch['extracted_at'] and fetch['extractor_version'] == EXTRACTOR_VERSION:
-            return {'fetch_id': fid}
-        if not fetch['text_ref']:
+        if not fetch or not fetch['text_ref']:
             return {'state': 'review', 'reason': 'missing_article_text', 'fetch_id': fid}
-        text = self.raw.read_text(fetch['text_ref'])
-        gaz = Gazetteer(self.conn)
-        if not re.search(r'[가-힣]', text) or not eligibility(gaz, text)['target_ids']:
-            return {'state': 'deferred', 'available_at': float('inf'), 'reason': 'awaiting_g3_extractor', 'fetch_id': fid}
         if extractor is None:
             return {'state': 'deferred', 'available_at': self.clock() + 3600, 'reason': 'extractor_unavailable', 'fetch_id': fid}
-        if not extractor(fetch, gaz):
+        try:
+            focus = [origin['branch_id'] for origin in _focus(self.conn, job['job_key'])]
+            complete = extractor(fetch, Gazetteer(self.conn), focus)
+        except (FileNotFoundError, UnicodeError):
+            return {'state': 'review', 'reason': 'missing_article_text', 'fetch_id': fid}
+        if not complete:
             return {'state': 'deferred', 'available_at': self.clock() + 3600, 'reason': 'extractor_deferred', 'fetch_id': fid}
         return {'fetch_id': fid, 'extracted': True}
 

@@ -42,7 +42,7 @@ def mentions_of(gaz: Gazetteer, text: str) -> dict:
     return out
 
 
-def process_doc(conn, doc: Doc, gaz: Gazetteer, *, tier: str, ctx: dict | None = None, via: str = '', ocr_conf=None, model_hook=None, model_adapter=None, now=None) -> dict:
+def process_doc(conn, doc: Doc, gaz: Gazetteer, *, tier: str, ctx: dict | None = None, via: str = '', ocr_conf=None, model_hook=None, model_adapter=None, now=None, lineage_focus=(), lineage_required=False) -> dict:
     """Returns {'new': n, 'total': n, 'labels': {...}, 'alerts': [...]}. Never raises on empty extraction (that is information)."""
     from .recheck import active_for_fetch
     fr = conn.execute('SELECT job_id,fetched_at FROM fetch_record WHERE fetch_id=?', (doc.fetch_id,)).fetchone()
@@ -72,7 +72,10 @@ def process_doc(conn, doc: Doc, gaz: Gazetteer, *, tier: str, ctx: dict | None =
                     alt.update({'epistemic': 'inference', 'extractor': 'model:hook', 'extraction_id': r['extraction_id'] + '_m'})
                     recs_all.append({**r, **alt, 'asserted_by': 'ai_inference', 'pending_only': True})
     rule_inspected = bool(attempt and not any(needs_model(r) for r in recs_all))
-    if model_adapter and not doc.items and not rule_inspected:
+    from . import lineage
+    lang = lineage.language(doc.text, getattr(doc, 'language', '')) if lineage_required else 'ko'
+    if model_adapter and not doc.items and not rule_inspected and lang in ('ko', 'und'):
+        model_adapter.client.use_task('web-extract-2')
         enabled = model_adapter.client.status == 'enabled'
         before = dict(model_adapter.stats)
         recs_all.extend(model_adapter.extract(doc, recs_all, gaz, ctx, workload=workload,
@@ -114,7 +117,12 @@ def process_doc(conn, doc: Doc, gaz: Gazetteer, *, tier: str, ctx: dict | None =
     for tid, n in mentions_of(gaz, doc.text or ' '.join(f"{i['title']} {i['summary']}" for i in doc.items)).items():
         conn.execute('INSERT OR IGNORE INTO doc_target(fetch_id,target_id,mentions) VALUES (?,?,?)', (doc.fetch_id, tid, n))
     conn.commit()
-    return {'new': new, 'total': len(recs_all), 'labels': labels, 'mentions': len(mentions_of(gaz, doc.text or ''))}
+    if fr and not attempt and not doc.items:
+        complete = lineage.process(conn, doc, gaz, tier, model_adapter, now, context=bool(ctx),
+                                   focus=lineage_focus, required=lineage_required)
+    else:
+        complete = True
+    return {'lineage_complete': complete, 'new': new, 'total': len(recs_all), 'labels': labels, 'mentions': len(mentions_of(gaz, doc.text or ''))}
 
 
 # ───────────── extractor health: a broken extractor must be detected, not silently produce empty output ─────────────

@@ -53,7 +53,7 @@ def compare_to(iso: str, day: str) -> str:
 
 def add_employment(conn, *, chef_id, claim_id, branch_id=None, employer_label=None, role_id=None, role_text=None,
                    tenure_text=None, valid_from=None, valid_to=None, valid_to_kind='unknown', last_confirmed_at=None,
-                   seed_ref=None, now=None) -> str:
+                   seed_ref=None, now=None, employment_id=None) -> str:
     if seed_ref:
         row = conn.execute('SELECT employment_id FROM employment WHERE seed_ref=?', (seed_ref,)).fetchone()
         if row:
@@ -62,7 +62,7 @@ def add_employment(conn, *, chef_id, claim_id, branch_id=None, employer_label=No
     vt = parse_iso_date(valid_to) if valid_to else None
     if valid_from and not vf or valid_to and not vt:
         raise ValueError('valid_from/valid_to must be YYYY, YYYY-MM or YYYY-MM-DD; keep raw wording in role_text/tenure_text')
-    eid = new_id('emp')
+    eid = employment_id or new_id('emp')
     conn.execute("""INSERT INTO employment(employment_id,chef_id,branch_id,employer_label,role_id,role_text,tenure_text,
         valid_from,valid_from_precision,valid_to,valid_to_precision,valid_to_kind,last_confirmed_at,claim_id,seed_ref,created_at)
         VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)""",
