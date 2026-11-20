@@ -141,6 +141,46 @@ def test_quote_and_optional_fields_validate_independently(world, monkeypatch):
     assert lineage.validate_item(item(interleaved, 'Ana Baker', 'New Cafe'), interleaved, 'en')[1] == 'unbound_career'
 
 
+@pytest.mark.parametrize('quote,chef,venue,relation,fields,lang', [
+    ('한정수가 일했고 김철수가 한정원에서 일했다.', '한정수', '한정원', 'former', {}, 'ko'),
+    ('한정수가 개업했고 김철수가 한정원에서 수셰프로 2014년부터 일했다.', '한정수', '한정원', 'former',
+     dict(role_text='수셰프', from_text='2014년'), 'ko'),
+    ('한정수가 개업했고 김철수가 한정원에서 수셰프로 2014년부터 일했다.', '한정수', '한정원', 'opening', {}, 'ko'),
+    ('山田花子が開業し、田中一郎が青庭レストランで勤務した。', '山田花子', '青庭レストラン', 'former', {}, 'ja'),
+    ('한정수가 현재 김철수가 한정원에서 근무한다고 말했다.', '한정수', '한정원', 'current', {}, 'ko'),
+])
+def test_eastern_compound_clause_cannot_steal_the_subject(quote, chef, venue, relation, fields, lang):
+    # A -고/-し compound keeps one clause; the verb after the venue belongs to the
+    # second subject, so the named chef's career must stay unbound (private review).
+    assert lineage.validate_item(item(quote, chef, venue, relation, **fields), quote, lang)[1] == 'unbound_career'
+
+
+def test_eastern_binding_keeps_the_named_chef_and_venue():
+    ko = '한정수는 한정원에서 수셰프로 일했다.'
+    row, reason = lineage.validate_item(item(ko, '한정수', '한정원', role_text='수셰프'), ko, 'ko')
+    assert reason is None and row['role_text'] == '수셰프'
+    titled = '한정수 셰프는 한정원에서는 수셰프로 일했다.'
+    assert lineage.validate_item(item(titled, '한정수', '한정원'), titled, 'ko')[1] is None
+    renamed = '한정수가 일했고 한정수가 한정원에서 일했다.'
+    assert lineage.validate_item(item(renamed, '한정수', '한정원'), renamed, 'ko')[1] is None
+    ja = '山田花子は青庭レストランで料理長として勤務した。'
+    row, reason = lineage.validate_item(item(ja, '山田花子', '青庭レストラン', role_text='料理長'), ja, 'ja')
+    assert reason is None and row['role_text'] == '料理長'
+
+
+def test_wrong_subject_stitch_stays_private_review(world, monkeypatch):
+    conn, _ = world
+    quote = '한정수가 개업했고 김철수가 한정원에서 수셰프로 2014년부터 일했다.'
+    adapter = fake_adapter(conn, [(quote, item(quote, '한정수', '한정원', role_text='수셰프', from_text='2014년'))],
+                           [], monkeypatch)
+    assert ingest(world, fetch(world, 'stitch', quote), adapter)
+    row = conn.execute('SELECT state, role_text, valid_from FROM career_assertion').fetchone()
+    assert row['state'] == 'review' and row['role_text'] is None and row['valid_from'] is None
+    assert conn.execute("SELECT COUNT(*) FROM review_queue WHERE reason='unbound_career'").fetchone()[0] == 1
+    assert conn.execute('SELECT COUNT(*) FROM employment').fetchone()[0] == 0
+    assert not list(site_projection._career_rows(conn))
+
+
 def test_alias_candidates_translation_independence_and_reversal(world, monkeypatch):
     conn, _ = world
     branch(conn, 'noma', 'Noma', 'DK', 'Copenhagen')
@@ -389,3 +429,20 @@ def test_bilingual_spellings_keep_official_venue_name_and_quote(world, monkeypat
     assert origin['chef_name'] == '류태환'
     assert origin['evidence'][0]['quote'] == prior
     assert conn.execute("SELECT COUNT(*) FROM career_assertion WHERE language='en' AND state='source_claim'").fetchone()[0] == 2
+
+
+def test_public_seed_does_not_duplicate_a_romanized_curated_origin():
+    import importlib.util
+    spec = importlib.util.spec_from_file_location('lineage_evidence_fixture', ROOT / 'scripts/lineage_evidence.py')
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    edge = {'kitchen_id': 'noma', 'chef_id': 'chef-ryu', 'chef_name': '류태환', 'chef_name_en': 'Ryu Tae-hwan',
+            'relation': 'former'}
+    seed = {'kitchens': [{'id': 'noma', 'name': 'Noma'}],
+            'restaurants': [{'id': 'r1', 'name': 'Owned', 'chef': 'Ryu Taehwan', 'kitchen': 'noma'}],
+            'career_projection': {'kitchens': [], 'restaurants': [{'id': 'r1', 'name': 'Owned', 'origins': [edge]}]}}
+    row, = module.public_seed(seed)['restaurants']
+    assert row['origins'] == [edge]                    # no synthetic chef_id=None twin of the same person
+    seed['restaurants'][0]['chef'] = 'Someone Else'
+    row, = module.public_seed(seed)['restaurants']
+    assert len(row['origins']) == 2 and row['origins'][0]['chef_id'] is None

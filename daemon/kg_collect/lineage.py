@@ -255,6 +255,36 @@ def validate_item(raw, text, lang):
     return row, 'unbound_career'
 
 
+# ko/ja are verb-final: the named venue must precede the relation verb with a
+# locative/object marker, and the named chef must remain the subject up to that verb.
+EAST_LOCATIVE = re.compile(r'\s*(?:에서|에|で|に|を|를|을|의|の)')
+EAST_SUBJECT_MARK = re.compile(r'[가이는은がは]')
+EAST_APPOSITIVE = ('셰프', '쉐프', '요리사', '주방장', '총주방장', '料理長', '総料理長', '副料理長',
+                   'シェフ', '料理人', 'パティシエ', '씨', '님', 'さん', '氏')
+EAST_PARTICLE = ('에서', 'で', 'に', 'を')
+
+
+def _eastern_subject_kept(clause, subject, employer, verb_end):
+    """A compound -고/-し clause can hand the verb to a different subject. The named chef
+    keeps the verb only while no later 가/이/는/은/が/は marks another name as the subject."""
+    lead = clause[subject.end():verb_end]
+    if subject.end() <= employer.start() and employer.end() <= verb_end:
+        lead = clause[subject.end():employer.start()] + clause[employer.end():verb_end]
+    chef = subject.group()
+    for mark in EAST_SUBJECT_MARK.finditer(lead):
+        before = lead[:mark.start()].rstrip()
+        if not before:
+            continue                                   # the chef's own subject/topic marker
+        if before.endswith(chef) and (len(before) == len(chef) or not before[-len(chef) - 1].isalnum()):
+            continue                                   # the same chef named again
+        if any(before.endswith(word) for word in EAST_APPOSITIVE):
+            continue                                   # a title/honorific appositive of the chef
+        if any(before.endswith(particle) for particle in EAST_PARTICLE):
+            continue                                   # a marker on the venue phrase, not a new subject
+        return False
+    return True
+
+
 def _binds(clause, cues, relation, subject, employer, role):
     eastern = language(clause) in ('ko', 'ja')
     for cue in cues:
@@ -262,10 +292,17 @@ def _binds(clause, cues, relation, subject, employer, role):
             if subject.start() < employer.end() and subject.end() > employer.start():
                 continue
             if eastern:
-                lo, hi = sorted((verb.start(), employer.start()))
-                if hi - lo <= 66 and not re.search(r'[;；:：]|(?:ではなく|대신)', clause[lo:hi]):
-                    return True
-                continue
+                # Bind the nearest relation verb after the venue: the venue carries a
+                # locative/object marker and no intervening subject marker reassigns the chef.
+                if not employer.end() <= verb.end() <= employer.end() + 66:
+                    continue
+                if not EAST_LOCATIVE.match(clause, employer.end()):
+                    continue
+                if re.search(r'[;；:：]|(?:ではなく|대신)', clause[employer.end():verb.end()]):
+                    continue
+                if not _eastern_subject_kept(clause, subject, employer, verb.end()):
+                    continue
+                return True
             if not subject.end() <= verb.start() <= employer.start():
                 continue
             lead = clause[subject.end():verb.start()]

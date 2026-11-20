@@ -9,10 +9,15 @@ from urllib.parse import parse_qs, urlsplit
 
 import pytest
 
+from kg_ai.budget import Budget
+from kg_ai.deepseek import Client
 from kg_collect import cycle, discover, global_queue as queue, heavy, michelin
+from kg_collect.deepseek import Adapters
 from kg_collect.net import PoliteNet, Response, UA
 from kg_collect.rawstore import RawStore
 from kg_daemon.db import connect, migrate
+from test_deepseek_client import response
+from tests_balance_fake import healthy_balance
 
 FIXTURES = Path(__file__).parent / 'fixtures' / 'michelin'
 HOST = 'https://guide.michelin.com'
@@ -349,7 +354,7 @@ def test_weekly_304_and_new_year_leave_previous_awards_intact(world):
     assert set(map(tuple, paris)) == {(2026, 3), (2027, 2)}
 
 
-def test_existing_heavy_windows_and_daily_incremental(world, tmp_path):
+def test_existing_heavy_windows_and_daily_incremental(world, tmp_path, monkeypatch):
     conn, clock, cfg, seeds, raw = world
     calls = []
     now = lambda: clock[0]
@@ -358,6 +363,22 @@ def test_existing_heavy_windows_and_daily_incremental(world, tmp_path):
     legacy.update(search=[], feeds=[], guides=[])
     send = transport(calls)
     stop_on_directory = [True]
+    # G3 runs foreign extract jobs through the shared adapter: inject both model
+    # transports so no ambient DEEPSEEK_API_KEY/Qwen key can reach a live provider.
+    ai_calls = []
+
+    def ai_transport(payload, key):
+        instruction = json.loads(payload)['messages'][0]['content']
+        ai_calls.append(instruction)
+        if 'Extract explicit chef careers.' in instruction:
+            return response({'assertions': []})
+        return response({'findings': []})
+
+    def for_meter(meter):
+        assert meter.stage == 'extract'
+        return Adapters(Client(Budget(meter), key='dummy', transport=ai_transport, balance_transport=healthy_balance))
+
+    monkeypatch.setattr(Adapters, 'for_meter', staticmethod(for_meter))
 
     def wire(url, headers, timeout):
         response = send(url, headers, timeout)
@@ -399,6 +420,7 @@ def test_existing_heavy_windows_and_daily_incremental(world, tmp_path):
     assert report['michelin']['jobs'] > 0
     assert not {'OperationalError', 'TypeError', 'IntegrityError'} & report['michelin']['results'].keys()
     assert any(url == FRANCE for url, _ in calls)
+    assert any('Extract explicit chef careers.' in instruction for instruction in ai_calls)
     crawler.q.close()
 
     set_time(22)

@@ -105,7 +105,7 @@ def kpage(k):
         'subjectOf':{'@type':'ItemList','numberOfItems':len(al),'itemListElement':[{'@type':'ListItem','position':i+1,'url':f'{BASE}/r/{r["id"]}/','name':r['name']} for i,r in enumerate(al)]}}
     return path,page(path,title,desc,body,ld)
 def dirpage():
-    path='/directory/'; desc=f"한국과 연결된 주방 {len(K)}곳과 식당 {len(R)}곳을 출신 주방별로 정리했어요."
+    path='/directory/'; desc=f"서울 최고 주방 {len(K)}곳 출신 셰프들이 열거나 이끄는 식당 {len(R)}곳 전체 목록. 출신 주방별로 정리했어요."
     sec=''.join(f'<section class="card"><h2><a href="/k/{k["id"]}/">{e(k["name"])}</a> <small class="muted">{sum(is_alum(r, k["id"]) for r in R)}곳</small></h2><ul>'+''.join(f'<li><a href="/r/{r["id"]}/">{e(r["name"])}</a> · {e(kitchen_crews(r,k["id"]) or "셰프 미확인")}'+kitchen_badge(r, k['id'])+'</li>' for r in R if is_alum(r, k['id']))+'</ul></section>' for k in d['kitchens'])
     other=[r for r in R if r.get('kitchen') not in K]
     if other: sec+='<section class="card"><h2>출신 주방 미확인</h2><ul>'+''.join(f'<li><a href="/r/{r["id"]}/">{e(r["name"])}</a></li>' for r in other)+'</ul></section>'

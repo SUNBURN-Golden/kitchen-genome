@@ -5,6 +5,7 @@ version: "2026-11-11.1"
 
 caps:
   max_concurrency: 6            # requests in flight (= domains in flight; one request per domain at a time)
+  model_workers: 4              # shared extraction/model slots across the executor's drainers (G3 design default)
   relevance_floor: 0.3
   lookback_days: 365
   backlog_for_optional_block: 1     # the 22:00 block runs only when at least this many URLs are due

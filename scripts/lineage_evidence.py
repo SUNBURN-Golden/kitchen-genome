@@ -1,6 +1,7 @@
 """Render public lineage evidence in the static restaurant pages."""
 from html import escape
 import re
+import unicodedata
 from urllib.parse import urlsplit
 
 
@@ -20,6 +21,25 @@ def evidence_html(row, heading, labels, source_label):
         items.append(f'<li>{escape(label)} · “{escape(quote)}” '
                      f'(<a href="{escape(url)}" rel="nofollow noopener" target="_blank">{escape(source_label)}</a>)</li>')
     return f'<h2>{escape(heading)}</h2><ul>{"".join(items)}</ul>' if items else ''
+
+
+def _name_key(value):
+    """Fold display spellings (case, spacing, hyphens) for identity comparison."""
+    if not isinstance(value, str):
+        return ''
+    return ''.join(ch for ch in unicodedata.normalize('NFKC', value).casefold() if ch.isalnum())
+
+
+def _same_chef(edge, row):
+    """A curated scalar may be romanized while the generated edge prefers the sourced
+    Korean spelling; compare canonical ids and folded spellings in both languages."""
+    if edge.get('chef_name') == row.get('chef'):
+        return True
+    if edge.get('chef_id') and edge['chef_id'] == row.get('chef_id'):
+        return True
+    curated = {_name_key(row.get('chef')), _name_key(row.get('chef_en'))} - {''}
+    generated = {_name_key(edge.get('chef_name')), _name_key(edge.get('chef_name_en'))} - {''}
+    return bool(curated & generated)
 
 
 def public_seed(seed):
@@ -44,7 +64,7 @@ def public_seed(seed):
         original = row.get('kitchen')
         edges = [edge for edge in row.get('origins', ()) if edge['kitchen_id'] in kitchens]
         if original in kitchens and not any(edge['kitchen_id'] == original and
-                edge.get('chef_name') == row.get('chef') for edge in edges):
+                _same_chef(edge, row) for edge in edges):
             edges.insert(0, {'kitchen_id': original, 'chef_id': None, 'chef_name': row.get('chef'),
                              'chef_name_en': row.get('chef_en'), 'role': row.get('role'), 'period': row.get('period'),
                              'lineage_status': row.get('lineage_status'), 'career_checking': row.get('career_checking', []),

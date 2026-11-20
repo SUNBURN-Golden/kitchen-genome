@@ -87,7 +87,7 @@ function verdict(){if(!SHOW_VERDICTS)return news();const L=alumni.filter(a=>a.ci
  <div class="note muted ph">[빈 자리] 준태님 한 줄 평 (작성 전)</div>
  <a class="muted" href="#/gap" style="display:inline-flex;min-height:var(--tap);align-items:center">과대평가 vs 저평가 전체 보기</a></section>${news()}`}
 function home(sel){const counts=kitchens.map(k=>[k,alumni.filter(a=>member(a,k.id)).length]).sort((a,b)=>b[1]-a[1]);sel=K[sel]?sel:counts[0]?.[0].id;
- return `${verdict()}<h1>그 셰프, 어느 주방에서 왔을까요?</h1><p class="lead">한국 식당과 연결된 셰프들이 어느 주방을 거쳤는지 출처와 함께 정리했어요.</p>
+ return `${verdict()}<h1>그 셰프, 어느 주방에서 왔을까요?</h1><p class="lead">서울 최고 주방을 거친 셰프들이 어느 식당을 열었거나 이끄는지 출처와 함께 정리했어요.</p>
  <div class="cta"><a class="btn p" href="#lineage">셰프 DNA 계보도 보기</a></div>
  <section id="lineage"><h2>셰프 DNA 계보도 <span class="mono">LINEAGE MAP</span></h2>${legend}${vfilter()}
  <div class="chips tk" role="tablist">${counts.map(([k,n])=>`<button class="chip ${k.id===sel?'on':''}" role="tab" aria-selected="${k.id===sel}" onclick="location.hash='#/k/${k.id}'">${esc(k.name)} ${n}</button>`).join('')}</div>${sel?tree(sel):''}</section>
