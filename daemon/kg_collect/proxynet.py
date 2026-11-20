@@ -64,9 +64,14 @@ def socks5_connect(host: str, port: int, timeout: float = 20, proxy: str | None 
                 raise ProxyDown('socks_auth_rejected')
         except OSError:
             raise ProxyDown('socks_greeting_failed') from None
-        address = ipaddress.ip_address(host)
-        atyp = 1 if address.version == 4 else 4
-        s.sendall(b'\x05\x01\x00' + bytes([atyp]) + address.packed + struct.pack('>H', port))
+        try:
+            address = ipaddress.ip_address(host)
+            target = bytes([1 if address.version == 4 else 4]) + address.packed
+        except ValueError:
+            # Remote resolution: used only when the local resolver hands out fake-IP egress addresses.
+            name = host.encode('idna')
+            target = b'\x03' + bytes([len(name)]) + name
+        s.sendall(b'\x05\x01\x00' + target + struct.pack('>H', port))
         rep = _recv_exact(s, 4)
         if rep[1] != 0:
             raise OSError('socks_target_unreachable')
@@ -88,17 +93,37 @@ def _connection(host, port, address, secure, timeout, via_proxy):
 
     def dial(_target, timeout, _source):
         if via_proxy:
-            return socks5_connect(address, port, timeout)
+            return socks5_connect(host if fake_ip(address) else address, port, timeout)
         return socket.create_connection((address, port), timeout)
 
     conn._create_connection = dial
     return conn
 
 
+# Some sandboxes run a transparent egress proxy whose resolver answers every name with an
+# address from the RFC 2544 benchmark block (198.18.0.0/15). Those answers are the box's
+# real path to the public internet, not a local destination. Accept them only when they
+# come from the resolver for a hostname; IP literals in URLs are still rejected.
+FAKE_IP_NET = ipaddress.ip_network('198.18.0.0/15')
+
+
+def fake_ip(addr):
+    try:
+        return ipaddress.ip_address(addr) in FAKE_IP_NET
+    except ValueError:
+        return False
+
+
 def _public_ip(host, port):
     from .net import public_address
 
     addresses = [row[4][0] for row in socket.getaddrinfo(host, port, type=socket.SOCK_STREAM)]
+    if addresses and all(fake_ip(a) for a in addresses):
+        try:
+            ipaddress.ip_address(host)
+        except ValueError:
+            return addresses[0]
+        return None
     if not addresses or any(not public_address(ipaddress.ip_address(addr)) for addr in addresses):
         return None
     return next((addr for addr in addresses if ':' not in addr), addresses[0])

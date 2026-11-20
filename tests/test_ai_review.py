@@ -190,3 +190,13 @@ def test_pages_render_ai_badge(tmp_path):
     src = (ROOT / 'scripts/build_pages.py').read_text(encoding='utf-8')
     assert 'AI 검토' in src and 'aisec(r)' in src and 'aisec(k)' in src
     assert 'AI-reviewed' in (ROOT / 'scripts/build_pages_en.py').read_text(encoding='utf-8')
+
+
+def test_main_summary_without_bundle_stats(monkeypatch, tmp_path, capsys):
+    from kg_ai import review as rv
+    monkeypatch.setattr(rv, 'connect', lambda db: None)
+    monkeypatch.setattr(rv, 'migrate', lambda c: None)
+    monkeypatch.setattr(rv, 'review', lambda *a, **k: {'approved': 0, 'rejected': 0, 'published': 0, 'prechecked_rejects': 0,
+                                                     'calls': 0, 'stopped': None, 'skipped_no_targets': 0, 'skipped_balance': 0})
+    assert rv.main(['--db', str(tmp_path / 'x.db')]) == 0
+    assert capsys.readouterr().out.startswith('AI_REVIEW ')

@@ -478,7 +478,7 @@ def main(argv=None):
     s = review(conn, a.seed, a.log, raw_dir, limit=a.limit)
     print('AI_REVIEW approved=%s rejected=%s published=%s prechecked=%s calls=%s remaining=%s stopped=%s cost=%s reason=%s skipped_no_targets=%s skipped_balance=%s unreviewed_candidate_findings=%s bundle_approved=%s bundle_rejected=%s bundle_remaining=%s' % (
         s['approved'], s['rejected'], s['published'], s['prechecked_rejects'], s['calls'], s.get('remaining'), s['stopped'] or 'none', s.get('cost_used', 0), s.get('reason','none'), s['skipped_no_targets'], s['skipped_balance'], s.get('unreviewed_candidate_findings',0),
-        s['bundle_approved'], s['bundle_rejected'], s['bundle_remaining']))
+        s.get('bundle_approved', 0), s.get('bundle_rejected', 0), s.get('bundle_remaining', 0)))
     return 0
 
 
