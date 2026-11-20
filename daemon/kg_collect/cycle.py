@@ -7,11 +7,12 @@ import json
 import os
 import re
 import urllib.parse
+from pathlib import Path
 
 from kg_daemon import runner
 from kg_daemon.db import DEFAULT_DB, ROOT, connect, migrate, new_id, utcnow
 
-from . import EXTRACTOR_VERSION, apply as apply_mod, booking, discover, evaluate, gaps, official, review, scheduler, recheck
+from . import EXTRACTOR_VERSION, apply as apply_mod, booking, discover, evaluate, gaps, official, review, scheduler, recheck, site_publish
 from .fetch import Doc, Fetcher, parse_feed
 from .htmlx import parse_html
 from . import net as net_mod
@@ -20,7 +21,7 @@ from .net import PoliteNet, host_of
 from .pipeline import check_extractor_health, fetch_regression_alert, official_hosts, process_doc, reconcile_host_yield_alerts
 from .rawstore import RawStore
 from .resolve import promote_candidates
-from .targets import Gazetteer, load_seed_targets
+from .targets import Gazetteer, load_seed_targets, tid
 
 STAGES = ('plan', 'fetch', 'extract', 'evaluate', 'gaps', 'apply', 'quality')
 UNIT_COSTS = {'http': 1.0, 'ocr_page': 2.0, 'browser': 4.0, 'llm_tokens_k': 0.5}
@@ -29,7 +30,8 @@ UNIT_COSTS = {'http': 1.0, 'ocr_page': 2.0, 'browser': 4.0, 'llm_tokens_k': 0.5}
 class Bot:
     """Collaborators. Everything the network touches is injectable (tests use a fixture server / fake clock)."""
 
-    def __init__(self, conn, data_dir=None, net=None, browser=None, seeds=None, model_hook=None, today=None, ocr=True, units=60, registry_path=None, seeds_path=None, deepseek=False):
+    def __init__(self, conn, data_dir=None, net=None, browser=None, seeds=None, model_hook=None, today=None, ocr=True,
+                 units=60, registry_path=None, seeds_path=None, deepseek=False, seed_path=None, clock=None):
         self.conn = conn
         self.data_dir = data_dir or os.path.join(ROOT, 'data_store')
         self.raw = RawStore(os.path.join(self.data_dir, 'raw'))
@@ -39,7 +41,9 @@ class Bot:
         self.deepseek = deepseek
         self.ai = None
         self.model_hook = model_hook
-        self.today = today or dt.date.today()
+        self.clock = clock or (lambda: dt.datetime.now(dt.timezone.utc))
+        self.today = today or self.clock().astimezone(site_publish.KST).date()
+        self.seed_path = Path(seed_path or Path(ROOT) / 'data' / 'seed.json')
         self.ocr = ocr
         self.units = units
         self.registry_path = registry_path or evaluate.DISCOVERED_REGISTRY
@@ -92,18 +96,29 @@ def stage_plan(ctx):
     if bot.ai:
         bot.ai.client.budget.meter = ctx.cost
     caps = {**seeds['caps']}
-    now_dt = dt.datetime.now(dt.timezone.utc)
-    new = {'directory_feed': 0, 'keyword': 0, 'entity_status': 0, 'official_roots': 0, 'gap': 0}
+    now_dt = bot.clock()
+    seed = json.loads(bot.seed_path.read_text(encoding='utf-8'))
+    load_seed_targets(conn, seed)
+    for kitchen in seed.get('kitchens', []):
+        names = seeds.get('mother_kitchens', {}).get(kitchen['id'], {})
+        for lang in ('ko', 'en'):
+            conn.executemany('INSERT OR IGNORE INTO target_alias(target_id,alias,lang) VALUES (?,?,?)',
+                             [(tid('restaurant', kitchen['name']), alias, lang) for alias in names.get(lang, [])])
+    corpus = site_publish.Corpus(conn, bot.raw, seeds, now_dt)
+    qualified = corpus.qualified_targets()
+    entity_targets = discover.eligible_entity_targets(conn, qualified)
+    mother_counts, due_mother, mother_count = discover.reconcile_mother_jobs(conn, seed, bot.today, seeds, caps)
+    new = {'directory_feed': 0, 'keyword': 0, 'entity_status': 0, 'official_roots': 0, 'gap': 0, 'mother_kitchen': mother_count}
     for j in discover.directory_and_feed_jobs(seeds):
         meta = j.pop('meta', None) or {}
         if meta.get('policy') == 'manual_only':
             discover.enqueue(conn, **j, caps=caps, state='skipped', error='manual_only: robots/ToS forbid automated access (inaccessible, tracked for a human)')
         else:
             new['directory_feed'] += discover.enqueue(conn, **j, caps=caps)
+    for j in discover.entity_status_jobs(conn, seeds, qualified, contexts=corpus.entity_contexts()):
+        new['entity_status'] += discover.enqueue(conn, **j, caps=caps)
     for j in discover.keyword_jobs(conn, seeds, today=bot.today):
         new['keyword'] += discover.enqueue(conn, **j, caps=caps)
-    for j in discover.entity_status_jobs(conn, seeds):
-        new['entity_status'] += discover.enqueue(conn, **j, caps=caps)
     for j in discover.seed_official_site_jobs(conn):
         new['official_roots'] += discover.enqueue(conn, **j, caps=caps)
     new['official_probes'] = sum(discover.enqueue(conn, **j, caps=caps) for j in discover.official_probe_jobs(conn, limit=caps.get('max_official_probes_per_cycle', 40)))
@@ -119,25 +134,26 @@ def stage_plan(ctx):
             j['url'] = discover.search_url(seeds, j['query'])
             new['deepseek_gap'] += discover.enqueue(conn, **j, caps=caps)
     conn.commit()
-    seed = json.load(open(os.path.join(ROOT, 'data', 'seed.json'), encoding='utf-8'))
     recheck.ensure_schedule(conn, seed)
     recheck.reconcile(conn)
     if bot.ai and bot.ai.client.status == 'enabled':
         if not bot.ai.client.check_balance():
             new['monthly_rechecks'] = recheck.admit(conn, seeds, bot.ai.client.budget)
-    requeued = scheduler.requeue_due(conn, now_dt)
+    requeued = scheduler.requeue_due(conn, now_dt, mother_counts=mother_counts)
     model_allowance = 0
     if bot.ai and bot.ai.client.status == 'enabled':
         budget = bot.ai.client.budget
         daily_used = conn.execute('SELECT COALESCE(SUM(units),0) FROM ai_request WHERE day=?', (budget.day(),)).fetchone()[0]
         model_allowance = max(0, budget.daily_cap - daily_used)
     available_units = min(bot.units, max(0, ctx.cost.cap - ctx.cost.used - model_allowance)) if bot.ai and bot.ai.client.status == 'enabled' else bot.units
-    pl = scheduler.plan(conn, available_units, now_dt)
+    pl = scheduler.plan(conn, available_units, now_dt, mother_counts=mother_counts, due_mother=due_mother,
+                        query_caps=seeds['keyword_search'].get('daily_allowances'), entity_targets=entity_targets)
     chosen = [jid for p in ('discovery', 'backfill', 'refresh') for jid in pl['chosen'][p]]
     pri = {r['job_id']: r['priority'] for r in conn.execute('SELECT job_id, priority FROM crawl_job')}
-    chosen.sort(key=lambda j: -pri.get(j, 0))
+    reserved = {jid: i for i, jid in enumerate(pl['reserved_queries'])}
+    chosen.sort(key=lambda j: (reserved.get(j, len(reserved)), -pri.get(j, 0)))
     return runner.StageResult({'new_jobs': new, 'requeued': requeued, 'budgets': pl['budgets'], 'queued_by_pool': pl['queued_by_pool'],
-                               'chosen_counts': {p: len(v) for p, v in pl['chosen'].items()}, 'order': chosen,
+                               'chosen_counts': {p: len(v) for p, v in pl['chosen'].items()}, 'order': chosen, 'mother_counts': mother_counts,
                                'pool_of': {j: next(p for p in pl['chosen'] if j in pl['chosen'][p]) for j in chosen}})
 
 
@@ -166,17 +182,23 @@ def _host_feed_jobs(conn, bot, d, job, caps) -> int:
     return n
 
 
-def _article_site_leads(conn, d, job, gaz, caps) -> int:
+def _article_site_leads(conn, d, job, gaz, seeds) -> int:
     """A press article mentions restaurant X and links a host containing X's slug -> probe that root as X's own site (basis article_link)."""
     n = 0
+    press = seeds.get('publication', {}).get('press_hosts', {})
     rest_ids = {m['target_id'] for m in gaz.find(d.text or '') if m.get('kind') == 'restaurant' and m.get('target_id')}
     for tid in rest_ids:
         t = conn.execute('SELECT * FROM target WHERE target_id=?', (tid,)).fetchone()
         if not t:
             continue
+        if t['origin'] == 'discovered' and not any(
+            (d.host == h or d.host.endswith('.' + h)) and p['scope'] in ('restaurant_reporting', 'original_food_reporting')
+            for h, p in press.items()
+        ):
+            continue
         for u in official.article_link_candidates(d.links, d.text, dict(t), banned=net_mod.BANNED):
             n += discover.enqueue(conn, path='official_chain', pool='discovery', url=u, query='probe:article_link', target_id=tid, depth=job['depth'] + 1,
-                                  parent=job['job_id'], relevance=0.7, caps=caps)
+                                  parent=job['job_id'], relevance=0.7, caps=seeds['caps'])
     return n
 
 
@@ -196,6 +218,7 @@ def stage_fetch(ctx):
     gaz = bot.gaz()
     caps = bot.seeds['caps']
     stats = {'jobs_run': 0, 'ok_docs': 0, 'failed_docs': 0, 'blocked': 0, 'children_queued': 0, 'chain': {'subpages': 0, 'sns_leads': 0, 'booking_leads': 0, 'attachments': 0}, 'deferred_trial': 0}
+    dispatches = stats['rss_queries'] = dict.fromkeys(discover.QUERY_CAPS, 0)
     for jid in plan['order']:
         if jid in done:
             continue
@@ -222,6 +245,13 @@ def stage_fetch(ctx):
             continue
         allow_browser = True if bot.job_hint_dirs.get(job['url'], {}).get('browser') else None
         max_pages = caps['pagination_max_pages'] if job['path'] in ('directory',) else 1
+        family = discover.query_family(job, plan.get('mother_counts', {}))
+        if family:
+            if isinstance(ctx.cost, runner.CostMeter) and ctx.cost.used + UNIT_COSTS['http'] > ctx.cost.cap:
+                ctx.cost.charge('http')
+            if not discover.claim_query(conn, job, family, bot.clock(), bot.seeds['keyword_search'].get('daily_allowances')):
+                continue
+            dispatches[family] += 1
         try:
             docs = fetcher.fetch(job['url'], job_id=jid, allow_browser=allow_browser, max_pages=max_pages)
         except DailyLimit:
@@ -258,14 +288,15 @@ def stage_fetch(ctx):
             jd = dict(job)
             for d in oks:
                 if d.items:
-                    r = discover.expand_items(conn, d, jd, gaz, caps, today=bot.today)
+                    lookback = discover.MOTHER_LOOKBACK if family == 'mother' else 120
+                    r = discover.expand_items(conn, d, jd, gaz, caps, lookback_days=lookback, today=bot.today)
                     stats['children_queued'] += r['queued']
                 if d.method in ('html', 'jsonld', 'browser') and d.host not in bot.initial and not discover.is_search_host(d.host):
                     stats['host_feeds'] = stats.get('host_feeds', 0) + _host_feed_jobs(conn, bot, d, jd, caps)
                 if job['path'] == 'directory' and d.links:
                     stats['children_queued'] += discover.directory_link_jobs(conn, d, jd, bot.seeds, caps)
                 if d.links and d.method in ('html', 'jsonld', 'browser') and job['path'] != 'official_chain':
-                    stats['article_site_leads'] = stats.get('article_site_leads', 0) + _article_site_leads(conn, d, jd, gaz, caps)
+                    stats['article_site_leads'] = stats.get('article_site_leads', 0) + _article_site_leads(conn, d, jd, gaz, bot.seeds)
                 if d.links or d.images:
                     off = official_hosts(conn) | {r['host'] for r in conn.execute('SELECT host FROM official_site WHERE verified=1')}
                     if job['path'] == 'official_chain' or d.host in off:
@@ -354,7 +385,11 @@ def stage_extract(ctx):
         attempt = recheck.active_for_fetch(conn, f)
         if attempt and (not bot.ai or bot.ai.client.status != 'enabled'):
             continue
-        doc = load_doc(conn, bot.raw, f)
+        try:
+            doc = load_doc(conn, bot.raw, f)
+        except (FileNotFoundError, UnicodeError):
+            stats['missing_snapshots'] = stats.get('missing_snapshots', 0) + 1
+            continue
         job = conn.execute('SELECT target_id, url FROM crawl_job WHERE job_id=?', (f['job_id'],)).fetchone() if f['job_id'] else None
         jctx = None
         if job and job['target_id']:
@@ -363,6 +398,10 @@ def stage_extract(ctx):
         if bot.ai:
             bot.ai.defer_extract = False
         r = process_doc(conn, doc, gaz, tier=tier_of(doc.host), ctx=jctx, via=f['url'], model_hook=bot.model_hook, model_adapter=bot.ai)
+        if doc.links and doc.method in ('html', 'browser'):
+            original_job = conn.execute('SELECT * FROM crawl_job WHERE job_id=?', (f['job_id'],)).fetchone()
+            if original_job and original_job['path'] != 'official_chain' and original_job['depth'] < 2:
+                _article_site_leads(conn, doc, original_job, bot.gaz() if r['new'] else gaz, bot.seeds)
         n_all = conn.execute('SELECT COUNT(*) FROM extraction WHERE fetch_id=?', (f['fetch_id'],)).fetchone()[0]
         for a in check_extractor_health(conn, doc, n_all, bot.raw, gaz=gaz):
             stats['alerts'].append(a)
@@ -391,7 +430,11 @@ def profile_scan(conn, raw) -> dict:
                             AND NOT EXISTS (SELECT 1 FROM profile_scan s WHERE s.fetch_id=f.fetch_id AND s.version=?) ORDER BY f.fetched_at""", (official.OFFICIAL_VERSION,)).fetchall()
     for f in rows:
         t = conn.execute('SELECT * FROM target WHERE target_id=?', (f['tid'],)).fetchone()
-        n = profile_facts_for(conn, load_doc(conn, raw, f), t, utcnow())
+        try:
+            doc = load_doc(conn, raw, f)
+        except (FileNotFoundError, UnicodeError):
+            continue
+        n = profile_facts_for(conn, doc, t, utcnow())
         conn.execute('INSERT OR IGNORE INTO profile_scan(fetch_id,version,facts,scanned_at) VALUES (?,?,?,?)', (f['fetch_id'], official.OFFICIAL_VERSION, n, utcnow()))
         out['scanned'] += 1
         out['facts_new'] += n
@@ -423,24 +466,29 @@ def stage_evaluate(ctx):
 def stage_gaps(ctx):
     bot: Bot = ctx.env['bot']
     conn = bot.conn
+    seed = json.loads(bot.seed_path.read_text(encoding='utf-8'))
     reviewed = review.review_candidates(conn)
-    promoted = promote_candidates(conn)
+    corpus = site_publish.Corpus(conn, bot.raw, bot.seeds, utcnow())
+    promoted = promote_candidates(conn, corpus.qualified_targets())
+    publication = site_publish.prepare(conn, seed, bot.raw, corpus=corpus)
     res = gaps.resolve_gaps(conn)
     cls = gaps.classify_gaps(conn)
     # entity-driven follow-ups from extractions that have no follow-up yet
-    ext = conn.execute("""SELECT e.*, COALESCE(j.depth,0) depth FROM extraction e JOIN fetch_record f ON f.fetch_id=e.fetch_id LEFT JOIN crawl_job j ON j.job_id=f.job_id
-                          WHERE e.epistemic IN ('claim','fact') AND e.ambiguity IS NULL AND e.label IN ('career','employment_claim')""").fetchall()
+    depths = {r['fetch_id']: r['depth'] for r in conn.execute("""SELECT f.fetch_id,j.depth FROM fetch_record f
+                                                             JOIN crawl_job j ON j.job_id=f.job_id""")}
     made = 0
     seen = set()
-    for e in ext:
-        for j in discover.followup_jobs(conn, bot.seeds, [e], parent_depth=e['depth']):
+    for e, _, ref in corpus.rows():
+        if not ref or e['label'] not in ('career', 'employment_claim'):
+            continue
+        for j in discover.followup_jobs(conn, bot.seeds, [e], parent_depth=depths.get(e['fetch_id'], 0), gaz=corpus.gaz):
             j.pop('source_extraction', None)
             if j['query'] in seen:
                 continue
             seen.add(j['query'])
             made += discover.enqueue(conn, **j, caps=bot.seeds['caps'])
     conn.commit()
-    return runner.StageResult({'candidates_rejected': [r['name'] for r in reviewed['rejected']], 'candidates_for_review': len(reviewed['queued_for_review']), 'candidates_promoted': promoted, 'gap_resolution': res, 'gap_classes': cls, 'followup_jobs': made})
+    return runner.StageResult({'candidates_rejected': [r['name'] for r in reviewed['rejected']], 'candidates_for_review': len(reviewed['queued_for_review']), 'candidates_promoted': promoted, 'gap_resolution': res, 'gap_classes': cls, 'followup_jobs': made, 'publication': publication})
 
 
 # ───────────────────────── stage: apply / quality ─────────────────────────

@@ -70,9 +70,13 @@ def job_priority(conn, job, now: dt.datetime) -> tuple[float, dict]:
     return round(p, 4), comp
 
 
-def plan(conn, total_units: float, now: dt.datetime | None = None, max_attempts: int = 3) -> dict:
+def plan(conn, total_units: float, now: dt.datetime | None = None, max_attempts: int = 3, *,
+         mother_counts=None, due_mother=None, query_caps=None, entity_targets=None) -> dict:
     """Pick jobs per pool within that pool's budget. Discovery budget is reserved; unspent discovery budget spills to the other pools only at the end."""
     now = now or dt.datetime.now(dt.timezone.utc)
+    from .discover import QuerySlots, canonical_query, mother_language, query_family
+    mother_counts, due_mother = mother_counts or {}, due_mother or set()
+    query_slots = QuerySlots(conn, now, query_caps)
     iso = now.strftime('%Y-%m-%dT%H:%M:%SZ')
     budgets = {p: total_units * max(SHARES[p], DISCOVERY_RESERVED if p == 'discovery' else 0) for p in SHARES}
     scale = total_units / sum(budgets.values()) if total_units > 0 else 0.0
@@ -93,35 +97,73 @@ def plan(conn, total_units: float, now: dt.datetime | None = None, max_attempts:
     taken_urls: set = set()
     skipped_same_url = 0
 
-    def _url_key(j):
-        return _canon(j['url']) if j['url'] else None
+    def pick(j, pool, bucket):
+        nonlocal skipped_same_url
+        k = _canon(j['url']) if j['url'] else None
+        if j['job_id'] in chosen[pool]:
+            return False
+        if k and k in taken_urls:
+            skipped_same_url += 1
+            return False
+        cost = est_cost(j)
+        if bucket < cost:
+            return False
+        family = query_family(j, mother_counts)
+        if family:
+            query = canonical_query(j['query'])
+            if not query_slots.allows(family, j['target_id'], query):
+                return False
+            if family == 'mother' and mother_counts[j['target_id']] >= 3:
+                return False
+            if (family == 'entity' and j['path'] == 'keyword_search' and entity_targets is not None
+                    and j['target_id'] not in entity_targets):
+                return False
+            query_slots.consume(family, j['target_id'], query)
+        chosen[pool].append(j['job_id'])
+        if k:
+            taken_urls.add(k)
+        return True
+
+    mother = [j for _, j, _ in ranked['backfill'] if query_family(j, mother_counts) == 'mother']
+    mother.sort(key=lambda j: (mother_counts[j['target_id']], j['job_id'] not in due_mother,
+                               query_slots.last_query.get(canonical_query(j['query']), ''),
+                               j['target_id'], mother_language(j['query']), j['job_id']))
+    reserved = []
+    first = {target for target, _ in query_slots.languages}
+    for only_empty in (True, False):
+        for j in mother:
+            target = j['target_id']
+            if only_empty and (mother_counts[target] or target in first):
+                continue
+            if pick(j, 'backfill', left['backfill']):
+                left['backfill'] -= est_cost(j)
+                first.add(target)
+                reserved.append(j['job_id'])
+
+    entity = [(j, p, pr) for p in ranked for pr, j, _ in ranked[p] if query_family(j, mother_counts) == 'entity']
+    entity.sort(key=lambda item: (bool(active_for_job(conn, item[0]['job_id'])),
+                                  query_slots.last_target.get(item[0]['target_id'], ''),
+                                  query_slots.last_query.get(canonical_query(item[0]['query']), ''),
+                                  -item[2], item[0]['job_id']))
+    for earlier_turns in (0, 1):
+        for j, p, _ in entity:
+            if query_slots.targets.get(j['target_id'], 0) > earlier_turns:
+                continue
+            if pick(j, p, left[p]):
+                left[p] -= est_cost(j)
+                reserved.append(j['job_id'])
 
     for p in ('discovery', 'backfill', 'refresh'):
-        for pr, j, comp in ranked[p]:
-            c = est_cost(j)
-            k = _url_key(j)
-            if k and k in taken_urls:
-                skipped_same_url += 1
+        for _, j, _ in ranked[p]:
+            if query_family(j, mother_counts) in ('mother', 'entity'):
                 continue
-            if left[p] >= c:
-                chosen[p].append(j['job_id'])
-                left[p] -= c
-                if k:
-                    taken_urls.add(k)
+            if pick(j, p, left[p]):
+                left[p] -= est_cost(j)
     spill = left['discovery']                       # nobody could use the reserved share -> others may
     for p in ('backfill', 'refresh'):
-        for pr, j, comp in ranked[p]:
-            if j['job_id'] in chosen[p]:
-                continue
-            k = _url_key(j)
-            if k and k in taken_urls:
-                continue
-            c = est_cost(j)
-            if spill >= c:
-                chosen[p].append(j['job_id'])
-                spill -= c
-                if k:
-                    taken_urls.add(k)
+        for _, j, _ in ranked[p]:
+            if query_family(j, mother_counts) != 'mother' and pick(j, p, spill):
+                spill -= est_cost(j)
     from .recheck import active_for_job
     fresh = sum(1 for ids in chosen.values() for jid in ids if not active_for_job(conn,jid))
     recheck_slots = fresh // 4
@@ -136,17 +178,29 @@ def plan(conn, total_units: float, now: dt.datetime | None = None, max_attempts:
         chosen[pool] = kept
     conn.commit()
     return {'budgets': {k: round(v, 2) for k, v in budgets.items()}, 'chosen': chosen, 'queued_by_pool': {p: len(ranked[p]) for p in ranked},
-            'discovery_reserved_share': DISCOVERY_RESERVED, 'skipped_same_url': skipped_same_url}
+            'discovery_reserved_share': DISCOVERY_RESERVED, 'skipped_same_url': skipped_same_url,
+            'reserved_queries': [jid for jid in reserved if any(jid in ids for ids in chosen.values())]}
 
 
-def requeue_due(conn, now: dt.datetime | None = None) -> int:
+def requeue_due(conn, now: dt.datetime | None = None, *, mother_counts=None) -> int:
     """Cadences: volatile-field sources (feeds, status/employment pages) daily; stable-field pages every 14 days; pages that never yielded 7 days;
     deprioritised hosts x4. Done jobs whose last fetch is older than the cadence go back to 'queued'."""
     now = now or dt.datetime.now(dt.timezone.utc)
+    from .discover import query_family
+    mother_counts = mother_counts or {}
     n = 0
     for j in conn.execute("SELECT * FROM crawl_job WHERE state='done' AND url IS NOT NULL AND path IN ('feed','sitemap','official_chain','directory','keyword_search','entity_followup','reverse_gap')").fetchall():
         from .recheck import active_for_job
         if active_for_job(conn, j['job_id']) or conn.execute('SELECT 1 FROM restaurant_recheck_job WHERE job_id=? AND dedicated_root=1', (j['job_id'],)).fetchone():
+            continue
+        family = query_family(j, mother_counts)
+        if family:
+            if not j['finished_at'] or family == 'mother' and mother_counts[j['target_id']] >= 3:
+                continue
+            completed = dt.datetime.fromisoformat(j['finished_at'].replace('Z', '+00:00'))
+            if now - completed >= dt.timedelta(hours=72 if j['last_error'] == 'no_results' else 24):
+                conn.execute("UPDATE crawl_job SET state='queued',attempts=0 WHERE job_id=?", (j['job_id'],))
+                n += 1
             continue
         f = conn.execute("SELECT fetch_id, fetched_at, method, host FROM fetch_record WHERE canonical_url=? AND outcome='ok' ORDER BY fetched_at DESC LIMIT 1", (j['url'],)).fetchone()
         if j['path'] in ('keyword_search', 'entity_followup', 'reverse_gap') and not f:

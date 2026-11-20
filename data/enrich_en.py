@@ -68,6 +68,7 @@ for k in d['kitchens']:
     k['name_en']=k.get('en'); k['name_en_src']=(k.get('michelin_src') or '').replace('/kr/ko/','/kr/en/') if 'michelin' in (k.get('michelin_src') or '') else 'existing data (not verified on an official page)'
     k['name_en_official']='michelin' in (k.get('michelin_src') or '')
 json.dump(d,open(P,'w',encoding='utf-8'),ensure_ascii=False,indent=1)
-js='window.SEED='+json.dumps(dict(sources=d['sources'],kitchens=d['kitchens'],restaurants=d['restaurants']),ensure_ascii=False)+';'
+public_restaurants=[{k:v for k,v in r.items() if k!='publication'} for r in d['restaurants']]
+js='window.SEED='+json.dumps(dict(sources=d['sources'],kitchens=d['kitchens'],restaurants=public_restaurants),ensure_ascii=False)+';'
 open(os.path.join(here,'..','web','data.js'),'w',encoding='utf-8').write(js)
 print(f'restaurant names official {off} romanized {rom}; chef names official {coff} romanized {crom}')

@@ -11,12 +11,15 @@ import json
 import os
 import re
 import urllib.parse
+import unicodedata
+from zoneinfo import ZoneInfo
 
 import yaml
+from kg_ai import pending
 from kg_daemon.db import ROOT, stable_id, utcnow
 
 from .net import CFG, SEARCH_HOSTS, host_of, is_banned, is_search_host  # noqa: F401  (re-exported)
-from .targets import Gazetteer, norm
+from .targets import Gazetteer, norm, tid
 
 SEEDS_PATH = os.path.join(ROOT, 'sources', 'discovery_seeds.yaml')
 FOOD_CUE = re.compile(r'셰프|쉐프|레스토랑|오마카세|다이닝|미쉐린|미슐랭|수셰프|오픈|폐업|이전|출신|주방')
@@ -84,8 +87,11 @@ def enqueue(conn, *, path, pool, url=None, query=None, target_id=None, gap_id=No
     return cur.rowcount == 1
 
 
-def search_url(seeds, q: str) -> str:
-    return seeds['keyword_search']['endpoint'].format(q=urllib.parse.quote(q))
+def search_url(seeds, q: str, lang='ko') -> str:
+    template = seeds['keyword_search']['endpoint']
+    if lang == 'en':
+        template = template.replace('setlang=ko', 'setlang=en')
+    return template.format(q=urllib.parse.quote(q))
 
 
 # ── path 1: combined keyword search ──
@@ -117,18 +123,161 @@ def keyword_jobs(conn, seeds, today: dt.date | None = None, limit: int | None = 
     return jobs[:limit] if limit else jobs
 
 
-def entity_status_jobs(conn, seeds) -> list[dict]:
-    """restaurant x {폐업,이전,오픈} and chef x {출신,수셰프}: tied to named targets -> refresh pool (volatile fields)."""
+def eligible_entity_targets(conn, qualified=()):
+    """Previously active discoveries must still pass the source and name checks."""
+    return {t['target_id'] for t in conn.execute("SELECT * FROM target WHERE kind IN ('chef','restaurant') AND status='active'")
+            if t['origin'] == 'seed' or t['target_id'] in qualified or json.loads(t['attrs_json']).get('published_to_site')}
+
+
+def entity_status_jobs(conn, seeds, qualified=(), *, contexts=None) -> list[dict]:
+    """Rotate status and career searches for seed and promoted discovered entities."""
+    allowed = eligible_entity_targets(conn, qualified)
     ks = seeds['keyword_search']
     jobs = []
-    for t in conn.execute("SELECT * FROM target WHERE kind='restaurant' AND origin='seed' AND status='active'"):
-        for kw in ('폐업', '이전', '오픈'):
-            q = f"{t['name_ko']} {kw}"
-            jobs.append({'path': 'keyword_search', 'pool': 'refresh', 'query': q, 'url': search_url(seeds, q), 'target_id': t['target_id'], 'relevance': round(0.4 + 0.5 * ks['keyword_weight'][kw], 3)})
-    for t in conn.execute("SELECT * FROM target WHERE kind='chef' AND origin='seed' AND status='active'"):
-        q = f"{t['name_ko']} 셰프 출신"
-        jobs.append({'path': 'keyword_search', 'pool': 'backfill', 'query': q, 'url': search_url(seeds, q), 'target_id': t['target_id'], 'relevance': 0.6})
+    for t in conn.execute("SELECT * FROM target WHERE kind IN ('chef','restaurant') AND status='active'"):
+        if t['target_id'] not in allowed:
+            continue
+        name = t['name_ko'] or t['name_en']
+        attrs = {**(contexts or {}).get(t['target_id'], {}), **{k: v for k, v in json.loads(t['attrs_json']).items() if v}}
+        if t['kind'] == 'chef':
+            queries = [(f'"{name}" 셰프 경력 인터뷰', 'backfill', .65), (f'{name} 셰프 출신', 'backfill', .6)]
+        else:
+            queries = [(f'{name} {kw}', 'refresh', round(.4 + .5 * ks['keyword_weight'][kw], 3)) for kw in ('폐업', '이전', '오픈')]
+            if attrs.get('chef'):
+                location = f' {attrs["city"]}' if attrs.get('city') else ''
+                queries.append((f'"{attrs["chef"]}" "{name}"{location} 오픈', 'refresh', .8))
+        for q, pool, rel in queries:
+            jobs.append({'path': 'keyword_search', 'pool': pool, 'query': q, 'url': search_url(seeds, q),
+                         'target_id': t['target_id'], 'relevance': rel})
     return jobs
+
+
+MOTHER_LOOKBACK = 365
+QUERY_CAPS = {'mother': 8, 'entity': 8, 'general': 8}
+KST = ZoneInfo('Asia/Seoul')
+MOTHER_TEMPLATES = {
+    'ko': ('{name} 출신 셰프 서울', '{name} 수셰프 독립', '{name} 출신 셰프 오픈 인터뷰'),
+    'en': ('{name} former chef Seoul restaurant', '{name} former sous chef Seoul opening', '{name} alumni chef Seoul interview'),
+}
+
+
+def mother_kitchen_jobs(seed, today, seeds=None):
+    from .site_publish import kitchen_counts
+
+    seeds = seeds or load_seeds()
+    counts = kitchen_counts(seed)
+    jobs = []
+    for k in sorted(seed.get('kitchens', []), key=lambda k: (counts[k['id']], k['id'])):
+        count = counts[k['id']]
+        if count >= 3:
+            continue
+        spec = seeds.get('mother_kitchens', {}).get(k['id'], {})
+        for lang in ('ko', 'en'):
+            canonical = k['name'] if lang == 'ko' else k.get('en') or k.get('name_en') or k['name']
+            names = list(dict.fromkeys([canonical, *spec.get(lang, [])]))
+            rotation = today.toordinal()
+            name = names[(rotation + 2) % len(names)]
+            context = spec.get(f'context_{lang}')
+            phrase = f'"{name}"' + (f' "{context}"' if context else '')
+            query = MOTHER_TEMPLATES[lang][rotation % 3].format(name=phrase)
+            jobs.append({'path': 'keyword_search', 'pool': 'backfill', 'query': query,
+                         'url': search_url(seeds, query, lang), 'target_id': tid('restaurant', k['name']), 'relevance': .8})
+    return jobs
+
+
+def reconcile_mother_jobs(conn, seed, today, seeds, caps):
+    from .site_publish import kitchen_counts
+
+    counts = kitchen_counts(seed)
+    by_target = {tid('restaurant', k['name']): counts[k['id']] for k in seed.get('kitchens', [])}
+    active = [j for j in mother_kitchen_jobs(seed, today, seeds) if j['target_id'] in by_target]
+    current_due = {job_id(j['path'], j['url']) for j in active}
+    for row in conn.execute("SELECT * FROM crawl_job WHERE path='keyword_search' AND state IN ('queued','dropped') AND query LIKE ?", ('"%',)):
+        if query_family(row, by_target) != 'mother':
+            continue
+        filled = by_target[row['target_id']] >= 3
+        if filled and row['state'] == 'queued':
+            conn.execute("UPDATE crawl_job SET state='dropped',last_error='mother_kitchen_filled' WHERE job_id=?", (row['job_id'],))
+        elif not filled and row['job_id'] in current_due and row['last_error'] == 'mother_kitchen_filled':
+            conn.execute("UPDATE crawl_job SET state='queued',last_error=NULL WHERE job_id=?", (row['job_id'],))
+    count = sum(enqueue(conn, **job, caps=caps) for job in active)
+    return by_target, current_due, count
+
+
+def canonical_query(text):
+    return re.sub(r'\s+', ' ', unicodedata.normalize('NFKC', text).translate(str.maketrans('“”', '""')).strip()).casefold()
+
+
+def query_family(job, mother_targets):
+    query = job['query']
+    if not query or not is_search_host(host_of(job['url'] or '')) or job['path'] not in ('keyword_search', 'reverse_gap', 'entity_followup'):
+        return None
+    if (job['path'] == 'keyword_search' and job['target_id'] in mother_targets and query.startswith('"')
+            and re.search(r' 출신 셰프 | 수셰프 독립$| (?:former |alumni )', query)):
+        return 'mother'
+    if job['path'] == 'entity_followup' or job['path'] == 'keyword_search' and job['target_id']:
+        return 'entity'
+    return 'general'
+
+
+def mother_language(query):
+    return 'en' if re.search(r'" (?:former|alumni) ', query) else 'ko'
+
+
+class QuerySlots:
+    """In-memory planning view and durable, transactional dispatch claims."""
+
+    def __init__(self, conn, now, caps=None, *, history=True):
+        self.day = now.astimezone(KST).date().isoformat()
+        self.caps = caps or QUERY_CAPS
+        self.used = dict.fromkeys(QUERY_CAPS, 0)
+        self.targets = {}
+        self.languages = set()
+        self.queries = set()
+        self.last_target = {}
+        self.last_query = {}
+        rows = (conn.execute('SELECT * FROM discovery_query_dispatch') if history else
+                conn.execute('SELECT * FROM discovery_query_dispatch WHERE day=?', (self.day,)))
+        for row in rows:
+            family, target, query, day = row['family'], row['target_id'], row['canonical_query'], row['day']
+            self.last_query[query] = max(day, self.last_query.get(query, ''))
+            if family == 'entity' and target:
+                self.last_target[target] = max(day, self.last_target.get(target, ''))
+            if day == self.day:
+                self.consume(family, target, query)
+
+    def consume(self, family, target, query):
+        self.used[family] += 1
+        self.queries.add(query)
+        if family == 'entity' and target:
+            self.targets[target] = self.targets.get(target, 0) + 1
+        if family == 'mother':
+            self.languages.add((target, mother_language(query)))
+
+    def allows(self, family, target, query, reserve=0):
+        if query in self.queries:
+            return False
+        if family == 'mother':
+            return (self.used['mother'] < self.caps['mother'] and (target, mother_language(query)) not in self.languages
+                    and self.used['mother'] + self.used['entity'] < self.caps['mother'] + self.caps['entity'])
+        if family == 'entity':
+            spare = max(0, self.caps['mother'] - self.used['mother'] - reserve)
+            return self.used['entity'] < self.caps['entity'] + spare and self.targets.get(target, 0) < 2
+        return self.used['general'] < self.caps['general']
+
+
+def claim_query(conn, job, family, now, caps=None, reserve=0):
+    """Claim one canonical query before dispatch, including across processes and restarts."""
+    query, target = canonical_query(job['query']), job['target_id']
+    conn.commit()
+    with conn:
+        conn.execute('BEGIN IMMEDIATE')
+        slots = QuerySlots(conn, now, caps, history=False)
+        if not slots.allows(family, target, query, reserve):
+            return False
+        conn.execute("INSERT INTO discovery_query_dispatch(day,canonical_query,family,target_id,job_id) VALUES (?,?,?,?,?)",
+                     (slots.day, query, family, target, job['job_id']))
+    return True
 
 
 # ── paths 2-3: directories, feeds, sitemaps ──
@@ -212,23 +361,42 @@ def directory_link_jobs(conn, doc, parent_job, seeds, caps, limit=20) -> int:
 
 
 # ── path 4: entity-driven follow-ups ──
-def followup_jobs(conn, seeds, ext_rows, parent_depth: int = 0) -> list[dict]:
+def followup_jobs(conn, seeds, ext_rows, parent_depth: int = 0, gaz=None) -> list[dict]:
     """career(A came from B) -> verify A's official bio, B's past pages, and A's tenure at B. employment_claim -> A's bio + the employer's official site."""
     jobs = []
     cap = seeds['caps']['max_followups_per_extraction']
-    for e in ext_rows:
+    from .extract import clean_venue, publication_assertions
+    from .review import reject_reason
+    gaz = gaz or Gazetteer(conn)
+    for row in ext_rows:
+        e = dict(row)
         a = e['chef_text']
-        if not a or e['epistemic'] not in ('claim', 'fact') or e['ambiguity']:
+        if (not a or e['epistemic'] not in ('claim', 'fact') or e['ambiguity']
+                or e.get('asserted_by') != 'source' or pending(e) or not e['extractor'].startswith('rule:')):
             continue
+        assertions = publication_assertions(e['quote'], gaz)
         mine = []
         if e['label'] == 'career' and e['org_text']:
-            b = e['org_text']
-            mine = [(f'{a} 셰프 {b} 재직 기간', 0.75), (f'{b} {a} 셰프 경력 소개', 0.7), (f'{a} 셰프 프로필 공식', 0.65)]
+            b = clean_venue(e['org_text'])
+            if not b or not any(x['label'] == 'career' and norm(x['chef']) == norm(a) and norm(x['org']) == norm(b) for x in assertions):
+                continue
+            venues = {r['target_id']: r for r in gaz.lookup(b) if r['kind'] == 'restaurant'}
+            if len(venues) > 1 or not venues and reject_reason('restaurant', b):
+                continue
+            if venues:
+                b = next(iter(venues.values()))['name_ko'] or b
+            mine = [(f'"{b}" 출신 셰프', .75), (f'"{b}" 수셰프 인터뷰', .7),
+                    (f'"{a}" 셰프 경력 인터뷰', .65)]
         elif e['label'] == 'employment_claim' and e['restaurant_text']:
             r = e['restaurant_text']
-            mine = [(f'{a} 셰프 {r} 합류 전 경력', 0.7), (f'{r} 공식 홈페이지 셰프 소개 {a}', 0.65)]
+            if not any(x['label'] == 'employment_claim' and norm(x['chef']) == norm(a) and norm(x['rest']) == norm(r) for x in assertions):
+                continue
+            mine = [(f'"{a}" "{r}" 셰프 소개', .7)]
+        # A source-derived search can start its own root when the article is already deep in a link chain.
+        depth = 0 if parent_depth >= 1 else 1
         for q, rel in mine[:cap]:
-            jobs.append({'path': 'entity_followup', 'pool': 'backfill', 'query': q, 'url': search_url(seeds, q), 'relevance': rel, 'depth': parent_depth + 1,
+            jobs.append({'path': 'entity_followup', 'pool': 'backfill', 'query': q, 'url': search_url(seeds, q),
+                         'relevance': rel, 'depth': depth,
                          'target_id': e['resolved_chef_target'], 'source_extraction': e['extraction_id']})
     return jobs
 

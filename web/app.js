@@ -18,7 +18,16 @@ const r2=x=>Math.round(x*100)/100;
 function gap(r){const e=expertN(r),b=buzzN(r);if(e==null||b==null)return {e,b,g:null};return {e:r2(e),b:r2(b),g:r2(e-b)}}
 const vk=g=>g>TH?'under':g<-TH?'over':'even';const VT={under:'저평가',over:'과대평가',even:'균형'};
 const badge=r=>(r.career_checking||[]).length?'<span class="tag">확인 중</span>':ver(r)?'<span class="tag v">출처 확인</span>':r.lineage_status==='unverified'?'<span class="tag">미검증</span>':r.lineage_status==='conflict'?'<span class="tag">출처 상충</span>':r.lineage_status==='related'?'<span class="tag">관련 이력</span>':'';
-const link=(u,t)=>u?`<a href="${u}" target="_blank" rel="noopener">${t||'출처'}</a>`:'<span>출처 없음</span>';
+function sourceUrl(u){
+ if(!u||/[\s\x00-\x1f\x7f\\#]/.test(u))return '';
+ try{const p=new URL(u);return /^https?:$/.test(p.protocol)&&!p.username&&!p.password?u:''}catch{return ''}
+}
+const link=(u,t)=>sourceUrl(u)?`<a href="${esc(u)}" target="_blank" rel="noopener">${t||'출처'}</a>`:'<span>출처 없음</span>';
+function lineageEvidence(r){
+ const labels={lineage:'출신 주방',affiliation:'개업·재직',location:'지역'};
+ const items=(r.lineage_evidence||[]).filter(x=>x.quote&&sourceUrl(x.src));
+ return items.length?`<ul>${items.map(x=>`<li>${labels[x.kind]||'근거'} · “${esc(x.quote)}” (${link(x.src)})</li>`).join('')}</ul>`:'';
+}
 const news=()=>!SHOW_NEWSLETTER?"":`<section class="card" id="news"><h2 style="margin-top:0">뉴스레터</h2><p class="muted">새로 문 연 계보 식당과 셰프 이동 소식을 한 주에 한 번 보내 드려요. 지금은 준비 중이에요.</p><div class="news"><input type="email" placeholder="이메일 주소" aria-label="이메일 주소" disabled><button class="btn p" disabled>구독하기</button></div></section>`;
 const cut=(t,n)=>{t=(t??'').toString();return t.length>n?t.slice(0,n-1)+'…':t};
 const legend=`<div class="legend"><span><i></i>출처 확인</span><span><i class="d"></i>미검증</span></div>`;
@@ -40,14 +49,14 @@ function chefs(L){const seen={},out=[];L.forEach(a=>{const key=anon(a.chef)?a.id
 function tree(kid){const k=K[kid];const all=alumni.filter(a=>a.kitchen===kid);const nodes=chefs(all.filter(shown));
  const nr=nodes.reduce((t,n)=>t+n.items.length,0);
  const s=`<div class="tree"><div class="torg"><b>${esc(k.name)}</b><span>셰프 ${nodes.length}명 · 식당 ${nr}곳</span></div>`;
- if(!nodes.length)return s+`<p class="muted tempty">${all.length?'이 판정에 해당하는 식당이 없어요.':'아직 확인된 독립 셰프가 없어요. 제보를 받고 있어요.'}</p></div>`;
+ if(!nodes.length)return s+`<p class="muted tempty">${all.length?'이 판정에 해당하는 식당이 없어요.':'아직 수집된 출신 셰프 기록이 없어요. 제보를 받고 있어요.'}</p></div>`;
  return s+'<ul class="tnodes">'+nodes.map(n=>`<li class="tnode${n.items.some(ver)?' v':''}"><div class="tchef">${esc(n.chef)}${srole(n.role)}${n.items.length>1?`<span class="tc">식당 ${n.items.length}</span>`:''}</div><ul class="titems">${n.items.map(a=>`<li class="${ver(a)?'':'u'}${a.closed_at?' x':''}"><button type="button" class="tn${ver(a)?'':' u'}${a.closed_at?' x':''}" data-id="${a.id}" aria-haspopup="dialog" aria-label="${esc(a.name)}${a.closed_at?' (폐업)':''} 근거 열기"><b>${esc(a.name)}${a.closed_at?' <span class="cl">폐업</span>':''}</b>${tmeta(a)}${vbadge(a)}</button></li>`).join('')}</ul></li>`).join('')+'</ul></div>'}
 const vbadge=a=>{if(!SHOW_VERDICTS)return '';const v=vd(a);return `<span class="vb ${v.k}">${v.t}${v.k!=='wait'?' '+(v.g.g>0?'+':'')+v.g.g:''}</span>`};
 function vfilter(){if(!SHOW_VERDICTS)return '';return `<div class="chips" role="group" aria-label="판정 필터">${[['','전체'],['under','저평가만 보기'],['over','과대평가만 보기'],['even','균형만 보기']].map(([k,t])=>`<button type="button" class="chip ${VF===k?'on':''}" aria-pressed="${VF===k}" data-vf="${k}">${t}</button>`).join('')}</div>`}
 function panel(id,btn){const a=restaurants.find(x=>x.id===id);const v=vd(a);const dl=$('#panel');
- dl.innerHTML=`<form method="dialog" class="pclose"><button class="btn g" aria-label="닫기">닫기</button></form><p class="mono" style="margin:0">근거 패널</p><h2 id="ptitle" style="margin:var(--s1) 0">${esc(a.name)} ${vbadge(a)}</h2>
+ dl.innerHTML=`<form method="dialog" class="pclose"><button class="btn g" aria-label="닫기">닫기</button></form><p class="mono" style="margin:0">근거 패널</p><h2 id="ptitle" style="margin:var(--s1) 0">${esc(a.name)} ${badge(a)} ${vbadge(a)}</h2>
  <p class="muted why">${!SHOW_VERDICTS?'':v.k==='wait'?'판정 대기 · 비교할 신호가 아직 없거나 서울 밖이에요':'전문가 '+v.g.e+' − 화제성 '+v.g.b+' = '+(v.g.g>0?'+':'')+v.g.g}  · ${esc(a.michelin)} · ${link(a.michelin_src,'미쉐린 출처')}</p>
- <p class="why">출신 주방: <a href="#/k/${a.kitchen}">${esc(K[a.kitchen].name)}</a>${prole(a.role)} · ${link(a.lineage_src,'계보 출처')}</p>
+ <p class="why">출신 주방: <a href="#/k/${a.kitchen}">${esc(K[a.kitchen].name)}</a>${prole(a.role)} · ${link(a.lineage_src,'계보 출처')}</p>${lineageEvidence(a)}
  ${SHOW_VERDICTS?'<div class="note muted ph">[빈 자리] 준태님 한 줄 평 (작성 전)</div>':''}<p><a class="btn g" href="#/r/${a.id}">식당 페이지로</a></p>`;
  dl.setAttribute('aria-labelledby','ptitle');dl.showModal();dl.querySelector('.pclose button').focus();dl.addEventListener('close',()=>{btn&&btn.focus()},{once:true})}
 function bindTree(){document.querySelectorAll('.tn').forEach(n=>{n.onclick=()=>panel(n.dataset.id,n)});
@@ -60,13 +69,13 @@ function verdict(){if(!SHOW_VERDICTS)return news();const L=alumni.filter(a=>a.ci
  <div class="note muted ph">[빈 자리] 준태님 한 줄 평 (작성 전)</div>
  <a class="muted" href="#/gap" style="display:inline-flex;min-height:var(--tap);align-items:center">과대평가 vs 저평가 전체 보기</a></section>${news()}`}
 function home(sel){const counts=kitchens.map(k=>[k,alumni.filter(a=>a.kitchen===k.id).length]).sort((a,b)=>b[1]-a[1]);sel=sel||counts[0][0].id;
- return `${verdict()}<h1>그 셰프, 어느 주방에서 왔을까요?</h1><p class="lead">서울 최고 주방을 거친 셰프들이 어디서 자기 가게를 열었는지 출처와 함께 정리했어요.</p>
+ return `${verdict()}<h1>그 셰프, 어느 주방에서 왔을까요?</h1><p class="lead">서울 최고 주방을 거친 셰프들이 어느 식당을 열었거나 이끄는지 출처와 함께 정리했어요.</p>
  <div class="cta"><a class="btn p" href="#lineage">셰프 DNA 계보도 보기</a></div>
  <section id="lineage"><h2>셰프 DNA 계보도 <span class="mono">LINEAGE MAP</span></h2>${legend}${vfilter()}
  <div class="chips tk" role="tablist">${counts.map(([k,n])=>`<button class="chip ${k.id===sel?'on':''}" role="tab" aria-selected="${k.id===sel}" onclick="location.hash='#/k/${k.id}'">${esc(k.name)} ${n}</button>`).join('')}</div>${tree(sel)}</section>
- <p class="muted">원조 주방 ${kitchens.length}곳 · 계보 식당 ${alumni.length}곳(출처 확인 ${alumni.filter(ver).length}, 미검증 ${alumni.filter(a=>!ver(a)).length}) · 비교용 레스토랑 ${restaurants.length-alumni.length}곳 · 확인일 2026-10-20</p>`}
+ <p class="muted">원조 주방 ${kitchens.length}곳 · 계보 식당 ${alumni.length}곳(출처 확인 ${alumni.filter(ver).length}, 확인 중 ${alumni.filter(a=>(a.career_checking||[]).length).length}, 미검증 ${alumni.filter(a=>!ver(a)&&!(a.career_checking||[]).length).length}) · 비교용 레스토랑 ${restaurants.length-alumni.length}곳 · 확인일 2026-10-20</p>`}
 function dir(){const ks=[...new Set(alumni.map(a=>a.kitchen))];return `<h1>식당 목록</h1><div class="filters"><select id="fk" aria-label="원조 주방"><option value="">원조 주방 전체</option>${ks.map(k=>`<option value="${k}">${K[k].name}</option>`).join('')}</select>
- <select id="fc" aria-label="도시"><option value="">도시 전체</option><option>서울</option><option>뉴욕</option></select><select id="ft" aria-label="유형"><option value="">유형 전체</option><option value="alumni">계보 식당</option><option value="established">비교용 레스토랑</option></select><select id="fv" aria-label="검증"><option value="">검증 전체</option><option value="verified">출처 확인</option><option value="unverified">미검증</option></select></div><div id="list"></div>`}
+ <select id="fc" aria-label="도시"><option value="">도시 전체</option>${[...new Set(restaurants.map(r=>r.city).filter(Boolean))].sort().map(c=>`<option>${esc(c)}</option>`).join('')}</select><select id="ft" aria-label="유형"><option value="">유형 전체</option><option value="alumni">계보 식당</option><option value="established">비교용 레스토랑</option></select><select id="fv" aria-label="검증"><option value="">검증 전체</option><option value="verified">출처 확인</option><option value="unverified">미검증</option></select></div><div id="list"></div>`}
 function renderList(){const f={k:$('#fk').value,c:$('#fc').value,t:$('#ft').value,v:$('#fv').value};
  const L=restaurants.filter(r=>(!f.k||r.kitchen===f.k)&&(!f.c||r.city===f.c)&&(!f.t||r.type===f.t)&&(!f.v||r.lineage_status===f.v));
  $('#list').innerHTML=`<p class="muted">${L.length}곳</p><ul class="rows">`+L.map(r=>`<li><span class="n"></span><a href="#/r/${r.id}">${esc(r.name)}</a><span>${badge(r)}</span><span class="why">${esc(r.chef)}${r.kitchen?' · '+esc(K[r.kitchen].name)+' '+esc(r.role):''}${r.area?' · '+esc(r.area):''} · ${esc(r.michelin)}</span></li>`).join('')+'</ul>'}
@@ -80,12 +89,12 @@ function gapPage(){const L=restaurants.filter(r=>r.city==='서울').map(r=>({r,g
 function rpage(id){const r=restaurants.find(x=>x.id===id);if(!r)return '<h1>찾는 식당이 없어요</h1>';const g=gap(r);
  return `<h1>${esc(r.name)} ${badge(r)}</h1><p class="lead">${esc(r.chef)}${r.area?' · '+esc(r.area):''}${r.cuisine?' · '+esc(r.cuisine):''}${r.city?' · '+esc(r.city):''}</p>
  <div class="note muted">준태님 한 줄 평 자리(작성 예정)</div>
- ${r.type==='alumni'?`<section class="card"><h2 style="margin-top:0">셰프 DNA 계보</h2><p>${esc(K[r.kitchen].name)} ${esc(r.role)} → ${esc(r.name)} (${esc(r.opened)})</p><p class="muted">${link(r.lineage_src,'계보 출처')} · 확인일 ${r.checked}${r.note?' · '+esc(r.note):''}</p></section>`:''}
+ ${r.type==='alumni'?`<section class="card"><h2 style="margin-top:0">셰프 DNA 계보</h2><p>${esc(K[r.kitchen].name)} ${esc(r.role)} → ${esc(r.name)} (${esc(r.opened)})</p><p class="muted">${link(r.lineage_src,'계보 출처')} · 확인일 ${r.checked}${r.note?' · '+esc(r.note):''}</p>${lineageEvidence(r)}</section>`:''}
  <section class="card"><h2 style="margin-top:0">평판</h2><dl><dt>미쉐린</dt><dd>${esc(r.michelin)} · ${link(r.michelin_src)}</dd><dt>블루리본</dt><dd>${esc(r.bluer)}</dd>
  <dt>Reddit</dt><dd>${(r.reddit_threads||[]).length?r.reddit_threads.map((u,i)=>link(u,'스레드 '+(i+1))).join(' · '):'없음'}</dd>
  <dt>언론</dt><dd>${(r.press||[]).length?r.press.map((u,i)=>link(u,'기사 '+(i+1))).join(' · '):'없음'}</dd>
  <dt>가격</dt><dd>${esc(r.price||'미수집')} ${r.price_src?link(r.price_src):''}</dd>${SHOW_VERDICTS?`<dt>차이 점수</dt><dd>${g.g==null?'판정 대기':(g.g>0?'+':'')+g.g} (초안)</dd>`:''}</dl></section>
- ${r.url?`<p><a class="btn g" href="${r.url}" target="_blank" rel="noopener">공식 채널</a></p>`:''}`}
+ ${sourceUrl(r.url)?`<p><a class="btn g" href="${esc(r.url)}" target="_blank" rel="noopener">공식 채널</a></p>`:''}`}
 function submit(){return `<h1>제보하기</h1><p class="lead">어느 주방에서 어떤 일을 하셨는지 알려 주세요. 출처를 확인한 뒤 반영해요. 지금은 저장되지 않아요.</p><div class="card">
  <input placeholder="가게 이름" disabled><input placeholder="셰프 이름" disabled><input placeholder="거쳐 간 주방과 직책 (예: 밍글스 수셰프 2019–2022)" disabled><input placeholder="확인할 수 있는 링크" disabled><textarea rows="3" placeholder="남길 말" disabled></textarea><button class="btn p" disabled>보내기</button></div>`}
 function route(){const h=location.hash||'#/';if(h==='#/gap'&&!SHOW_VERDICTS){location.replace('#/');return}if(h==='#lineage'||h==='#news')return;let m;

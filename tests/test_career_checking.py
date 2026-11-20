@@ -1,15 +1,19 @@
 """Unverified career claims flagged in seed (`career_checking`) render a '확인 중' label on the static pages."""
-import json, os, subprocess, sys
+import json, os, shutil, subprocess, sys
 ROOT = os.path.join(os.path.dirname(os.path.abspath(__file__)), '..')
 
 
-def test_career_checking_label_rendered():
-    subprocess.run([sys.executable, os.path.join(ROOT, 'scripts', 'build_pages.py')], check=True, capture_output=True)
+def test_career_checking_label_rendered(tmp_path):
+    for folder in ('data', 'scripts', 'web'):
+        (tmp_path / folder).mkdir()
+    for name in ('data/seed.json', 'scripts/build_pages.py', 'scripts/lineage_evidence.py'):
+        shutil.copyfile(os.path.join(ROOT, name), tmp_path / name)
+    subprocess.run([sys.executable, tmp_path / 'scripts/build_pages.py'], check=True, capture_output=True)
     seed = json.load(open(os.path.join(ROOT, 'data', 'seed.json'), encoding='utf-8'))
     flagged = [r for r in seed['restaurants'] if r.get('career_checking')]
     assert {r['id'] for r in flagged} >= {'finz', 'oct19', 'oddhouse', 'goum', 'onjium_r'}
     for r in flagged:
-        html = open(os.path.join(ROOT, 'web', 'r', r['id'], 'index.html'), encoding='utf-8').read()
+        html = open(tmp_path / 'web' / 'r' / r['id'] / 'index.html', encoding='utf-8').read()
         assert html.count('<span class="tag">확인 중</span>') == len(r['career_checking']), r['id']
         assert 'noindex' not in html
 

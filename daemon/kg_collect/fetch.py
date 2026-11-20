@@ -224,6 +224,8 @@ class Fetcher:
                     method = 'browser'
         if text_chars < MIN_TEXT_CHARS:
             return self._fail(job_id, url, method if method == 'browser' else 'html', 'fail_empty', r, error=f'thin_or_empty_body:{text_chars}', parent=parent, page_no=page_no)
+        # Publisher attribution uses the successful destination after the normal transport redirect checks.
+        url = r.final_url or url
         raw_ref, h = self.raw.put(host_of(url), html.encode('utf-8') if method == 'browser' else r.body, 'html')
         unchanged = self._unchanged(url, h)
         fid = self._record(job_id, url, method, 'ok', r=r, text=doc['text'], raw_ref=raw_ref, content_hash=h, published=doc['published_at'], parent=parent, page_no=page_no)

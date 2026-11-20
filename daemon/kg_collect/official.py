@@ -217,7 +217,9 @@ def site_basis_for(conn, target_id: str, host: str, now: str | None = None) -> s
     import json
     h = host[4:] if host.startswith('www.') else host
     try:
-        r = conn.execute('SELECT basis FROM official_site WHERE target_id=? AND host=? AND verified=1 ORDER BY basis=\'seed\' DESC LIMIT 1', (target_id, h)).fetchone()
+        r = conn.execute("""SELECT basis FROM official_site WHERE target_id=? AND host=? AND verified=1
+                            ORDER BY CASE basis WHEN 'seed' THEN 0 WHEN 'article_link' THEN 1 ELSE 2 END LIMIT 1""",
+                         (target_id, h)).fetchone()
     except Exception:
         return None
     if r:
@@ -280,14 +282,16 @@ def verify_site(text: str, title: str, url: str, target: dict) -> tuple[bool, st
 def article_link_candidates(links, text, target, banned=()) -> list[str]:
     """Outbound links in a press article that look like THE restaurant's site: host contains the restaurant's slug."""
     s = slug(target.get('name_en'))
-    if not s or not names_match(text or '', target):
+    if not names_match(text or '', target):
         return []
     out = []
-    for u, _a, _r in links:
+    for u, anchor, _r in links:
         h = _host(u)
         if not h or any(h == b or h.endswith('.' + b) for b in banned):
             continue
-        if s in re.sub(r'[^a-z0-9]', '', h.split('.')[0] if h.count('.') <= 2 else h):
+        slug_match = s and s in re.sub(r'[^a-z0-9]', '', h.split('.')[0] if h.count('.') <= 2 else h)
+        named_link = names_match(anchor or '', target) and re.search(r'공식\s*(?:홈페이지|사이트)|official (?:site|website)', anchor, re.I)
+        if slug_match or named_link:
             root = f'https://{h}/'
             if root not in out:
                 out.append(root)

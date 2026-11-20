@@ -78,6 +78,7 @@ STAGE=git
 GIT_COMMON=$(git rev-parse --git-common-dir)
 exec 9>"$GIT_COMMON/kg_daily.lock"
 if ! flock -n 9; then FINAL=1; echo 'RESULT=SKIPPED reason=locked'; exit 0; fi
+export KG_DAILY_LOCK_FD=9
 if ! git diff --quiet || ! git diff --cached --quiet; then echo 'FATAL: tracked changes present'; exit 2; fi
 to_main || { echo "FATAL: cannot check out origin/main"; exit 2; }
 BASE_SHA=$(git rev-parse HEAD)
@@ -157,13 +158,13 @@ assert_branch
 git add -A data crawler web scripts .gitignore
 if git diff --cached --quiet; then to_main; git branch -D "$BR" -q; echo "$IG_OUT"; FINAL=1; echo "RESULT=NO_CHANGE reason=$AI_REASON"; exit 0; fi
 WEB_CHANGED=0; git diff --cached --quiet -- web || WEB_CHANGED=1
-SUM=$(python3 -c "import json;s=json.load(open('crawler/out/last_summary.json'));print('; '.join(f\"{a['name']}: {a['kind']} {a.get('new_name') or a.get('field') or ''}\" for a in s['applied']) or 'pending queue only', '| pending', s['pending_count'])")
+SUM=$(python3 -c "import json;s=json.load(open('crawler/out/last_summary.json'));p=s.get('publication',{});v=p.get('new_alumni_verified',0);c=p.get('new_alumni_checking',0);u=p.get('upgraded',0);a=[f\"{r['name']}: {r['kind']} {r.get('new_name') or r.get('field') or ''}\" for r in s['applied'] if r['kind']!='new_alumni'];a+=([f'new_alumni {v} verified, {c} checking'] if v+c else [])+([f'{u} alumni upgraded'] if u else []);print('; '.join(a) or 'pending queue only','| pending',s['pending_count'])")
 git commit -q -m "crawl $DAY: $SUM"
 assert_branch
 [ "$(git rev-list --count "$BASE_SHA"..HEAD)" = 1 ] || { FINAL=1; echo "RESULT=FAILED stage=pr reason=unexpected_commits expected=$BR ai_reason=$AI_REASON"; exit 4; }
 git push -q -u origin "$BR" --force
 PR=$(gh pr create --repo SUNBURN-Golden/kitchen-genome --base main --head "$BR" --title "crawl $DAY: $SUM" \
-  --body "Automated daily crawl (scripts/daily_pipeline.sh). Applied only with >=2 independent reliable sources; see crawler/applied.json. Review queue: crawler/pending.json. AI findings are published only after the DeepSeek review stage approves them (badged 'AI 검토', source URL, data/ai_review_log.jsonl; rollback: scripts/ai_review_rollback.py); rejected ones are closed with a reason. SHOW_VERDICTS/SHOW_NEWSLETTER=false, no noindex (guards passed).")
+  --body "Automated daily crawl (scripts/daily_pipeline.sh). $SUM. See crawler/applied.json for source audit and crawler/pending.json for crawler review. New alumni with corroborated sources are verified. Single-source alumni require bundle approval and show 확인 중. Rollback: scripts/site_publication_rollback.py. AI-reviewed quotes are badged AI 검토 and logged in data/ai_review_log.jsonl. Quote rollback: scripts/ai_review_rollback.py. Site guards passed.")
 gh pr merge "$PR" --squash --delete-branch
 PR_SUCCEEDED=1
 to_main

@@ -18,6 +18,7 @@ PROMOTE_AT, DEPRIORITIZE_AT, MIN_TRIAL_OK, TRIAL_SAMPLE = 0.50, 0.30, 2, 3
 FOOD_CUES = re.compile(r'셰프|쉐프|레스토랑|오마카세|파인다이닝|미쉐린|미슐랭|블루리본|수셰프|주방|오픈|폐업|이전|출신')
 DISCOVERED_REGISTRY = os.path.join(ROOT, 'sources', 'registry.discovered.yaml')
 SHINGLE = 6
+REPOST_THRESHOLD = 0.55
 REEVALUATE_AFTER_DAYS = 7   # an unchanged host is re-scored (and its robots.txt re-read) at most this often
 
 
@@ -41,7 +42,7 @@ def jaccard(a: set, b: set) -> float:
     return len(a & b) / len(a | b) if a and b else 0.0
 
 
-def is_repost(conn, host: str, text: str, raw_store, threshold: float = 0.55) -> bool:
+def is_repost(conn, host: str, text: str, raw_store, threshold: float = REPOST_THRESHOLD) -> bool:
     """Near-duplicate of a document we already hold from ANOTHER host (syndication/repost)."""
     sh = shingles(text[:3000])
     if not sh:

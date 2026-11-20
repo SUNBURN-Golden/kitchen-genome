@@ -100,6 +100,12 @@ elif 'crawler/crawl.py' in args:
     if os.environ.get('TEST_CRAWL_FAIL'):
         pathlib.Path('sources/registry.discovered.yaml').write_text('changed\\n')
         sys.exit(7)
+elif 'crawler/apply.py' in args and os.environ.get('TEST_PUBLICATION'):
+    assert os.environ['KG_DAILY_LOCK_FD'] == '9'
+    pathlib.Path('crawler/out/last_summary.json').write_text(json.dumps({{
+        'applied':[{{'name':'Fixture','kind':'new_alumni'}}], 'pending_count':0,
+        'publication':{{'new_alumni_verified':2,'new_alumni_checking':1}}
+    }}))
 elif 'scripts/build_deploy.py' in args:
     if os.environ.get('TEST_BUILD_FAIL'): sys.exit(3)
     if os.environ.get('TEST_POST_PR_FAIL') and pathlib.Path('.git/post-pr-build').exists(): sys.exit(6)
@@ -145,6 +151,15 @@ def test_pipeline_needs_deploy_when_web_changed_without_token(pipeline):
     assert p.returncode==0
     assert p.stdout.strip().splitlines()[-1]=='RESULT=NEEDS_DEPLOY pr=https://example.test/pr/1 reason=none'
     assert 'gh pr merge' in commands and 'deploy.sh' not in commands
+
+
+def test_pipeline_reports_verified_and_checking_alumni_in_pr(pipeline):
+    p, commands = pipeline(TEST_CHANGE='1', TEST_PUBLICATION='1')
+    assert p.returncode == 0
+    pr_command = next(line for line in commands.splitlines() if line.startswith('gh pr create'))
+    assert 'new_alumni 2 verified, 1 checking' in pr_command
+    assert 'site_publication_rollback.py' in pr_command
+    assert 'pending queue only' not in pr_command
 
 
 def test_pipeline_deploys_only_after_squash_merge_when_token_exists(pipeline, tmp_path):

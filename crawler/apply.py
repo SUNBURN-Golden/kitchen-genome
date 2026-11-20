@@ -4,8 +4,11 @@ Everything else (single source, chef moves, openings, site_down, conflicting) ->
 Never touches outreach verification fields. Never touches SHOW_VERDICTS / newsletter / robots (not in data).
 Inputs: newest crawler/out/findings-*.json + crawler/manual_findings.json (hand-checked evidence, same format).
 Writes: data/seed.json (if changed), crawler/pending.json, crawler/applied.json, crawler/out/last_summary.json."""
-import json, os, glob, datetime as dt
+import json, os, glob, sys, datetime as dt
 H = os.path.dirname(os.path.abspath(__file__)); ROOT = os.path.dirname(H)
+sys.path.insert(0, os.path.join(ROOT, 'daemon'))
+from kg_collect import site_publish  # noqa: E402
+
 C = json.load(open(os.path.join(H, 'config.json'), encoding='utf-8'))
 SEED = os.path.join(ROOT, 'data', 'seed.json')
 PROTECTED = {'verification_status', 'contacted_at', 'confirmed_at', 'confirmed_by', 'correction_requested', 'outreach', 'reply_status'}
@@ -23,6 +26,10 @@ def load(p, d):
     except FileNotFoundError: return d
 
 def main():
+    with site_publish.daily_lock(ROOT), site_publish.configured_db() as (conn, raw):
+        _apply(conn, raw)
+
+def _apply(conn, raw):
     today = dt.date.today().isoformat()
     seed = json.load(open(SEED, encoding='utf-8')); R = {r['id']: r for r in seed['restaurants']}
     files = sorted(glob.glob(os.path.join(H, 'out', 'findings-*.json')))
@@ -66,20 +73,29 @@ def main():
         r['crawl_checked'] = today; r.setdefault('crawl_sources', [])
         r['crawl_sources'] = sorted(set(r['crawl_sources']) | {f['url'] for f in rel})
         rec['applied_at'] = today; applied.append(rec)
-    if applied:
-        json.dump(seed, open(SEED, 'w', encoding='utf-8'), ensure_ascii=False, indent=1)
+    now = site_publish.instant()
+    publication = site_publish.apply_ready(conn, seed, raw, now)
+    if applied or publication['added'] or publication['upgraded']:
+        site_publish.atomic_json(SEED, seed)
     # pending queue: keep first_seen, replace content
     old = {(p['id'], p['kind'], p.get('new_name'), p.get('field')): p for p in load(os.path.join(H, 'pending.json'), [])}
     for p in pend:
         o = old.get((p['id'], p['kind'], p.get('new_name'), p.get('field')))
         p['first_seen'] = (o or {}).get('first_seen', today)  # no last_seen: avoids a daily no-op PR
     json.dump(pend, open(os.path.join(H, 'pending.json'), 'w', encoding='utf-8'), ensure_ascii=False, indent=1)
-    log = load(os.path.join(H, 'applied.json'), []) + applied
-    json.dump(log, open(os.path.join(H, 'applied.json'), 'w', encoding='utf-8'), ensure_ascii=False, indent=1)
+    log_path = os.path.join(H, 'applied.json')
+    log = load(log_path, [])
+    additions = site_publish.reconcile_events(seed, log)
+    site_publish.atomic_json(log_path, log + applied + additions)
+    applied += additions
     os.makedirs(os.path.join(H, 'out'), exist_ok=True)
-    s = dict(day=today, changed=bool(applied), applied=applied, pending_count=len(pend))
-    json.dump(s, open(os.path.join(H, 'out', 'last_summary.json'), 'w', encoding='utf-8'), ensure_ascii=False, indent=1)
+    publication.update(site_publish.publication_metrics(conn, seed, now))
+    publication['new_alumni_verified'] = sum(a['gate'] == 'verified' for a in additions)
+    publication['new_alumni_checking'] = sum(a['gate'] == 'checking' for a in additions)
+    s = dict(day=today, changed=bool(applied or publication['upgraded']), applied=applied,
+             pending_count=len(pend), publication=publication)
+    site_publish.atomic_json(os.path.join(H, 'out', 'last_summary.json'), s)
     print(json.dumps(dict(changed=s['changed'], applied=[(a['id'], a['kind'], a.get('new_name') or a.get('field')) for a in applied],
-                          pending=len(pend)), ensure_ascii=False))
+                          pending=len(pend), publication=publication), ensure_ascii=False))
 
 if __name__ == '__main__': main()

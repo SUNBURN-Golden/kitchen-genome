@@ -11,16 +11,24 @@ import json
 import re
 
 from kg_daemon.db import stable_id, utcnow
+from .targets import norm
 
 ACRONYM = re.compile(r'^(?:[A-Z]\.?){2,6}$')
 INSTITUTION = re.compile(r'학교|대학|아카데미|academy|institute|school|university|college|cordon\s*bleu|꼬르동|츠지|호텔|hotel|그룹|group|협회|association|방송|넷플릭스|netflix|'
                          r'tvn|jtbc|sbs|kbs|mbc|백화점|department|재단|foundation|위원회|공사|주식회사|corp|inc\.?$|ltd', re.I)
+NAME_STOP = {norm(n) for n in (
+    '최근', '이번', '한국', '선보인', '진행한', '셰프', '쉐프', '오너', '총괄', '헤드', '수석', '수셰프',
+    '헤드 셰프', '오너 셰프', '총괄 셰프', '수석 셰프', '주방장', '파티시에', '소믈리에',
+    '직원', '인턴', '스태프', '식당', '레스토랑', 'chef', 'head chef', 'owner', 'restaurant',
+)}
 
 
 def reject_reason(kind: str, name: str | None) -> str | None:
     if not name:
         return 'empty'
     n = name.strip()
+    if norm(n) in NAME_STOP:
+        return 'generic_name'
     if ACRONYM.match(n):
         return 'acronym_not_a_venue'
     if INSTITUTION.search(n):

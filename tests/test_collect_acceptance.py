@@ -1,6 +1,7 @@
 """Acceptance tests of the ACTIVE collection bot against a SYNTHETIC web (tests/collect_world.py).
 They prove behaviour (discovery, evaluation, html/pdf/image fetch, gaps, change detection, extractor alerts, resume, idempotency).
 They do not measure accuracy on real press; real-run evidence lives in docs/data/COLLECTION_BOT.md."""
+import datetime as dt
 import json
 import os
 import shutil
@@ -23,7 +24,10 @@ def world(tmp_path):
     conn = kgdb.connect(str(tmp_path / 'kg.db'))
     web = FakeWeb()
     cycle.init_db(conn, seed=SEED)
-    bot = cycle.Bot(conn, data_dir=str(tmp_path), net=web.net(), seeds=seeds_for_world(), today=TODAY, units=80, registry_path=str(tmp_path / 'registry.discovered.yaml'), ocr=True)
+    seed_path = tmp_path / 'seed.json'
+    seed_path.write_text(json.dumps(SEED, ensure_ascii=False), encoding='utf-8')
+    bot = cycle.Bot(conn, data_dir=str(tmp_path), net=web.net(), seeds=seeds_for_world(), today=TODAY, units=80,
+                    registry_path=str(tmp_path / 'registry.discovered.yaml'), seed_path=seed_path, ocr=True)
     return conn, web, bot, tmp_path
 
 
@@ -129,7 +133,6 @@ def test_rerun_is_idempotent(world):
 
 
 def test_affiliation_change_old_vs_new_detected(world):
-    import datetime as dt
     conn, web, bot, tmp = world
     converge(bot, 8)
     chef = conn.execute("SELECT chef_id FROM chef WHERE display_name='한도윤'").fetchone()['chef_id']
@@ -140,6 +143,8 @@ def test_affiliation_change_old_vs_new_detected(world):
     web.pages['https://press1.test/a/4'] = ('text/html', html('셰프 이동', '<p>한도윤 셰프는 모래시계로 옮겼다. 모래시계는 한남동에 있는 프렌치 레스토랑이다. 이 문서는 수집 봇 시험을 위한 가상의 안내문이며 실제 식당과 무관하다. '
                                                           '모든 이름과 주소는 지어낸 것이다. 문서의 길이를 채우기 위한 문장이 이어진다. 시험용 문서는 여기서 끝난다.</p>', pub=today))
     web.search_items.append(('한도윤 셰프 모래시계 이적', 'https://press1.test/a/4', '한도윤 셰프 모래시계로 옮겼다'))
+    next_day = bot.clock() + dt.timedelta(days=1)
+    bot.clock = lambda: next_day
     conn.execute("UPDATE crawl_job SET state='queued', attempts=0 WHERE path IN ('keyword_search','reverse_gap')")
     conn.commit()
     converge(bot, 6)

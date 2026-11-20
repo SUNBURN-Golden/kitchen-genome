@@ -9,6 +9,8 @@ import re
 import datetime as dt
 
 from . import EXTRACTOR_VERSION
+from .review import NAME_STOP, reject_reason
+from .targets import norm
 
 SURNAMES = set('김이박최정강조윤장임한오서신권황안송류유홍전고문양손배백허남심노하곽성차주우구민나진지엄채원천방공현함변염여추도소석선설마길연위표명기반왕금옥육인맹제모탁국어은편용예경봉사부황보')
 ROLE_RE = r'(총괄\s?셰프|총괄\s?쉐프|수\s?셰프|수석\s?셰프|헤드\s?셰프|헤드\s?쉐프|오너\s?셰프|오너\s?쉐프|부주방장|주방장|파티시에|소믈리에|셰프\s?드\s?파티|스태프|인턴|실습생|조리장|셰프|쉐프)'
@@ -117,7 +119,7 @@ NOT_A_NAME = {'기대출연', '이츠', '출연', '스타', '레전드', '유명
 def clean_name(nm: str, after: str = '') -> str | None:
     """Real-run lesson: '최송이는 오너 셰프' (particle glued on), '기대출연 셰프들' (plural, not a person), '이츠 셰프 컬렉션' (brand). Accept 2-3 syllables,
     4 only with a double surname; strip one trailing particle; plural/collection wording means a category, not a person."""
-    if nm in NOT_A_NAME or after.lstrip().startswith(('들', '컬렉션', '클래스', '출신들')):
+    if nm in NOT_A_NAME or norm(nm) in NAME_STOP or after.lstrip().startswith(('들', '컬렉션', '클래스', '출신들')):
         return None
     if (len(nm) >= 4 and nm[-1] in '은는의도를을와과') or (len(nm) == 3 and nm[-1] in '는의를와과'):
         nm = nm[:-1]                  # 3-syllable names often END in 은/이/을 ('정다은'): only unambiguous particles are stripped there
@@ -257,7 +259,7 @@ def clean_venue(nm: str) -> str | None:
     if not 2 <= len(nm) <= 24 or nm.isdigit():
         return None
     hangul = re.sub(r'\([^)]*\)', '', nm).strip()
-    if not hangul or hangul in VENUE_NAME_STOP:
+    if not hangul or hangul in VENUE_NAME_STOP or norm(hangul) in NAME_STOP:
         return None
     return hangul
 
@@ -332,6 +334,95 @@ SIDE_GAP = re.compile(r'^\s?(?:(?:오너|총괄|헤드|수석|수|파티시에|�
 EN_OPEN = re.compile(r'\b(?:opens|opened|to open|is opening|will open|debuts|launches|first opened)\b', re.I)
 EN_FORMER = re.compile(r'\b(?:former|ex-|formerly (?:of|at)|alum(?:nus|na)? of|previously (?:at|of))\b', re.I)
 EN_CHEF = r'(?:executive |head |pastry |sous |chef-owner |owner )?(?:chef|pastry chef|star)'
+
+VENUE_TYPE = r'(?:한식당|양식당|일식당|중식당|레스토랑|식당|다이닝|비스트로|오마카세|restaurant|bistro)'
+DELIMITED_VENUE = re.compile(rf'{VENUE_TYPE}\s*(?:[‘\'"“「『]([^’\'"”」』]{{2,30}})[’\'"”」』]|([가-힣A-Za-z0-9·&-]{{2,24}}?)(?=(?:에서|[을를의])\s|\s+[—–]))', re.I)
+LEAD_ROLE = r'(?:(?:오너|헤드|수석|총괄)\s?(?:셰프|쉐프)|주방장|대표)'
+CHEF_TITLE = rf'(?:{LEAD_ROLE}|셰프|쉐프)'
+COMPLETED_OPEN = r'(?:열었다|열었으며|열었다고 밝혔다|개업했다|(?:정식\s*)?오픈했다|개점했다|문을\s*열었다)'
+NON_PUBLICATION_CONTEXT = re.compile(r'팝업|게스트|가상|모의|드라마|영화|예능\s*(?:속|에서)|경연\s*(?:용|미션)|\b(?:pop-up|guest shift|fictional)\b', re.I)
+
+def confirmed_closure(quote, venue):
+    if any(p.search(quote) for p in (NEGATION, FUTURE, AT_RISK, COND_CLOSE, NON_PUBLICATION_CONTEXT)):
+        return False
+    return bool(re.search(re.escape(venue) + r'[’\'"”」』]?\s*(?:[은는이가]\s*)?(?:(?:이미|공식적으로)\s*)?(?:폐업(?:했다|했으며)|폐점했다|영업(?:을)?\s*종료했다|문을\s*닫았다|(?:has )?closed\b)', quote, re.I))
+
+
+def publication_assertions(sentence, gaz):
+    """Explicit subject/venue grammar. Offsets use the original publisher sentence."""
+    if (len(sentence.strip()) > 200 or NON_PUBLICATION_CONTEXT.search(sentence) or HEARSAY.search(sentence)
+            or PATTERNS['collab'].search(sentence) or PATTERNS['co_worker'].search(sentence)):
+        return []
+    mentions = gaz.find(sentence)
+    chefs = [m for m in mentions if m['kind'] == 'chef']
+    new = new_chef_names(sentence, [(m['start'], m['end']) for m in mentions])
+    people = {(m['start'], m['end']): m['surface'] for m in chefs + new}
+    venues = {(m['start'], m['end']): m['surface'] for m in mentions if m['kind'] == 'restaurant'}
+    for m in DELIMITED_VENUE.finditer(sentence):
+        g = 1 if m[1] else 2
+        name = clean_venue(m[g])
+        if name and (not reject_reason('restaurant', name) or gaz.lookup(name)):
+            venues[m.span(g)] = name
+    for m in QUOTED_NAME.finditer(sentence):
+        name = clean_venue(m[1])
+        if name and not reject_reason('restaurant', name) and re.match(r'\s*(?:출신|에서)', sentence[m.end():]):
+            venues[m.span(1)] = name
+    for _, end in venues:
+        prefixed = re.match(rf'^[’\'"”」』 ]*(?:의|에서)\s*{LEAD_ROLE}\s+([가-힣]{{2,4}}?)(?=(?:은|는|이|가)\s|[ ,.。!?]|$)', sentence[end:])
+        if prefixed and (name := clean_name(prefixed[1])) == prefixed[1] and name[0] in SURNAMES:
+            people.setdefault((end + prefixed.start(1), end + prefixed.end(1)), name)
+    # Several named people need a more specific attribution than a shared sentence.
+    if len(people) != 1:
+        return []
+    (cs, ce), chef = next(iter(people.items()))
+    if norm(chef) in NAME_STOP:
+        return []
+    out = []
+    korean = bool(re.search(r'[가-힣]', sentence))
+    for (vs, ve), venue in venues.items():
+        before = sentence[:vs]
+        after = sentence[ve:].lstrip('’\'"”」』 ')
+        left = before.rstrip('‘\'"“「『 ')
+        between = sentence[ce:vs].rstrip('‘\'"“「『') if ce <= vs else ''
+        role = None
+        lineage = False
+        if korean and ve <= cs:
+            gap = sentence[ve:cs].lstrip('’\'"”」』 ')
+            previous = re.fullmatch(rf'(?:출신\s*|(?:에서|의)?\s*(?:전\s*{ROLE_RE}|{ROLE_RE}\s*출신)\s*)', gap)
+            if previous:
+                lineage, role = True, previous[1] or previous[2]
+        if korean and ce <= vs and re.match(rf'^\s*{CHEF_TITLE}\s*(?:는|은|가|이)\s+', between):
+            previous = re.match(rf'^(?:에서\s*{ROLE_RE}\s*(?:로|으로)\s*(?:근무했다|근무했으며|일했다|일했으며|일한|지냈다|지냈으며|역임했다)|출신(?:이다|이며|으로)|을\s*거쳤다|를\s*거쳤다)', after)
+            if previous:
+                lineage, role = True, previous[1]
+        if not korean:
+            previous = re.search(r'\b(?:former(?:\s+(executive chef|head chef|sous chef|pastry chef|chef))?\s+(?:at|of)|alum(?:nus|na)? of|formerly (?:at|of))\s*$', left, re.I)
+            if previous and (ve <= cs and re.fullmatch(r'[,’\'"”\s]*(?:chef\s+)?', sentence[ve:cs], re.I)
+                             or ce <= previous.start() and re.fullmatch(r'[ ,]+', sentence[ce:previous.start()])):
+                lineage, role = True, previous[1]
+        if lineage:
+            out.append(dict(label='career', chef=chef, org=venue, role=role))
+        if FUTURE.search(sentence) or NEGATION.search(sentence):
+            continue
+        if korean:
+            subject = re.match(rf'^\s*{CHEF_TITLE}(?:은|는|이|가)\s+', between)
+            # Keep the subject in control of the verb and permit a directly attached location phrase.
+            prefix = between[subject.end():] if subject else ''
+            date = r'(?:(?:20\d{2}년\s*)?(?:\d{1,2}월\s*(?:\d{1,2}일\s*)?)|20\d{2}년\s*|20\d{2}-\d{2}(?:-\d{2})?\s+|(?:지난해|올해)\s+)'
+            opens = bool(subject and re.fullmatch(rf'\s*{date}?(?:[가-힣A-Za-z0-9 -]{{1,65}}(?:에서|에)\s+)?(?:새\s+)?(?:{VENUE_TYPE}\s*)?', prefix)
+                         and re.match(rf'^[을를]\s*{COMPLETED_OPEN}(?=$|[.!?,。\s])', after))
+            current = bool(ve <= cs and re.fullmatch(rf'[’\'"”」』 ]*(?:의|에서)\s*{LEAD_ROLE}\s*', sentence[ve:cs])
+                           and not re.search(r'^(?:\s*(?:셰프\s*)?(?:였|이었|이었다|전\s|가\s*아니))|(?:사임|퇴임|떠났다|그만뒀|그만두)', sentence[ce:]))
+            current |= bool(subject and re.fullmatch(rf'\s*(?:현재\s*)?(?:{VENUE_TYPE}\s*)?', prefix)
+                            and re.match(rf'^(?:의|에서)\s*{LEAD_ROLE}\s*(?:이다|로\s*(?:일하고\s*있다|재직\s*중이다|있다))', after))
+            current |= bool(subject and re.fullmatch(rf'\s*(?:현재\s*)?(?:{VENUE_TYPE}\s*)?', prefix)
+                            and re.match(r'^(?:[을를]|(?:의\s*)?주방을)\s*(?:현재\s*)?(?:이끌고|운영하고)\s*있다', after.lstrip()))
+        else:
+            opens = bool(ce <= vs and re.fullmatch(r'(?:,\s*formerly (?:of|at) [^,]+,)?\s+(?:has )?(?:opened|opens|launched)\s+(?:(?:the )?(?:restaurant|bistro)\s+)?', between, re.I))
+            current = bool(ce <= vs and re.fullmatch(r'\s*,?\s*(?:is|serves as)\s+(?:the\s+)?(?:owner|head chef|executive chef|chef-owner)\s+(?:of|at)\s+(?:restaurant\s+)?', between, re.I))
+        if opens or current:
+            out.append(dict(label='opening' if opens else 'employment_claim', chef=chef, rest=venue, role=None))
+    return out
 
 
 def _en_rules(sent, chefs, rests, mk):
@@ -425,7 +516,13 @@ def extract_text(text: str, *, gaz, host: str, published_at: str | None = None, 
                         break
                 if side:
                     break
-        if not any(hits.values()) and not APPOINT.search(sent) and not side and not (popup and POPUP_RAN.search(sent)) and not (chefs and rests and re.search(r'[A-Za-z]{3}', orig)):
+        assertions = publication_assertions(orig, gaz)
+        if hits['closure'] and not rests:
+            for m in DELIMITED_VENUE.finditer(orig):
+                venue = clean_venue(m[1] or m[2])
+                if venue and confirmed_closure(orig, venue):
+                    assertions.append(dict(label='closure', chef=None, rest=venue, role=None))
+        if not assertions and not any(hits.values()) and not APPOINT.search(sent) and not side and not (popup and POPUP_RAN.search(sent)) and not (chefs and rests and re.search(r'[A-Za-z]{3}', orig)):
             continue
         base_unverified = bool(HEARSAY.search(sent)) or tier in ('social_lead', 'search_lead') or (ocr_conf is not None and ocr_conf < 60)
         negated = bool(NEGATION.search(sent))
@@ -468,6 +565,11 @@ def extract_text(text: str, *, gaz, host: str, published_at: str | None = None, 
                    'extractor_version': EXTRACTOR_VERSION, 'ambiguity': amb, 'published_at': published_at, **(extra or {})}
             rec['extraction_id'] = 'ext_' + hashlib.sha1('|'.join([content_hash, str(rec['span_start']), label, str(chef), str(rest), str(org), EXTRACTOR_VERSION]).encode()).hexdigest()[:14]
             out.append(rec)
+
+        for assertion in assertions:
+            label, asserted_role = assertion['label'], assertion['role']
+            mk(label, chef=assertion['chef'], rest=assertion.get('rest'), org=assertion.get('org'),
+               extra={'extractor': f'rule:publication_{label}', 'role_text': asserted_role})
 
         chef_names = [c['surface'] for c in chefs] + [c['surface'] for c in new_chefs]
         if re.search(r'[A-Za-z]{3}', sent) and not re.search(r'[가-힣]', sent):
@@ -545,8 +647,7 @@ def extract_text(text: str, *, gaz, host: str, published_at: str | None = None, 
             if org and chef and bare:
                 mk('career', chef=chef, org=org, anchor=m.start(), ambiguity=amb or 'org_name_unverified', epi='unverified')
             elif org and chef:
-                mk('career', chef=chef, org=org, anchor=m.start(), ambiguity=amb, inferred=inferred,
-                   rest=next((r['surface'] for r in rests if r['surface'] != org), None))
+                mk('career', chef=chef, org=org, anchor=m.start(), ambiguity=amb, inferred=inferred)
             elif org and not bare:
                 mk('career', chef=chef, org=org, anchor=m.start(), ambiguity=amb or 'org_or_chef_missing', epi='unverified')
         # ── current employment ──
