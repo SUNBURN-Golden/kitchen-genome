@@ -40,7 +40,7 @@ finish() {
     {
       git checkout -q -- sources || true
       if [ "$(git symbolic-ref -q --short HEAD)" = "$BR" ] && [ "$(git rev-parse HEAD)" = "$BASE_SHA" ]; then
-        git checkout -q main && git branch -d "$BR" || true
+        to_main; git branch -D "$BR" || true
       fi
     } >/dev/null 2>&1 || true
   fi
@@ -58,6 +58,12 @@ on_signal() {
   echo "RESULT=FAILED stage=$STAGE reason=signal_$1 ai_reason=$AI_REASON"
   exit "$((128 + $2))"
 }
+# Move to up-to-date main. `git checkout main` fails when another worktree (e.g. /workspace/kitchen-genome)
+# already has main checked out; on 2026-11-20 that failure was ignored and crawl/20261120 was cut from a stale
+# branch, so PR #115 conflicted with main. Fall back to a detached origin/main; callers treat failure as fatal.
+to_main() {
+  { git checkout -q main 2>/dev/null && git pull -q --ff-only; } || { git fetch -q origin main && git checkout -q --detach FETCH_HEAD; }
+}
 trap finish EXIT
 trap 'on_signal HUP 1' HUP
 trap 'on_signal INT 2' INT
@@ -73,7 +79,7 @@ GIT_COMMON=$(git rev-parse --git-common-dir)
 exec 9>"$GIT_COMMON/kg_daily.lock"
 if ! flock -n 9; then FINAL=1; echo 'RESULT=SKIPPED reason=locked'; exit 0; fi
 if ! git diff --quiet || ! git diff --cached --quiet; then echo 'FATAL: tracked changes present'; exit 2; fi
-git checkout -q main && git pull -q --ff-only
+to_main || { echo "FATAL: cannot check out origin/main"; exit 2; }
 BASE_SHA=$(git rev-parse HEAD)
 git branch -d "$BR" >/dev/null 2>&1 || true; git checkout -q -b "$BR"
 CRAWL_CREATED=1
@@ -149,7 +155,7 @@ if grep -rqi 'noindex' web; then echo "GUARD FAIL: noindex found"; exit 3; fi
 STAGE=pr
 assert_branch
 git add -A data crawler web scripts .gitignore
-if git diff --cached --quiet; then git checkout -q main; git branch -D "$BR" -q; echo "$IG_OUT"; FINAL=1; echo "RESULT=NO_CHANGE reason=$AI_REASON"; exit 0; fi
+if git diff --cached --quiet; then to_main; git branch -D "$BR" -q; echo "$IG_OUT"; FINAL=1; echo "RESULT=NO_CHANGE reason=$AI_REASON"; exit 0; fi
 WEB_CHANGED=0; git diff --cached --quiet -- web || WEB_CHANGED=1
 SUM=$(python3 -c "import json;s=json.load(open('crawler/out/last_summary.json'));print('; '.join(f\"{a['name']}: {a['kind']} {a.get('new_name') or a.get('field') or ''}\" for a in s['applied']) or 'pending queue only', '| pending', s['pending_count'])")
 git commit -q -m "crawl $DAY: $SUM"
@@ -160,7 +166,7 @@ PR=$(gh pr create --repo SUNBURN-Golden/kitchen-genome --base main --head "$BR" 
   --body "Automated daily crawl (scripts/daily_pipeline.sh). Applied only with >=2 independent reliable sources; see crawler/applied.json. Review queue: crawler/pending.json. AI findings are published only after the DeepSeek review stage approves them (badged 'AI 검토', source URL, data/ai_review_log.jsonl; rollback: scripts/ai_review_rollback.py); rejected ones are closed with a reason. SHOW_VERDICTS/SHOW_NEWSLETTER=false, no noindex (guards passed).")
 gh pr merge "$PR" --squash --delete-branch
 PR_SUCCEEDED=1
-git checkout -q main && git pull -q --ff-only
+to_main
 python3 scripts/build_deploy.py >/dev/null   # dist/deploy_kitchengenome.js from merged main
 echo "$IG_OUT"
 FINAL=1
