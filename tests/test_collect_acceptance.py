@@ -85,9 +85,10 @@ def test_login_200_and_empty_200_are_failures(world):
     conn, web, bot, tmp = world
     from kg_collect.fetch import Fetcher
     f = Fetcher(conn, bot.net, bot.raw)
-    d1 = f.fetch('https://dalbit.test/members')[0]
-    d2 = f.fetch('https://dalbit.test/blank')[0]
-    assert (d1.outcome, d2.outcome) == ('fail_login_page', 'fail_empty')
+    empty = f.fetch('https://dalbit.test/blank')[0]
+    login = f.fetch('https://dalbit.test/members')[0]
+    stopped = f.fetch('https://dalbit.test/blank')[0]
+    assert (empty.outcome, login.outcome, stopped.outcome) == ('fail_empty', 'fail_login_page', 'fail_login_page')
 
 
 def converge(bot, n=6):

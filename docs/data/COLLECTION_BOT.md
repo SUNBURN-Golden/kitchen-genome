@@ -14,7 +14,7 @@ PYTHONPATH=daemon python3 -m kg_collect --db data_store/kg_service.db gold <file
 |---|---|
 | `discover.py` | 타깃 리스트 기반 발굴, 6개 경로: ①키워드 조합 검색(Bing News RSS) ②공식 디렉터리 ③sitemap/RSS/페이지네이션 ④엔티티 후속(새로 나온 이름) ⑤공식 사이트→SNS→예약→첨부 ⑥빈 필드 역검색. 관련도·깊이·예산 상한, 크롬 호스트(언어/후원 링크 등) 제외 |
 | `evaluate.py` | 새 도메인 시험 수집 후 relevance .30 / novelty .20 / extractability .25 / originality .15 / permission .10 가중 점수. ≥0.50 + 문서 2개 + 추출 1개면 승격, <0.30 강등 → 레지스트리 성장(`sources/registry.discovered.yaml`) |
-| `fetch.py`, `net.py`, `rawstore.py`, `docs_ocr.py` | API/피드 → HTML/JSON-LD → (JS 셸에만) 브라우저. 페이지네이션·표·PDF(pdftotext→OCR)·이미지 OCR(tesseract kor+eng). raw ref·hash·fetched_at·extractor version 기록. 200이어도 로그인 페이지/빈 본문은 실패. robots.txt, 도메인당 ≥5초(또는 Crawl-delay), 429/403/503/챌린지면 도메인 정지 — 우회 없음 |
+| `fetch.py`, `net.py`, `rawstore.py`, `docs_ocr.py` | HTTP로 API/피드·HTML/JSON-LD 읽기. 브라우저가 필요한 JS 셸은 보류. 페이지네이션·표·PDF(pdftotext→OCR)·이미지 OCR(tesseract kor+eng). raw ref·hash·fetched_at·extractor version 기록. 200이어도 로그인 페이지/빈 본문은 실패. 한국 언론사에만 robots.txt와 ≥5초(또는 더 긴 Crawl-delay) 적용. 모든 호스트는 동시 요청 1건, 접근 거부·로그인 벽·챌린지 응답 시 실행 범위에서 정지 |
 | `extract.py`, `resolve.py` | 규칙 우선 추출(경력/재직 주장/오픈/이전/폐업/메뉴/협업)과 인식 상태(fact/claim/inference/unverified). 게스트 이벤트≠재직, 코워킹≠멘토십. 엔티티 해석은 **정규화 별칭 정확 일치만**; 동명이인은 레스토랑 문맥이 있을 때만, 아니면 `homonym_unresolved`. 새 이름은 `candidate` 타깃 |
 | `gaps.py` | 필수 필드(식당: chef/opened/status_recent, 셰프: origin_kitchen/current_employer)의 빈칸 → 작업. 분류 `not_extracted / absent_in_source / inaccessible / conflict`. AI로 채우지 않음 |
 | `scheduler.py` | backfill .35 / discovery .40 / refresh .25 예산 분리(discovery 하한 .30 예약). 우선순위 = novelty + gap + urgency + quality − cost − dup − fail (+ 구조화 경로 보너스). 변동 필드 1일/안정 14일 주기 |

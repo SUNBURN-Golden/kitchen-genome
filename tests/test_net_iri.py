@@ -38,7 +38,7 @@ def test_net_get_sends_ascii_and_checks_robots_on_the_encoded_path():
         if url.endswith('/robots.txt'):
             return Response(url, 200, {'content-type': 'text/plain'}, 'User-agent: *\nDisallow: /wiki/특수:\n'.encode())
         return Response(url, 200, {'content-type': 'text/html'}, b'<html>ok</html>')
-    net = PoliteNet(transport=transport, sleep=lambda s: None, clock=lambda: 0.0, min_delay=0)
+    net = PoliteNet(transport=transport, sleep=lambda s: None, clock=lambda: 0.0, min_delay=0, korean_press_hosts={'ko.wikipedia.org'})
     r = net.get(KO)
     assert r.status == 200 and r.error is None
     assert seen == ['https://ko.wikipedia.org/robots.txt', KO_ENC]

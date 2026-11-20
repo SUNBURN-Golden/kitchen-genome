@@ -144,7 +144,7 @@ class Corpus:
         for a in conn.execute('SELECT target_id,alias FROM target_alias'):
             self.aliases.setdefault(a['target_id'], set()).add(norm(a['alias']))
         self.blocked = {r[0] for r in conn.execute(
-            "SELECT host FROM domain_profile WHERE state='blocked' UNION SELECT host FROM web_host_guard WHERE paused IS NOT NULL AND paused<>''"
+            "SELECT host FROM domain_profile WHERE state='blocked' UNION SELECT host FROM web_host_guard WHERE paused LIKE 'blocked:%'"
         )}
         self.disabled = {host_of('https://' + r[0]) for r in conn.execute("""SELECT DISTINCT host FROM source s
             LEFT JOIN source_policy p USING(source_id) WHERE host IS NOT NULL

@@ -1,8 +1,8 @@
 """Public booking-page profile reader (CatchTable / Naver Place / Resy / Tock / OpenTable shop pages).
 
-Policy first: a booking page is fetched ONLY through the polite net layer, so robots.txt, challenges and 403/429 stop it like any other host.
+Policy first: a booking page is fetched ONLY through the polite net layer, so login walls, challenges and HTTP access refusals stop the host for the run.
 As of 2026-10-28 every Korean platform forbids generic bots: app.catchtable.co.kr (`User-agent: *  Disallow: /`, only named search engines allowed),
-m.place.naver.com / pcmap.place.naver.com (`Disallow: /`, and naver.com is banned in crawler/config.json), www.opentable.com (`Disallow: /`),
+m.place.naver.com / pcmap.place.naver.com (`Disallow: /`, and Naver Place is excluded by collection role), www.opentable.com (`Disallow: /`),
 www.exploretock.com (Cloudflare challenge). We never present as a search-engine crawler to get in. Those pages therefore end as `fail_robots` /
 `fail_blocked` and the gap is classified `inaccessible` — which is the honest result.
 

@@ -72,7 +72,7 @@ def enqueue(conn, *, path, pool, url=None, query=None, target_id=None, gap_id=No
         if relevance < caps.get('relevance_floor', 0.30):
             return False
         if url and is_banned(url):
-            state, error = 'skipped', 'banned_host(robots/ToS): manual only'
+            state, error = 'skipped', 'banned_host: excluded by collection policy'
         else:
             cap = caps.get('max_queued_per_pool', {}).get(pool, 400)
             if conn.execute("SELECT COUNT(*) FROM crawl_job WHERE pool=? AND state='queued'", (pool,)).fetchone()[0] >= cap:

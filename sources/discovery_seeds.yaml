@@ -3,21 +3,21 @@ version: "2026-11-20.1"
 
 publication:
   press_hosts:
-    hotelrestaurant.co.kr: {group: hotelrestaurant, scope: restaurant_reporting}
-    foodnews.news: {group: foodnews, scope: restaurant_reporting}
-    bakerynews.co.kr: {group: bakerynews, scope: restaurant_reporting}
-    hankyung.com: {group: hankyung, scope: original_food_reporting}
-    fnnews.com: {group: fnnews, scope: original_food_reporting}
-    daily.hankooki.com: {group: hankooki, scope: original_food_reporting}
-    biz.heraldcorp.com: {group: herald, scope: original_food_reporting}
-    biz.chosun.com: {group: chosun, scope: original_food_reporting}
-    on.edaily.co.kr: {group: edaily, scope: original_food_reporting}
-    newsis.com: {group: newsis, scope: original_food_reporting}
-    dailian.co.kr: {group: dailian, scope: original_food_reporting}
-    ajunews.com: {group: ajunews, scope: original_food_reporting}
-    seoul.co.kr: {group: seoul, scope: original_food_reporting}
-    news.jkn.co.kr: {group: jkn, scope: original_food_reporting}
-    cjnews.cj.net: {group: cj, scope: verified_cj_program_only}
+    hotelrestaurant.co.kr: {group: hotelrestaurant, country: KR, scope: restaurant_reporting}
+    foodnews.news: {group: foodnews, country: KR, scope: restaurant_reporting}
+    bakerynews.co.kr: {group: bakerynews, country: KR, scope: restaurant_reporting}
+    hankyung.com: {group: hankyung, country: KR, scope: original_food_reporting}
+    fnnews.com: {group: fnnews, country: KR, scope: original_food_reporting}
+    daily.hankooki.com: {group: hankooki, country: KR, scope: original_food_reporting}
+    biz.heraldcorp.com: {group: herald, country: KR, scope: original_food_reporting}
+    biz.chosun.com: {group: chosun, country: KR, scope: original_food_reporting}
+    on.edaily.co.kr: {group: edaily, country: KR, scope: original_food_reporting}
+    newsis.com: {group: newsis, country: KR, scope: original_food_reporting}
+    dailian.co.kr: {group: dailian, country: KR, scope: original_food_reporting}
+    ajunews.com: {group: ajunews, country: KR, scope: original_food_reporting}
+    seoul.co.kr: {group: seoul, country: KR, scope: original_food_reporting}
+    news.jkn.co.kr: {group: jkn, country: KR, scope: original_food_reporting}
+    cjnews.cj.net: {group: cj, country: KR, scope: verified_cj_program_only}
 
 keyword_search:
   endpoint: "https://www.bing.com/news/search?format=rss&setlang=ko&q={q}"   # same lead source as crawler/crawl.py (RSS, not scraping HTML)
@@ -45,19 +45,19 @@ directories:
   - id: lotte_hotels_dining
     url: "https://www.lottehotel.com/seoul-hotel/ko/dining.html"
     kind: official_directory
-    browser: true                  # JS shell (renders 'Loading...'); rendered by a headless browser ONLY because the page is dynamic and robots allows it
+    browser: true                  # renderer hint for recording unavailable HTTP shells
+    note: "HTTP-only; defer an unreadable JS shell until a guarded renderer exists"
   - id: michelin_kr_selection
     url: "https://guide.michelin.com/kr/ko/selection/south-korea/restaurants"
     kind: official_directory
-    policy: manual_only            # robots.txt / legal notice forbids automated browsing: recorded as inaccessible, never fetched
 
 feeds:
-  - {url: "https://www.hotelrestaurant.co.kr/rss/allArticle.xml", kind: rss}
+  - {country: KR, url: "https://www.hotelrestaurant.co.kr/rss/allArticle.xml", kind: rss}
 
 sitemaps:
-  - {url: "https://www.hotelrestaurant.co.kr/sitemap.xml", lookback_days: 45}
-  - {url: "https://www.foodnews.news/sitemap.xml", lookback_days: 45}
-  - {url: "https://bakerynews.co.kr/sitemap.xml", lookback_days: 45}
+  - {country: KR, url: "https://www.hotelrestaurant.co.kr/sitemap.xml", lookback_days: 45}
+  - {country: KR, url: "https://www.foodnews.news/sitemap.xml", lookback_days: 45}
+  - {country: KR, url: "https://bakerynews.co.kr/sitemap.xml", lookback_days: 45}
 
 caps:
   max_depth: 2

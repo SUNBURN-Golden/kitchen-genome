@@ -118,8 +118,9 @@ def test_trapped_urls_recheck_priority_and_halt_policy():
     assert is_trapped_url("https://example.com/archive?page=15") is True
     assert is_trapped_url("https://example.com/events/calendar?date=2026-10") is True
     assert is_trapped_url("https://www.lyseenyc.com/about") is False
-    assert effective_domain_delay("https://www.lyseenyc.com/about", robots_crawl_delay=10.0) == 10.0
-    assert effective_domain_delay("https://www.lyseenyc.com/about", robots_crawl_delay=2.0) == 5.0
+    assert effective_domain_delay("https://www.lyseenyc.com/about", robots_crawl_delay=10.0) == 0.0
+    assert effective_domain_delay("https://www.hankyung.com/article", robots_crawl_delay=2.0) == 5.0
+    assert effective_domain_delay("https://www.hankyung.com/article", robots_crawl_delay=10.0) == 10.0
 
     q = [
         {'url': 'https://a.com/new', 'kind': 'opening', 'depth': 1, 'queued_at': '2026-10-23T01:00:00'},

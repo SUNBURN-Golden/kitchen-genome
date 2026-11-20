@@ -16,186 +16,164 @@ from test_deepseek_client import meter, response
 
 
 class Clock:
-    def __init__(self): self.time = dt.datetime(2026, 11, 5, 7, tzinfo=ig.KST); self.sleeps = []
-    def now(self): return self.time
-    def sleep(self, seconds): self.sleeps.append(seconds); self.time += dt.timedelta(seconds=seconds)
+    time = dt.datetime(2026, 11, 5, 9, 45, tzinfo=ig.KST)
+
+    def now(self):
+        return self.time
 
 
 class Backend:
-    follow_available = True
-    def __init__(self, guard, calls, *, fail=None, private=False, count=7):
-        self.guard, self.calls, self.fail, self.private, self.count = guard, calls, fail, private, count
-    def __enter__(self): return self
-    def __exit__(self, *a): pass
+    def __init__(self, guard, calls, *, failure=None, private=False, posts=None):
+        self.guard, self.calls, self.failure, self.private = guard, calls, failure, private
+        self.timeline = list(range(8, 0, -1)) if posts is None else posts
+
+    def __enter__(self):
+        return self
+
+    def __exit__(self, *args):
+        pass
+
     def request(self, kind):
         def send():
-            self.calls.append((kind, self.guard.now().timestamp()))
-            if kind == self.fail: raise Exception('checkpoint synthetic-password')
-        self.guard.dispatch(send)
-    def login(self, session, password):
-        assert password == 'synthetic-password'
-        self.request('login'); self.request('session_validate')
+            self.calls.append(kind)
+            if self.failure and kind == self.failure[0]:
+                signal = self.failure[1]
+                if isinstance(signal, Exception):
+                    raise signal
+                return signal
+        return self.guard.dispatch(send)
+
+    def load_session(self, session):
+        self.request('session_validate')
+
     def profile(self, handle):
-        self.request('profile')
-        return SimpleNamespace(is_private=self.private, biography='영업 종료 안내 ' + 'x'*80, followed_by_viewer=False)
+        self.request('profile:' + handle)
+        return SimpleNamespace(is_private=self.private, biography='영업 종료 안내 ' + 'x' * 80)
+
     def posts(self, profile):
-        for i in range(self.count):
-            self.request('caption_' + str(i))
-            yield SimpleNamespace(shortcode=str(i), date_utc=dt.datetime(2026, 11, 4), caption='새 이름으로 오픈 ' + 'x'*80)
-    def follow(self, handle): self.request('follow')
+        for i in self.timeline:
+            self.request(f'post:{i}')
+            yield SimpleNamespace(shortcode=str(i), date_utc=dt.datetime(2026, 11, 4, 12) + dt.timedelta(minutes=i),
+                                  caption='새 이름으로 오픈 ' + 'x' * 80)
 
 
 @pytest.fixture
 def world(tmp_path):
-    c = connect(str(tmp_path / 'state.db')); migrate(c)
+    conn = connect(str(tmp_path / 'state.db'))
+    migrate(conn)
     clock, calls = Clock(), []
-    session = tmp_path / 'secrets' / 'session'
-    session.parent.mkdir()
+    session = tmp_path / 'fixture.session'
     session.write_text('synthetic-session')
-    opts = dict(flag=tmp_path/'ig_kg_blocked.flag', out=tmp_path/'ig_kg', session=session, now=clock.now,
-                sleep=clock.sleep, password='synthetic-password')
-    return c, clock, calls, opts
+    opts = dict(flag=tmp_path/'ig_blocked.flag', out=tmp_path/'ig_kg', session=session, now=clock.now)
+    return conn, clock, calls, opts
 
 
-def handles(n=1): return [{'handle': f'brand{i}', 'target_id': f'r{i}'} for i in range(n)]
+def handles(n=1):
+    return [{'handle': f'brand{i}', 'target_id': f'r{i}'} for i in range(n)]
 
 
-def test_request_delay_caption_limit_and_pending_only(world):
+def test_saved_session_outside_old_window_no_quotas_private_output(world):
     conn, clock, calls, opts = world
     rc, line = ig.collect(conn, handles(), lambda g: Backend(g, calls), **opts)
     assert rc == 0 and line.startswith('IG_OK account=kitchen.genome') and 'ai=disabled' in line
-    assert len(calls) == 9  # login, validation, profile, SIX lazy captions; never next() for seventh
-    assert all(b[1]-a[1] >= 8 for a,b in zip(calls, calls[1:]))
-    rows = [json.loads(r[0]) for r in conn.execute("SELECT payload_json FROM review_queue WHERE subject_type='ig_kg'")]
-    assert all(json.loads(r['payload_json'])['review_id'] == r['review_id'] for r in conn.execute("SELECT review_id,payload_json FROM review_queue WHERE subject_type='ig_kg'"))
-    assert rows and all(r['pending_only'] and r['collector_account'] == 'kitchen.genome' and len(r['excerpt']) <= 40 for r in rows)
+    assert calls == ['session_validate', 'profile:brand0'] + [f'post:{i}' for i in range(8, 0, -1)]
+    opts_rows = conn.execute("SELECT review_id,payload_json FROM review_queue WHERE subject_type='ig_kg'").fetchall()
+    assert opts_rows
+    for row in opts_rows:
+        rec = json.loads(row['payload_json'])
+        assert rec['review_id'] == row['review_id']
+        assert rec['pending_only'] and rec['collector_account'] == 'kitchen.genome' and len(rec['excerpt']) <= 40
     assert conn.execute('SELECT COUNT(*) FROM claim').fetchone()[0] == 0
-    assert not list(Path(opts['out']).parent.glob('ig-*.json'))
-    count = len(calls)
-    assert 'daily_cap_or_no_handles' in ig.collect(conn, handles(), lambda g: Backend(g,calls), **opts)[1]
-    assert len(calls) == count
-    assert ig.LOGIN == 'kitchen.genome' and str(ig.SESSION) == '/home/box/.secrets/kg_ig_kitchen_genome.session'
+    assert 'reason=no_handles' in ig.collect(conn, handles(), lambda g: pytest.fail('duplicate call'), **opts)[1]
+    ig.collect(conn, handles(30), lambda g: Backend(g, calls, posts=[]), **opts)
+    assert sum(k.startswith('profile:') for k in calls) == 30
+    assert conn.execute('SELECT COUNT(*) FROM ig_follow_day').fetchone()[0] == 0
 
 
-@pytest.mark.parametrize('fail', ['login', 'session_validate', 'profile', 'caption_2', 'follow'])
-def test_checkpoint_ends_all_activity_and_keeps_partial_results(world, fail):
+@pytest.mark.parametrize('failure,reason', [
+    (('session_validate', ValueError('checkpoint synthetic-sensitive')), 'checkpoint'),
+    (('profile:brand0', SimpleNamespace(status_code=429, text='synthetic-sensitive')), 'http_429'),
+    (('post:6', SimpleNamespace(status_code=200, text='{"two_factor_required":true}')), 'two_factor'),
+    (('post:6', SimpleNamespace(status_code=200, text='{"message":"challenge_required"}')), 'challenge'),
+    (('post:6', SimpleNamespace(status_code=401, text='synthetic-sensitive')), 'access_denied'),
+])
+def test_provider_block_stops_and_records_first_signal(world, failure, reason):
     conn, clock, calls, opts = world
-    class FollowClient:
-        status = 'enabled'; last_meta = {'model': 'fixture'}; stopped = None
-        def call(self, task, instruction, data, validate, **kwargs):
-            if task == 'ig-plan-1': return validate({'handles': [x['handle'] for x in data['handles']][:25]})
-            return validate({'findings': [], 'follow': 'follow'})
-    rc, line = ig.collect(conn, handles(2), lambda g: Backend(g, calls, fail=fail), client=FollowClient(), follow=True, **opts)
-    assert rc == 2 and 'checkpoint' in line and opts['flag'].exists()
-    assert calls[-1][0] == fail
-    assert 'synthetic-password' not in opts['flag'].read_text() + line
-    if fail in ('caption_2', 'follow'):
-        assert conn.execute('SELECT COUNT(*) FROM review_queue').fetchone()[0] > 0
-    old = len(calls)
+    rc, line = ig.collect(conn, handles(2), lambda g: Backend(g, calls, failure=failure), **opts)
+    assert rc == 2 and f'reason={reason}' in line
+    saved = opts['flag'].read_bytes()
+    assert json.loads(saved)['reason'] == reason
+    assert b'synthetic-sensitive' not in saved and 'synthetic-sensitive' not in line
+    assert calls[-1] == failure[0]
     clock.time += dt.timedelta(days=1)
-    ig.collect(conn, handles(), lambda g: Backend(g,calls), **opts)
-    assert len(calls) == old  # persistent flag survives midnight
+    assert 'blocked_flag' in ig.collect(conn, handles(), lambda g: pytest.fail('dispatch after block'), **opts)[1]
+    assert opts['flag'].read_bytes() == saved
 
 
-def test_transient_transport_failure_does_not_block_the_day(world):
+@pytest.mark.parametrize('filename', ['ig_blocked.flag', 'ig_kg_blocked.flag'])
+def test_existing_flags_are_immutable_and_gate_contact(world, filename):
     conn, clock, calls, opts = world
-    class TransientBackend(Backend):
-        def request(self, kind):
-            def send():
-                self.calls.append((kind, self.guard.now().timestamp()))
-                if kind == 'profile':
-                    raise TimeoutError('synthetic network reset')
-            self.guard.dispatch(send)
-    rc, line = ig.collect(conn, handles(2), lambda g: TransientBackend(g, calls), **opts)
-    assert rc == 1 and line.startswith('IG_FAILED account=kitchen.genome') and 'reason=transport_unknown' in line
-    assert not opts['flag'].exists()
-    assert conn.execute('SELECT stopped_day FROM ig_account_state WHERE account=?', (ig.LOGIN,)).fetchone()[0] is None
-    # A transient failure is not an access-control signal, so the same day may retry.
-    n = len(calls)
-    rc2, line2 = ig.collect(conn, handles(2), lambda g: Backend(g, calls), **opts)
-    assert rc2 == 0 and line2.startswith('IG_OK') and len(calls) > n
+    path = opts['flag'].with_name(filename)
+    before = b'\xffexisting marker'
+    path.write_bytes(before)
+    assert 'blocked_flag' in ig.collect(conn, handles(), lambda g: pytest.fail('contact with flag'), **opts)[1]
+    ig.Guard(conn, opts['flag'], clock.now).block('checkpoint')
+    assert path.read_bytes() == before
+    assert len(list(path.parent.glob('*.flag'))) == 1
 
 
-def test_same_day_stop_persists_when_human_removes_flag(world):
+def test_timeout_keeps_partial_post_checkpoint_without_flag(world):
     conn, clock, calls, opts = world
-    ig.collect(conn, handles(), lambda g: Backend(g, calls, fail='profile'), **opts)
-    opts['flag'].unlink()
-    n = len(calls)
-    assert 'same_day_stop' in ig.collect(conn, handles(), lambda g: Backend(g,calls), **opts)[1]
-    assert len(calls) == n and opts['flag'].exists()
+    failure = ('post:6', TimeoutError('fixture reset'))
+    rc, line = ig.collect(conn, handles(2), lambda g: Backend(g, calls, failure=failure), **opts)
+    assert rc == 1 and 'transport_unknown' in line and calls[-1] == 'post:6'
+    assert not list(opts['flag'].parent.glob('*.flag'))
+    assert conn.execute('SELECT COUNT(*) FROM ig_post_checkpoint').fetchone()[0] == 2
+    assert conn.execute('SELECT COUNT(*) FROM ig_post_watermark').fetchone()[0] == 0
+    assert ig.main(['--db', str(opts['session']), '--mark-timeout']) == 1
+    assert not list(opts['flag'].parent.glob('*.flag'))
+    assert ig.collect(conn, handles(), lambda g: Backend(g, calls), **opts)[0] == 0
+    assert conn.execute('SELECT COUNT(*) FROM ig_post_checkpoint').fetchone()[0] == 0
+    assert conn.execute('SELECT shortcode FROM ig_post_watermark').fetchone()[0] == '8'
 
 
-def test_25_handle_quota_survives_restart(world):
+def test_next_day_reads_only_captions_newer_than_watermark(world, monkeypatch):
     conn, clock, calls, opts = world
-    ig.collect(conn, handles(20), lambda g: Backend(g, calls, count=0), **opts)
-    ig.collect(conn, handles(30), lambda g: Backend(g, calls, count=0), **opts)
-    assert conn.execute('SELECT COUNT(*) FROM ig_handle_day').fetchone()[0] == 25
-    assert sum(k=='profile' for k,_ in calls) == 25
+    original = ig.scan_text
+    inspected = []
+
+    def scan(*args, **kwargs):
+        if '/p/' in args[4]:
+            inspected.append(args[4].split('/')[-2])
+        return original(*args, **kwargs)
+
+    monkeypatch.setattr(ig, 'scan_text', scan)
+    assert ig.collect(conn, handles(), lambda g: Backend(g, calls), **opts)[0] == 0
+    clock.time += dt.timedelta(days=1)
+    calls.clear()
+    inspected.clear()
+    assert ig.collect(conn, handles(), lambda g: Backend(g, calls, posts=[10, 9, 8, 7]), **opts)[0] == 0
+    assert inspected == ['10', '9'] and calls[-1] == 'post:8'
+    assert conn.execute('SELECT shortcode FROM ig_post_watermark').fetchone()[0] == '10'
 
 
-def test_follows_require_opt_in_and_cap_is_durable(world):
+def test_missing_session_and_private_profile(world):
     conn, clock, calls, opts = world
-    class Model:
-        status = 'enabled'; last_meta = {}; stopped = None
-        def call(self, task, instruction, data, validate, **kwargs):
-            if task == 'ig-plan-1': return validate({'handles': [x['handle'] for x in data['handles']][:25]})
-            return validate({'findings': [], 'follow': 'follow'})
-    ig.collect(conn, handles(12), lambda g: Backend(g,calls,count=0), client=Model(), **opts)
-    assert not any(k=='follow' for k,_ in calls)
-    ig.collect(conn, handles(25), lambda g: Backend(g,calls,count=0), client=Model(), follow=True, **opts)
-    assert sum(k=='follow' for k,_ in calls) == 10
-    assert conn.execute('SELECT COUNT(*) FROM ig_follow_day').fetchone()[0] == 10
-
-
-def test_blocked_missing_session_and_window_skip_before_network(world):
-    conn, clock, calls, opts = world
-    legacy = opts['flag'].parent / 'ig_blocked.flag'
-    legacy.write_text('legacy-paused')
-
-    def boom(guard):
-        calls.append(('network', guard.now().timestamp()))
-        raise AssertionError('network before gate')
-
-    rc, line = ig.collect(conn, handles(), boom, **opts)
-    assert rc == 0 and 'blocked_flag' in line and calls == []
-    assert legacy.read_text() == 'legacy-paused' and not opts['flag'].exists()
-    legacy.unlink()
-    opts['session'].unlink()
-    rc, line = ig.collect(conn, handles(), boom, **opts)
-    assert rc == 0 and 'missing_session' in line and calls == []
-    opts['session'].write_text('synthetic-session')
-    clock.time = clock.time.replace(hour=6, minute=44)
-    assert 'outside_window' in ig.collect(conn, handles(), boom, **opts)[1] and calls == []
-    clock.time = clock.time.replace(hour=8, minute=0)
-    assert 'outside_window' in ig.collect(conn, handles(), boom, **opts)[1] and calls == []
-    clock.time = clock.time.replace(hour=9, minute=30)
-    assert 'blackout' in ig.collect(conn, handles(), boom, **opts)[1] and calls == []
-    clock.time = clock.time.replace(hour=7, minute=0)
-    rc, line = ig.collect(conn, handles(), lambda g: Backend(g, calls), **opts)
-    assert rc == 0 and line.startswith('IG_OK') and calls
-    assert ig.LOGIN == 'kitchen.genome' and 'agamajung' not in Path(ig.__file__).read_text()
-
-
-def test_private_profile_no_captions(world):
-    conn, clock, calls, opts = world
-    ig.collect(conn, handles(), lambda g: Backend(g,calls,private=True), **opts)
-    assert [k for k,_ in calls] == ['login','session_validate','profile']
+    ig.collect(conn, handles(), lambda g: Backend(g, calls, private=True), **opts)
+    assert calls == ['session_validate', 'profile:brand0']
     assert conn.execute('SELECT COUNT(*) FROM review_queue').fetchone()[0] == 0
+    opts['session'].unlink()
+    assert 'missing_session' in ig.collect(conn, handles(), lambda g: pytest.fail('contact without session'), **opts)[1]
 
 
-def test_guard_rechecks_window_after_sleep_and_http_429(world):
-    conn, clock, calls, opts = world
-    guard = ig.Guard(conn, opts['flag'], clock.now, clock.sleep)
-    guard.dispatch(lambda: None)
-    clock.time = clock.time.replace(hour=7,minute=59,second=59)
-    conn.execute('UPDATE ig_account_state SET last_dispatch=?', (clock.time.timestamp(),)); conn.commit()
-    with pytest.raises(ig.Skip): guard.dispatch(lambda: pytest.fail('dispatch after window'))
-    clock.time = clock.time.replace(hour=7,minute=0,second=0)
-    conn.execute('UPDATE ig_account_state SET last_dispatch=NULL'); conn.commit()
-    with pytest.raises(ig.Stop, match='http_429'):
-        guard.dispatch(lambda: SimpleNamespace(status_code=429,text='sensitive body'))
-    with pytest.raises(ig.Stop): guard.dispatch(lambda: pytest.fail('request after block'))
-    assert 'sensitive body' not in opts['flag'].read_text()
+def test_dedicated_module_never_imports_legacy_crawler():
+    import ast
+    statements = ast.walk(ast.parse(Path(ig.__file__).read_text()))
+    for node in statements:
+        if isinstance(node, ast.ImportFrom):
+            assert node.module != 'instagram'
+        if isinstance(node, ast.Import):
+            assert all(name.name != 'instagram' for name in node.names)
 
 
 def test_deepseek_ig_json_is_metered_filtered_and_pending(world):
@@ -216,7 +194,8 @@ def test_real_backend_guards_temporary_sessions_and_rejects_wrong_identity(world
     conn, clock, calls, opts = world
     import requests
     def send(session, request, **kwargs):
-        calls.append((request.url,clock.now().timestamp()))
+        calls.append((request.url, clock.now().timestamp()))
+        assert request.headers['User-Agent'] == ig.UA and kwargs['allow_redirects'] is False
         return SimpleNamespace(status_code=200,text='{}')
     monkeypatch.setattr(requests.sessions.Session,'send',send)
     original = requests.sessions.Session.send
@@ -234,7 +213,7 @@ def test_real_backend_guards_temporary_sessions_and_rejects_wrong_identity(world
     monkeypatch.setitem(sys.modules,'instaloader',SimpleNamespace(Instaloader=Loader,RateController=RC))
     before = opts['session'].read_text()
     rc,line=ig.collect(conn,handles(),ig.LoaderBackend,**opts)
-    assert rc==2 and 'invalid_session_identity' in line
+    assert rc==2 and 'invalid_session' in line
     assert len(calls)==1 and 'accounts/login' not in calls[0][0]
     assert requests.sessions.Session.send is original
     assert opts['session'].read_text()==before

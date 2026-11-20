@@ -4,7 +4,7 @@ Enforces:
 - daily_candidate_url_limit = 500
 - daily_content_fetch_limit = 200
 - per_domain_concurrency = 1
-- min_delay_sec = 5.0 (or site robots.txt Crawl-delay if slower)
+- Korean press minimum gap 5s (or a longer robots Crawl-delay)
 - max_link_depth = 2
 - trapped_url_patterns (calendar, pagination, search/sort combinations blocked)
 - recheck_priority (closure, relocation, rename, price prioritized ahead of new discovery)
@@ -13,6 +13,7 @@ Enforces:
 """
 import json
 import os
+import sys
 import time
 import urllib.parse
 import urllib.robotparser
@@ -53,12 +54,13 @@ def is_trapped_url(url: str, config: dict | None = None) -> bool:
 
 
 def effective_domain_delay(url: str, config: dict | None = None, robots_crawl_delay: float | None = None) -> float:
-    """Return at least min_delay_sec (5.0s), or robots.txt Crawl-delay if slower."""
+    """Expose the shared Korean press spacing policy to legacy queue tooling."""
+    sys.path.insert(0, os.path.join(os.path.dirname(H), 'daemon'))
+    from kg_collect.net import PoliteNet, host_of
+
     cfg = config or load_config()
-    base = float(cfg.get('min_delay_sec', 5.0))
-    if robots_crawl_delay is not None and float(robots_crawl_delay) > base:
-        return float(robots_crawl_delay)
-    return base
+    net = PoliteNet(min_delay=float(cfg.get('min_delay_sec', 5)))
+    return max(net.min_delay, robots_crawl_delay or 0) if net.korean_press(host_of(url)) else 0.0
 
 
 def sort_queue_with_recheck_priority(queue_items: list[dict], config: dict | None = None) -> list[dict]:

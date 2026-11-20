@@ -1,7 +1,7 @@
 """Source evaluator: trial-fetch a NEW domain, score it, promote or deprioritise, and grow the registry.
 Scores (0-1): relevance (does it talk about our targets/food-industry facts), novelty (is the information new vs what we already hold),
 extractability (do our rules get labelled facts out of it), originality (original vs repost/syndication), permission (robots, login, ToS list).
-Permission 0 => blocked, never promoted regardless of the rest."""
+An excluded host is blocked. Korean press robots permission contributes to its source score."""
 import json
 import os
 import re
@@ -99,16 +99,14 @@ def score_host(conn, host: str, net: PoliteNet, raw_store, gaz: Gazetteer, offic
             and not any((r['fetched_at'] or '') > prof['evaluated_at'] for r in recs)):
         return dict(prof)
     oks = [r for r in recs if r['outcome'] == 'ok']
-    login = any(r['outcome'] == 'fail_login_page' for r in recs)
     perm, robots = 1.0, None
-    if is_banned(f'https://{host}/') or any(r['outcome'] in ('fail_banned',) for r in recs):
+    banned = is_banned(f'https://{host}/')
+    if banned:
         perm = 0.0
     else:
         info = net.robots_info(f'https://{host}/')
         robots = info['allowed']
         perm = 0.0 if not info['allowed'] else (0.5 if (info['crawl_delay'] or 0) > 30 else 1.0)
-    if login:
-        perm = 0.0
     n = len(oks)
     rel = ext = rep = 0
     types = []
@@ -125,8 +123,10 @@ def score_host(conn, host: str, net: PoliteNet, raw_store, gaz: Gazetteer, offic
               'originality': 1 - rep / n if n else 0.0, 'permission': perm}
     total = sum(W[k] * v for k, v in scores.items())
     tried = len(recs)
-    if perm == 0:
-        state, reason = 'blocked', 'permission=0 (banned host, robots disallow, or login wall)'
+    if banned:
+        state, reason = 'blocked', 'banned host'
+    elif perm == 0:
+        state, reason = 'deprioritized', 'Korean press robots permission unavailable or disallowed'
     elif n < MIN_TRIAL_OK and tried >= TRIAL_SAMPLE:
         state, reason = 'deprioritized', f'only {n}/{tried} trial fetches usable'
     elif tried >= 2 * TRIAL_SAMPLE and not (n >= MIN_TRIAL_OK and total >= PROMOTE_AT and ext >= 1):

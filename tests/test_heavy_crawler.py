@@ -1,8 +1,6 @@
-"""Heavy collector: zecbot SOCKS egress only (no direct fallback), block hard-stop, caps, politeness, traffic log, 07:00 hand-off."""
-import http.server
+"""Heavy collector: shared access policy and zecbot fallback, block hard-stop, caps, politeness, traffic log, 07:00 hand-off."""
 import json
 import os
-import socket
 import sys
 import threading
 import time
@@ -22,7 +20,7 @@ ROBOTS_OK = b'User-agent: *\nDisallow: /private\n'
 def _cfg(**caps):
     cfg = heavy.load_cfg()
     cfg['search'] = [{'id': 't', 'endpoint': 'https://search.test/rss?q={q}', 'revisit_hours': 24}]
-    cfg['feeds'] = [{'url': 'https://press.test/rss.xml', 'revisit_hours': 6}]
+    cfg['feeds'] = [{'url': 'https://press.test/rss.xml', 'revisit_hours': 6, 'country': 'KR'}]
     cfg['guides'] = []
     cfg['query_modifiers'] = {'chef': ['셰프'], 'restaurant': ['오픈'], 'general': []}
     cfg['caps'].update(caps)
@@ -76,7 +74,7 @@ def world(tmp_path):
     return conn, tmp_path, clock, sleep, t
 
 
-def _crawler(world, routes, egress=(True, '49.50.131.207'), **caps):
+def _crawler(world, routes, egress=(True, 'exit_ip_match'), **caps):
     conn, tmp, clock, sleep, t = world
     web = FakeWeb(routes, clock)
     hc = heavy.HeavyCrawler(str(tmp / 'q.db'), conn, cfg=_cfg(**caps), transport=web, clock=clock, sleep=sleep, egress=lambda: egress, data_dir=str(tmp))
@@ -125,82 +123,11 @@ def test_revisit_sends_conditional_get_and_counts_304(world):
     assert feed_calls and feed_calls[0].get('If-None-Match') == '"v1"' and rep['stats']['not_modified'] >= 1
 
 
-def test_proxy_down_skips_without_any_request(world):
-    hc, web = _crawler(world, default_routes, egress=(False, 'proxy_down'))
-    rep = hc.run(world[2]() + 3600)
-    assert rep['outcome'] == 'skipped' and rep['reason'] == 'proxy_down' and web.calls == []
-
-
-@pytest.mark.parametrize('reason', ['exit_ip_unknown', 'proxy_down'])
-@pytest.mark.parametrize('failures', [1, 3])
-def test_startup_egress_recovers_and_crawls(world, reason, failures):
-    conn, tmp, clock, sleep, t = world
-    hc, web = _crawler(world, default_routes)
-    started, checks = clock(), []
-
-    def egress():
-        checks.append((clock(), len(web.calls)))
-        return (False, reason) if len(checks) <= failures else (True, proxynet.EXPECTED_EXIT_IP)
-
-    hc.egress = egress
-    rep = hc.run(started + 3 * 3600)
-    assert rep['outcome'] == 'stopped' and rep['stats']['content_handoff'] > 0
-    assert rep['egress_retries'] == failures and rep['egress'] == proxynet.EXPECTED_EXIT_IP
-    assert checks == [(started + i * 600, 0) for i in range(failures + 1)]
-    assert min(web.times) >= started + failures * 600
-    assert json.loads((tmp / 'crawl_traffic.jsonl').read_text().splitlines()[-1])['egress_retries'] == failures
-
-
-@pytest.mark.parametrize('duration, retries', [(1800, 0), (1801, 1), (3600, 3), (10800, 15)])
-@pytest.mark.parametrize('reason', ['exit_ip_unknown', 'proxy_down'])
-def test_startup_egress_stays_down_until_retry_cutoff(world, duration, retries, reason):
-    hc, web = _crawler(world, default_routes)
-    clock = world[2]
-    started, checks = clock(), []
-
-    def egress():
-        checks.append(clock())
-        return False, reason
-
-    hc.egress = egress
-    rep = hc.run(started + duration)
-    assert rep['outcome'] == 'skipped' and rep['reason'] == reason
-    assert rep['egress_retries'] == retries and web.calls == []
-    assert checks == [started + i * 600 for i in range(retries + 1)]
-    assert clock() == started + retries * 600
-
-
-@pytest.mark.parametrize('unknown_first', [False, True])
-def test_egress_mismatch_skips_immediately(world, unknown_first):
-    reason = 'exit_ip_mismatch:192.0.2.1'
-    hc, web = _crawler(world, default_routes)
-    clock = world[2]
-    started, checks = clock(), []
-
-    def egress():
-        checks.append(clock())
-        return (False, 'exit_ip_unknown') if unknown_first and len(checks) == 1 else (False, reason)
-
-    hc.egress = egress
-    rep = hc.run(started + 3 * 3600)
-    retries = int(unknown_first)
-    assert rep['outcome'] == 'skipped' and rep['reason'] == reason and web.calls == []
-    assert rep['egress_retries'] == retries
-    assert checks == [started + i * 600 for i in range(retries + 1)]
-    assert clock() == started + retries * 600
-
-
-@pytest.mark.parametrize('failures, reason, retries, outcome', [
-    (1, 'exit_ip_unknown', 1, 'stopped'),
-    (2, 'exit_ip_unknown', 2, 'stopped'),
-    (3, 'exit_ip_unknown', 2, 'halted'),
-    (1, 'proxy_down', 0, 'halted'),
-    (1, 'exit_ip_mismatch:192.0.2.1', 0, 'halted'),
-])
-def test_periodic_egress_retries_only_unknown(world, failures, reason, retries, outcome):
+@pytest.mark.parametrize('reason', ['exit_ip_unknown', 'exit_ip_mismatch'])
+def test_ip_advisory_neither_skips_nor_halts(world, reason):
     hc, web = _crawler(world, default_routes, max_concurrency=1)
     clock, sleep = world[2:4]
-    started, checks = clock(), []
+    checks = []
     handle = hc.handle
 
     def advance_after_first_result(result):
@@ -210,29 +137,43 @@ def test_periodic_egress_retries_only_unknown(world, failures, reason, retries, 
 
     def egress():
         checks.append(clock())
-        return (False, reason) if 1 < len(checks) <= failures + 1 else (True, proxynet.EXPECTED_EXIT_IP)
+        return True, reason
 
-    hc.handle, hc.egress = advance_after_first_result, egress
-    rep = hc.run(started + 3 * 3600)
-    assert rep['outcome'] == outcome and rep['egress_retries'] == retries
-    assert len(checks) == 2 + retries
-    assert checks[1] - started > 900
-    assert checks[1:] == [checks[1] + i * 30 for i in range(retries + 1)]
-    if outcome == 'halted':
-        assert rep['reason'] == reason
-        assert max(web.times) < checks[1]
-    else:
-        assert rep['stats']['content_handoff'] > 0 and max(web.times) >= checks[-1]
+    hc.egress, hc.handle = egress, advance_after_first_result
+    started = clock()
+    rep = hc.run(started + 3600)
+    assert rep['outcome'] == 'stopped' and rep['stats']['content_handoff'] > 0
+    assert rep['egress_reason'] == reason and checks == [started]
+    assert max(web.times) > started + 900
 
 
-def test_tunnel_lost_mid_run_halts(world):
-    def routes(url, headers):
-        if 'press.test' in url and not url.endswith('robots.txt'):
-            raise proxynet.ProxyDown('connect:ConnectionRefusedError')
-        return default_routes(url, headers)
-    hc, web = _crawler(world, routes)
-    rep = hc.run(world[2]() + 3600)
-    assert rep['outcome'] == 'halted' and rep['reason'] == 'proxy_lost'
+@pytest.mark.parametrize('outage_at_start', [True, False])
+def test_heavy_uses_box_for_confirmed_outage(world, monkeypatch, outage_at_start):
+    conn, tmp, clock, sleep, _ = world
+    calls = []
+    healthy = not outage_at_start
+    monkeypatch.setattr(proxynet, 'proxy_alive', lambda: healthy)
+    monkeypatch.setattr(proxynet, '_public_ip', lambda *_: '8.8.8.8')
+
+    def send(p, host, port, address, headers, timeout, cap, text, traffic, *, via_proxy, method):
+        nonlocal healthy
+        url = p.geturl()
+        calls.append((url, via_proxy))
+        if via_proxy and host == 'api.ipify.org':
+            return 200, {'content-type': 'application/json'}, b'{"ip":"203.0.113.1"}', None
+        if via_proxy and host == 'press.test':
+            healthy = False
+            raise proxynet.ProxyDown('socks_greeting_failed')
+        return default_routes(url, headers) or (404, {}, b'', None)
+
+    monkeypatch.setattr(proxynet, '_send', send)
+    hc = heavy.HeavyCrawler(str(tmp / 'q.db'), conn, cfg=_cfg(max_concurrency=1), clock=clock, sleep=sleep)
+    rep = hc.run(clock() + 3600)
+    assert rep['outcome'] == 'stopped' and rep['stats']['content_handoff'] > 0
+    assert rep['egress'] == 'box' and rep['egress_reason'] == 'tunnel_down'
+    relevant = [via for url, via in calls if url.startswith('https://press.test/')]
+    assert relevant and relevant[-1] is False
+    assert sum(relevant) == (0 if outage_at_start else 1)
 
 
 def test_block_end_and_caps(world):
@@ -260,126 +201,91 @@ def test_blocked_domain_is_paused_not_bypassed(world):
     hc, web = _crawler(world, routes)
     hc.run(world[2]() + 3600)
     n = sum(1 for u, _ in web.calls if u.startswith('https://search.test/rss'))
-    assert n == 1 and hc.host_paused('search.test')
+    assert n == 1
+    row = world[0].execute('SELECT host,reason FROM web_run_block WHERE host=?', ('search.test',)).fetchone()
+    assert tuple(row) == ('search.test', 'http_403')
 
 
 def test_excluded_hosts_never_enter_the_frontier(world):
     hc, web = _crawler(world, default_routes)
-    for u in ('http://127.0.0.1:8080/x', 'http://localhost/a', 'http://10.0.0.5/a', 'http://[::1/x', 'https://www.instagram.com/x', 'https://guide.michelin.com/kr/ko', 'https://a.test/file.pdf', 'https://a.test/v.mp4'):
+    for u in ('http://127.0.0.1:8080/x', 'http://localhost/a', 'http://10.0.0.5/a', 'http://[::1/x', 'https://www.instagram.com/x', 'https://bluer.co.kr/a', 'https://a.test/file.pdf', 'https://a.test/v.mp4'):
         assert not hc.add(u, 'article', 1, 0.9)
 
 
-# ── proxynet: no leak to the box IP ──
-@pytest.mark.parametrize('responses, expected', [
-    ([(200, b'{"ip":"49.50.131.207"}')], '49.50.131.207'),
-    ([(0, b''), (200, b'{"ip":"2001:db8::1"}')], '2001:db8::1'),
-    ([(200, b'not json'), (200, b'{"ip":"invalid"}'), (200, b' 49.50.131.207\n')], '49.50.131.207'),
-    ([(503, b''), (200, b'{}'), (200, b'2001:db8::1\n')], '2001:db8::1'),
-    ([(0, b''), (503, b''), (500, b'')], None),
-    ([(200, b'[]'), (200, b'{"ip":1234}'), (200, b'not an IP')], None),
-    ([(200, b'{"ip":null}'), (200, b'\xff'), (200, b'')], None),
+    assert hc.add('https://guide.michelin.com/kr/ko', 'article', 1, 0.9)
+
+
+@pytest.mark.parametrize('status,headers,body', [
+    (403, {}, b'forbidden'), (429, {}, b'slow down'), (503, {'retry-after': '30'}, b''),
+    (200, {'content-type': 'text/html'}, b'<h1>Checking your browser</h1>'), (0, {}, b''),
 ])
-def test_exit_ip_uses_validated_proxied_fallbacks_in_order(monkeypatch, responses, expected):
-    urls = ['https://api.ipify.org?format=json', 'https://api64.ipify.org?format=json', 'https://icanhazip.com']
-    calls = []
+def test_origin_refusal_or_ambiguous_timeout_never_falls_back(monkeypatch, status, headers, body):
+    route = proxynet.Route()
+    checks, calls = [], []
+    monkeypatch.setattr(proxynet, '_public_ip', lambda *_: '8.8.8.8')
+    monkeypatch.setattr(proxynet, 'proxy_alive', lambda: not checks.append(True))
 
-    def request(url, headers, timeout, text_only):
-        calls.append(url)
-        assert headers['User-Agent'] == 'KitchenGenomeBot/1.0' and timeout == 7 and text_only
-        status, body = responses[len(calls) - 1]
-        return status, {}, body, 'network_error' if status == 0 else None
+    def send(*args, via_proxy, **kwargs):
+        calls.append(via_proxy)
+        return status, headers, body, 'TimeoutError' if not status else None
 
-    monkeypatch.setattr(proxynet, 'request', request)
-    assert proxynet.exit_ip(timeout=7) == expected
-    assert calls == urls[:len(responses)]
+    monkeypatch.setattr(proxynet, '_send', send)
+    def transport(url, headers, timeout):
+        code, headers, body, err = route.request(url, headers)
+        return net.Response(url, code, headers, body, error=err)
 
-
-@pytest.mark.parametrize('down_at', [0, 1, 2])
-def test_exit_ip_proxy_down_stops_fallbacks(monkeypatch, down_at):
-    calls = []
-
-    def request(url, *args, **kwargs):
-        calls.append(url)
-        if len(calls) == down_at + 1:
-            raise proxynet.ProxyDown('connect:ConnectionRefusedError')
-        return 0, {}, b'', 'network_error'
-
-    monkeypatch.setattr(proxynet, 'request', request)
-    assert proxynet.exit_ip() is None
-    assert len(calls) == down_at + 1
+    client = net.PoliteNet(transport)
+    assert client.get('https://refusal.test/a').status == status
+    if status:
+        assert client.get('https://www.refusal.test/b').blocked
+    assert calls == [True] and checks == [True] and route.name == 'zecbot'
 
 
-def test_wrong_proxy_port_raises_and_never_connects_direct(monkeypatch):
-    monkeypatch.setenv('KG_WEB_PROXY', 'socks5h://127.0.0.1:1')
-    seen = []
-    real = socket.create_connection
-
-    def spy(addr, *a, **k):
-        seen.append(addr)
-        return real(addr, *a, **k)
-    monkeypatch.setattr(socket, 'create_connection', spy)
-    with pytest.raises(proxynet.ProxyDown):
-        proxynet.request('https://example.com/', {'User-Agent': 'x'}, timeout=3)
-    assert seen == [('127.0.0.1', 1)]                                    # only the proxy was dialled
-    r = net.default_transport('https://example.com/', {'User-Agent': 'x'}, 3)
-    assert r.status == 0 and r.error == 'proxy_down'
-    assert all(a == ('127.0.0.1', 1) for a in seen)
-    assert proxynet.egress_ok() == (False, 'proxy_down')
-
-
-def test_loopback_fixture_servers_stay_local(monkeypatch):
-    monkeypatch.setenv('KG_WEB_PROXY', 'socks5h://127.0.0.1:1')
-
-    class H(http.server.BaseHTTPRequestHandler):
-        def do_GET(self):
-            self.send_response(200)
-            self.send_header('Content-Type', 'text/plain')
-            self.end_headers()
-            self.wfile.write(b'ok')
-
-        def log_message(self, *a):
-            pass
-    srv = http.server.HTTPServer(('127.0.0.1', 0), H)
-    threading.Thread(target=srv.serve_forever, daemon=True).start()
-    try:
-        st, _, body, _ = proxynet.request(f'http://127.0.0.1:{srv.server_port}/x', {}, timeout=3)
-        assert st == 200 and body == b'ok'
-    finally:
-        srv.shutdown()
+def test_local_handshake_failure_needs_confirmation(monkeypatch):
+    route = proxynet.Route()
+    checks, calls = [], []
+    monkeypatch.setattr(proxynet, 'proxy_alive', lambda: not checks.append(True))
+    monkeypatch.setattr(proxynet, '_public_ip', lambda *_: '8.8.8.8')
+    def send(*args, via_proxy, **kwargs):
+        calls.append(via_proxy)
+        raise proxynet.ProxyDown('socks_greeting_failed')
+    monkeypatch.setattr(proxynet, '_send', send)
+    assert route.request('https://example.test/a')[3] == 'proxy_failure'
+    assert calls == [True] and checks == [True, True]
 
 
 def test_size_and_type_guards(monkeypatch):
-    class H(http.server.BaseHTTPRequestHandler):
-        def do_GET(self):
-            self.send_response(200)
-            if self.path == '/img':
-                self.send_header('Content-Type', 'image/jpeg')
-                self.send_header('Content-Length', '10')
-                self.end_headers()
-                self.wfile.write(b'0123456789')
-            else:
-                self.send_header('Content-Type', 'text/html')
-                self.send_header('Content-Length', str(5_000_000))
-                self.end_headers()
-                try:
-                    self.wfile.write(b'a' * 100)
-                except OSError:
-                    pass
+    class Reply:
+        status = 200
 
-        def log_message(self, *a):
+        def __init__(self, media, length):
+            self.headers = {'Content-Type': media, 'Content-Length': str(length)}
+
+        def getheaders(self):
+            return list(self.headers.items())
+
+        def read(self, size):
+            pytest.fail('unexpected download')
+
+    class Connection:
+        def request(self, method, path, headers):
+            self.path = path
+            assert headers['User-Agent'] == net.UA
+
+        def getresponse(self):
+            return Reply('image/jpeg', 10) if self.path == '/img' else Reply('text/html', proxynet.MAX_WIRE + 1)
+
+        def close(self):
             pass
-    srv = http.server.HTTPServer(('127.0.0.1', 0), H)
-    threading.Thread(target=srv.serve_forever, daemon=True).start()
-    tr = proxynet.Traffic()
-    try:
-        st, _, body, err = proxynet.request(f'http://127.0.0.1:{srv.server_port}/img', {}, timeout=3, traffic=tr)
-        assert body == b'' and err.startswith('skipped_type')
-        st, _, body, err = proxynet.request(f'http://127.0.0.1:{srv.server_port}/big', {}, timeout=3, traffic=tr)
-        assert body == b'' and err.startswith('skipped_large')
-        assert proxynet.request('https://x.test/a.jpg', {}, traffic=tr)[3] == 'skipped_binary_ext'
-        assert tr.snapshot()['skipped_large'] == 1 and tr.snapshot()['skipped_type'] == 2
-    finally:
-        srv.shutdown()
+
+    monkeypatch.setattr(proxynet, '_connection', lambda *_: Connection())
+    monkeypatch.setattr(proxynet, 'proxy_alive', lambda: False)
+    monkeypatch.setattr(proxynet, '_public_ip', lambda *_: '8.8.8.8')
+    route, traffic = proxynet.Route(), proxynet.Traffic()
+    assert route.request('https://venue.test/img', traffic=traffic)[3] == 'skipped_type:image/jpeg'
+    assert route.request('https://venue.test/big', traffic=traffic)[3].startswith('skipped_large:')
+    assert route.request('https://venue.test/a.jpg', traffic=traffic)[3] == 'skipped_binary_ext'
+    assert traffic.snapshot()['skipped_large'] == 1 and traffic.snapshot()['skipped_type'] == 2
 
 
 def test_extract_order_prefers_heavy_priority(world):
@@ -406,14 +312,14 @@ def test_robots_unreachable_is_not_cached_and_url_retries_later(world):
     assert not any(u.startswith('https://press.test/') and not u.endswith('robots.txt') for u, _ in web.calls)
     row = hc.q.execute("SELECT state, error FROM frontier WHERE url='https://press.test/rss.xml'").fetchone()
     assert row['state'] == 'queued' and row['error'].startswith('robots_unavailable')
-    assert hc.q.execute("SELECT 1 FROM host_state WHERE host='https://press.test' AND robots_at IS NOT NULL").fetchone() is None
+    assert world[0].execute("SELECT 1 FROM web_robots_cache WHERE origin='https://press.test'").fetchone() is None
 
 
 def test_caps_cannot_be_loosened_by_yaml():
     cfg = heavy.load_cfg()
     for k, v in heavy.CEIL.items():
         assert cfg['caps'][k] <= v
-    assert cfg['caps']['max_concurrency'] <= 6 and cfg['caps']['per_domain_delay_sec'] >= 5 and cfg['caps']['max_depth'] <= 3
+    assert cfg['caps']['max_concurrency'] <= 6 and cfg['caps']['max_depth'] <= 3
 
 
 def test_crash_still_writes_traffic_log(world):

@@ -1,17 +1,14 @@
-"""Heavy continuous web collector (owner order 2026-11-11 10:33 KST).
+"""Resumable HTTP collection within the existing heavy-crawl time blocks.
 
-Runs in time blocks (00:00-03:00, 11:00-14:00 KST; 22:00-24:00 only when the backlog is large), resumes a SQLite frontier across
-runs and hard-stops at the end of its block. HTTP only (no browser), <= 6 requests in flight, one request per domain at a time with a
-5 s gap (or the longer robots Crawl-delay), robots.txt obeyed, a domain that answers 403/429/503/challenge is left alone (no bypass).
-
-Egress: every request goes through the zecbot SOCKS tunnel (proxynet). The run starts only when the tunnel answers AND the exit IP is
-zecbot's; if the tunnel is lost mid-run the run stops. There is no direct fallback.
+Korean press uses robots.txt and at least five seconds between requests. All hosts
+are serialized and access refusals stop the host for the run. Egress uses zecbot
+when healthy and falls back to the box on a confirmed local tunnel failure.
 
 Output: pages that mention a registered active chef/restaurant are handed to the 07:00 pipeline as ordinary fetch_record rows
 (raw store + fetch_priority score). The 07:00 extract stage reads the highest scores first, so the fixed DeepSeek budget (cap 20)
 goes to the most promising pages. This module never calls DeepSeek, never commits, merges or deploys."""
 import argparse
-import ipaddress
+import contextlib
 import concurrent.futures as cf
 import datetime as dt
 import json
@@ -22,7 +19,6 @@ import sqlite3
 import sys
 import time
 import urllib.parse
-import urllib.robotparser
 import uuid
 from zoneinfo import ZoneInfo
 
@@ -32,9 +28,9 @@ from kg_daemon.db import DEFAULT_DB, ROOT, connect, migrate, stable_id, utcnow
 
 from . import EXTRACTOR_VERSION, FETCHER_VERSION, proxynet
 from .discover import FOOD_CUE, item_relevance
-from .fetch import MIN_TEXT_CHARS, canonicalize_url, parse_feed
+from .fetch import MIN_TEXT_CHARS, canonicalize_url, parse_feed, unreadable_js_shell
 from .htmlx import parse_html
-from .net import BANNED, CHALLENGE_HINTS, TRAP, UA, host_of, looks_like_login, to_uri
+from .net import PoliteNet, Response, TRAP, host_of, is_banned, matches_domain, to_uri, valid_destination
 from .rawstore import RawStore
 from .targets import Gazetteer, eligibility
 
@@ -42,9 +38,8 @@ KST = ZoneInfo('Asia/Seoul')
 SOURCES_PATH = os.path.join(ROOT, 'sources', 'heavy_sources.yaml')
 HEAVY_FETCHER = FETCHER_VERSION + '+heavy1'
 REVISIT_KINDS = ('search', 'feed', 'guide')
-HARD = {'max_concurrency': 6, 'per_domain_delay_sec': 5, 'max_depth': 3}      # ceilings the yaml cannot loosen
+HARD = {'max_concurrency': 6, 'max_depth': 3}      # ceilings the yaml cannot loosen
 CEIL = {'daily_candidates': 5000, 'daily_content': 1500, 'daily_requests': 8000, 'daily_bytes': 500_000_000, 'monthly_bytes': 15_000_000_000}
-MAX_CRAWL_DELAY = 60                                                         # a robots Crawl-delay longer than this: host is skipped
 
 SCHEMA = """
 CREATE TABLE IF NOT EXISTS frontier(
@@ -70,7 +65,6 @@ def load_cfg(path=SOURCES_PATH) -> dict:
     cfg = yaml.safe_load(open(path, encoding='utf-8'))
     caps = cfg['caps']
     caps['max_concurrency'] = max(1, min(HARD['max_concurrency'], int(caps.get('max_concurrency', 6))))
-    caps['per_domain_delay_sec'] = max(HARD['per_domain_delay_sec'], float(caps.get('per_domain_delay_sec', 5)))
     caps['max_depth'] = min(HARD['max_depth'], int(caps.get('max_depth', 3)))
     for k, v in CEIL.items():
         caps[k] = min(v, int(caps.get(k, v)))
@@ -88,27 +82,8 @@ def deadline_for(until: str, clock=time.time) -> float:
     return end.timestamp() if (end - now) <= dt.timedelta(hours=4) else 0.0
 
 
-def _private_host(h: str) -> bool:
-    h = (h or '').split(':')[0].strip('[]')
-    if h in ('localhost', '') or h.endswith('.local') or h.endswith('.internal'):
-        return True
-    try:
-        ip = ipaddress.ip_address(h)
-    except ValueError:
-        return False
-    return ip.is_private or ip.is_loopback or ip.is_link_local or ip.is_reserved or ip.is_multicast
-
-
 def excluded(url: str, cfg) -> bool:
-    try:
-        h = host_of(url)
-        urllib.parse.urlsplit(url).port
-    except ValueError:
-        return True
-    if _private_host(h):
-        return True                                   # never fetch box-local / private addresses (redirect or link)
-    ex = tuple(cfg.get('exclude_hosts') or ())
-    if any(h == b or h.endswith('.' + b) for b in ex) or any(h == b or h.endswith('.' + b) or b in h for b in BANNED):
+    if not valid_destination(url) or is_banned(url) or matches_domain(host_of(url), cfg.get('exclude_hosts', ())):
         return True
     low = url.lower()
     path = urllib.parse.urlsplit(low).path
@@ -131,13 +106,13 @@ class HeavyCrawler:
         self.svc = service_conn
         self.clock, self.sleep = clock, sleep
         self.traffic = traffic or proxynet.Traffic()
-        self.transport = transport or (lambda url, headers, timeout: proxynet.request(url, headers, timeout=timeout, traffic=self.traffic))
-        self.egress = egress or proxynet.egress_ok
+        self.transport = transport
+        self.egress = egress
+        self.service_db = service_conn.execute('PRAGMA database_list').fetchone()[2]
         self.data_dir = data_dir or os.path.dirname(os.path.abspath(queue_path))
         self.raw = RawStore(os.path.join(self.data_dir, 'raw'))
         self.log_path = log_path or os.path.join(self.data_dir, 'crawl_traffic.jsonl')
         self.gaz = Gazetteer(service_conn)
-        self.robots: dict = {}
         self.stats = {'requests': 0, 'robots_requests': 0, 'ok_pages': 0, 'items_seen': 0, 'candidates_new': 0, 'content_handoff': 0,
                       'unchanged': 0, 'not_modified': 0, 'blocked_hosts': 0, 'robots_denied': 0, 'errors': 0, 'skipped_size_or_type': 0}
 
@@ -229,79 +204,28 @@ class HeavyCrawler:
     def backlog(self) -> int:
         return self.q.execute("SELECT COUNT(*) FROM frontier WHERE state='queued' AND next_due<=?", (self.clock(),)).fetchone()[0]
 
-    # ── hosts ──
-    def host_paused(self, host) -> bool:
-        r = self.q.execute('SELECT paused_until FROM host_state WHERE host=?', (host,)).fetchone()
-        return bool(r and r['paused_until'] and r['paused_until'] > self.clock())
+    def _net(self, conn, **options):
+        def transport(url, headers, timeout):
+            send = self.transport or (lambda url, headers, timeout: self.route.request(url, headers, timeout=timeout, traffic=self.traffic))
+            status, headers, body, error = send(url, headers, timeout)
+            return Response(url, status, headers, body, error=error)
 
-    def pause_host(self, host, reason):
-        until = self.clock() + 86400 * float(self.caps.get('block_pause_days', 7))
-        self.q.execute('INSERT INTO host_state(host,paused_until,reason) VALUES (?,?,?) ON CONFLICT(host) DO UPDATE SET paused_until=excluded.paused_until, reason=excluded.reason',
-                       (host, until, reason))
-        self.stats['blocked_hosts'] += 1
+        return PoliteNet(transport, self.sleep, self.clock, conn=conn, count_limits=False,
+                         extra_banned=self.cfg.get('exclude_hosts', ()),
+                         korean_press_hosts=(host_of(f['url']) for f in self.cfg.get('feeds', ()) if f.get('country') == 'KR'),
+                         **options)
 
-    def _robots_cached(self, base):
-        if base in self.robots:
-            return self.robots[base]
-        r = self.q.execute('SELECT robots, robots_status, robots_at FROM host_state WHERE host=?', (base,)).fetchone()
-        if r and r['robots_at'] and self.clock() - r['robots_at'] < 86400:
-            self.robots[base] = self._parse_robots(r['robots_status'], r['robots'] or '')
-            return self.robots[base]
-        return None
-
-    @staticmethod
-    def _parse_robots(status, text):
-        rp = urllib.robotparser.RobotFileParser()
-        if status == 200:
-            rp.parse(text.splitlines())
-        elif status in (401, 403, 429) or status == 0 or (status or 0) >= 500:
-            rp.disallow_all = True                  # forbidden, or unreachable/5xx (RFC 9309 2.3.1.4): do not crawl now
-        else:
-            rp.allow_all = True                     # missing robots.txt (404/410 etc. 4xx) = allowed (RFC 9309)
-        return rp
-
-    # ── worker (thread): robots (if needed) + one GET; no DB access here ──
-    def work(self, task) -> dict:
-        url, base = task['url'], task['base']
-        out = {'task': task, 'robots_fetch': None}
-        try:
-            rp = task.get('rp')
-            if rp is None:
-                st, _, body, err = self.transport(base + '/robots.txt', {'User-Agent': UA}, 20)
-                txt = body.decode('utf-8', 'ignore') if st == 200 else ''
-                out['robots_fetch'] = (st, txt)
-                if st == 0 and err in ('proxy_down',):
-                    raise proxynet.ProxyDown(err)
-                rp = self._parse_robots(st, txt)
-                if st in (403, 429, 503):
-                    out['blocked'] = f'robots_{st}'
-                    return out
-                if st == 0 or st >= 500:
-                    out['robots_unavailable'] = st
-                    return out
-                d = max(self.caps['per_domain_delay_sec'], rp.crawl_delay(UA) or rp.crawl_delay('*') or 0)
-                if d > MAX_CRAWL_DELAY or self.clock() + d + 20 > task.get('stop_at', float('inf')):
-                    out['deferred'] = 'crawl_delay' if d > MAX_CRAWL_DELAY else 'block_end'
-                    return out
-                self.sleep(d)
-            out['delay'] = max(self.caps['per_domain_delay_sec'], rp.crawl_delay(UA) or rp.crawl_delay('*') or 0)
-            if out['delay'] > MAX_CRAWL_DELAY:
-                out['deferred'] = 'crawl_delay'
-                return out
-            if not rp.can_fetch(UA, url):
-                out['robots_denied'] = True
-                return out
-            h = {'User-Agent': UA, 'Accept': 'text/html,application/xhtml+xml,application/rss+xml,application/xml;q=0.9,*/*;q=0.5', 'Accept-Language': 'ko-KR,ko;q=0.9'}
-            if task.get('etag'):
-                h['If-None-Match'] = task['etag']
-            if task.get('last_modified'):
-                h['If-Modified-Since'] = task['last_modified']
-            out['resp'] = self.transport(url, h, 20)
-        except proxynet.ProxyDown as e:
-            out['proxy_down'] = str(e)
-        except Exception as e:  # noqa: BLE001
-            out['resp'] = (0, {}, b'', type(e).__name__)
-        return out
+    def work(self, task):
+        headers = {'Accept': 'text/html,application/xhtml+xml,application/rss+xml,application/xml;q=0.9,*/*;q=0.5',
+                   'Accept-Language': 'ko-KR,ko;q=0.9'}
+        if task['etag']:
+            headers['If-None-Match'] = task['etag']
+        if task['last_modified']:
+            headers['If-Modified-Since'] = task['last_modified']
+        with contextlib.closing(connect(self.service_db)) as conn:
+            net = self._net(conn, run_id=self.access.run_id, deadline=self.stop_at)
+            r = net.get(task['url'], headers)
+        return task, r, net.request_count, net.robots_count
 
     # ── result handling (main thread, single DB writer) ──
     def _finish(self, url, kind, revisit_hours, **cols):
@@ -310,38 +234,28 @@ class HeavyCrawler:
         cols['fetched_at'] = self.clock()
         self.q.execute('UPDATE frontier SET ' + ', '.join(f'{k}=?' for k in cols) + ' WHERE url=?', (*cols.values(), url))
 
-    def handle(self, res) -> str | None:
-        t = res['task']
-        url, host, base = t['url'], t['host'], t['base']
-        if res.get('robots_fetch') is not None:
-            st, txt = res['robots_fetch']
-            self.stats['robots_requests'] += 1
-            self.stats['requests'] += 1
-            self.bump(requests=1)
-            if st and st < 500:                     # transient robots failures are not cached
-                self.q.execute("""INSERT INTO host_state(host,robots,robots_status,robots_at) VALUES (?,?,?,?) ON CONFLICT(host) DO UPDATE SET robots=excluded.robots,
-                                  robots_status=excluded.robots_status, robots_at=excluded.robots_at""", (base, txt[:200_000], st, self.clock()))
-                self.robots[base] = self._parse_robots(st, txt)
-        if res.get('proxy_down'):
-            return 'proxy_lost'
-        if res.get('blocked'):
-            self.pause_host(host, res['blocked'])
-            self._finish(url, t['kind'], t['revisit_hours'], state='queued', next_due=self.clock() + 86400 * float(self.caps.get('block_pause_days', 7)), error=res['blocked'])
-            return None
-        if res.get('robots_unavailable') is not None or res.get('deferred'):
-            why = res.get('deferred') or f"robots_unavailable:{res['robots_unavailable']}"
-            if why == 'block_end':
-                return None                          # stays queued for the next block
-            att = t['attempts'] + 1
-            self._finish(url, 'article', None, state='queued' if att < 3 else 'failed', attempts=att, next_due=self.clock() + 3600 * att, error=why)
-            return None
-        if res.get('robots_denied'):
-            self.stats['robots_denied'] += 1
-            self._finish(url, 'article', None, state='skipped', error='robots')
-            return None
-        st, hd, body, err = res['resp']
-        self.stats['requests'] += 1
-        self.bump(requests=1)
+    def handle(self, res):
+        t, response, requests, robots = res
+        url = t['url']
+        st, hd, body, err = response.status, response.headers, response.body, response.error
+        self.stats['requests'] += requests
+        self.stats['robots_requests'] += robots
+        self.bump(requests=requests)
+        if response.blocked:
+            self.stats['blocked_hosts'] += 1
+            self._finish(url, t['kind'], t['revisit_hours'], state='queued', next_due=self.stop_at,
+                         status=st, error='fail_login_page' if err == 'login_page' else 'fail_blocked')
+            return
+        if err == 'block_end':
+            self._finish(url, t['kind'], t['revisit_hours'], state='queued', next_due=self.stop_at, error=err)
+            return
+        if err in ('robots', 'banned', 'unsafe_destination'):
+            self.stats['robots_denied'] += err == 'robots'
+            self._finish(url, 'article', None, state='skipped', error=err)
+            return
+        if err == 'robots_unavailable':
+            self._finish(url, t['kind'], t['revisit_hours'], state='queued', next_due=self.clock() + 3600, error=err)
+            return
         if err and str(err).startswith(('skipped_', 'truncated')):
             self.stats['skipped_size_or_type'] += 1
             self._finish(url, 'article', None, state='skipped', status=st, error=err)
@@ -350,16 +264,6 @@ class HeavyCrawler:
             self.stats['not_modified'] += 1
             self.bump(not_modified=1)
             self._finish(url, t['kind'], t['revisit_hours'], state='done', status=304, error=None)
-            return None
-        if st in (403, 429, 503) or (st == 200 and self._challenge(hd, body)):
-            self.pause_host(host, f'blocked:{st}')
-            self._finish(url, t['kind'], t['revisit_hours'], state='queued' if t['kind'] in REVISIT_KINDS else 'blocked',
-                         next_due=self.clock() + 86400 * float(self.caps.get('block_pause_days', 7)), status=st, error=f'blocked:{st}')
-            return None
-        if st in (301, 302, 303, 307, 308) and hd.get('location'):
-            loc = urllib.parse.urljoin(url, hd['location'])
-            self.add(loc, t['kind'], t['depth'], t['score'], query=t['query'], target_id=t['target_id'], parent=url, revisit_hours=t['revisit_hours'], count=t['kind'] not in REVISIT_KINDS)
-            self._finish(url, 'article', None, state='done', status=st, error='redirect')
             return None
         if st != 200:
             self.stats['errors'] += 1
@@ -377,18 +281,14 @@ class HeavyCrawler:
             self._finish(url, t['kind'], t['revisit_hours'], state='done', status=200, etag=etag, last_modified=lm)
             return None
         if 'xml' in ctype or 'rss' in ctype or 'atom' in ctype or body.lstrip()[:5] in (b'<?xml', b'<rss ', b'<feed'):
-            self.process_feed(t, body)
+            self.process_feed({**t, 'url': response.final_url}, body)
         elif ctype.startswith('text/html') or ctype in ('application/xhtml+xml', ''):
-            self.process_html(t, body, hd)
+            if not self.process_html({**t, 'url': response.final_url, 'host': host_of(response.final_url)}, body, hd):
+                self._finish(url, t['kind'], t['revisit_hours'], state='queued', next_due=self.clock() + 86400,
+                             error='js_renderer_unavailable')
+                return
         self._finish(url, t['kind'], t['revisit_hours'], state='done', status=200, etag=etag, last_modified=lm, content_hash=h, error=None)
         return None
-
-    @staticmethod
-    def _challenge(hd, body) -> bool:
-        if not (hd.get('content-type') or '').startswith('text/html'):
-            return False
-        t = body[:6000].decode('utf-8', 'ignore').lower()
-        return any(x in t for x in CHALLENGE_HINTS) and len(re.sub(r'<[^>]+>', '', t)) < 1500
 
     def process_feed(self, t, body):
         items = parse_feed(body.decode('utf-8', 'ignore') if isinstance(body, bytes) else body, t['url'])
@@ -415,14 +315,14 @@ class HeavyCrawler:
                 pass
         doc = parse_html(html, t['url'])
         text = doc['text'] or ''
-        if looks_like_login(t['url'], html, len(text)):
-            return
+        if unreadable_js_shell(t['url'], html, text):
+            return False
         if len(text) >= MIN_TEXT_CHARS:
             el = eligibility(self.gaz, f"{doc.get('title') or ''}\n{text}")
             if el['target_ids']:
                 self.handoff(t, html, doc, el)
         if t['depth'] + 1 > self.caps['max_depth'] or not doc['links']:
-            return
+            return True
         cands = []
         for u, anchor, rel in doc['links']:
             if excluded(u, self.cfg) or 'nofollow' in (rel or []):
@@ -436,6 +336,8 @@ class HeavyCrawler:
                 cands.append((s, u))
         for s, u in sorted(cands, reverse=True)[:int(self.caps['max_links_per_page'])]:
             self.add(u, 'article', t['depth'] + 1, s, target_id=t['target_id'], parent=t['url'])
+
+        return True
 
     def handoff(self, t, html, doc, el):
         """Ordinary fetch_record (+raw) for the 07:00 extract stage, with a priority score for the DeepSeek order."""
@@ -470,17 +372,10 @@ class HeavyCrawler:
         for r in rows:
             if len(out) >= limit:
                 break
-            h = r['host']
-            if h in hosts or self.next_ok.get(h, 0) > self.clock():
+            h = host_of(r['url'])
+            if h in hosts or self.access.blocked_response(r['url']):
                 continue
-            if self.host_paused(h):
-                continue
-            p = urllib.parse.urlsplit(r['url'])
-            base = f'{p.scheme}://{p.netloc}'
-            task = dict(r)
-            task['base'] = base
-            task['rp'] = self._robots_cached(base)
-            task['stop_at'] = self.stop_at
+            task = {**r, 'host': h}
             hosts.add(h)
             out.append(task)
         return out
@@ -489,28 +384,26 @@ class HeavyCrawler:
         run_id = 'hv_' + uuid.uuid4().hex[:10]
         started = self.clock()
         self.started = started
-        rep = {'run_id': run_id, 'block': block, 'started_kst': kst_now(self.clock).isoformat(timespec='seconds'), 'egress_retries': 0}
+        rep = {'run_id': run_id, 'block': block, 'started_kst': kst_now(self.clock).isoformat(timespec='seconds'), 'egress': None, 'egress_reason': 'no_dispatch'}
         if deadline <= started + 60:
             return self._end(rep, 'skipped', 'block_over')
-        ok, info = self.egress()
-        while not ok and info in ('exit_ip_unknown', 'proxy_down') and self.clock() + 600 < deadline - 1200:
-            self.sleep(600)
-            rep['egress_retries'] += 1
-            ok, info = self.egress()
-        rep['egress'] = info
-        if not ok:
-            return self._end(rep, 'skipped', info)
         cap = self.cap_reason()
         if cap:
             return self._end(rep, 'skipped', cap)
         rep['seeded'] = self.seed()
         if optional and self.backlog() < int(self.caps.get('backlog_for_optional_block', 800)):
             return self._end(rep, 'skipped', 'backlog_small')
-        self.next_ok: dict = {}
-        self.stop_at = stop_at = deadline - 25                       # leave room for the 20 s request timeout before the hard stop
+        stop_at = deadline - 25
+        self.stop_at = deadline                       # leave room for the 20 s request timeout before the hard stop
+        self.route = proxynet.Route()
+        self.access = self._net(self.svc, deadline=deadline)
+        self.access.start_run(run_id=run_id, expires_at=deadline)
         halt, inflight = None, {}
         try:
-            last_ip_check = self.clock()
+            if self.egress:
+                _, rep['egress_reason'] = self.egress()
+            elif self.transport is None:
+                self.route.egress_ok(probe=lambda url, timeout: self.access.get(url, diagnostic=True, timeout=timeout))
             with cf.ThreadPoolExecutor(max_workers=self.caps['max_concurrency']) as ex:
                 while True:
                     now = self.clock()
@@ -522,19 +415,6 @@ class HeavyCrawler:
                             halt = 'max_requests'
                         elif (c := self.cap_reason()):
                             halt = c
-                        elif now - last_ip_check > 900:
-                            ok, info = self.egress()
-                            for _ in range(2):
-                                if ok or info != 'exit_ip_unknown' or self.clock() + 30 >= stop_at:
-                                    break
-                                self.sleep(30)
-                                rep['egress_retries'] += 1
-                                ok, info = self.egress()
-                            last_ip_check = self.clock()
-                            if not ok:
-                                halt = info
-                            elif self.clock() >= stop_at:
-                                halt = 'deadline'
                     if halt is None:
                         free = self.caps['max_concurrency'] - len(inflight)
                         if free > 0:
@@ -547,26 +427,20 @@ class HeavyCrawler:
                         if self.backlog() == 0:
                             halt = 'queue_empty'
                             break
-                        if not any(v > self.clock() for v in self.next_ok.values()):
-                            halt = 'nothing_ready'          # only paused / robots-cached-denied hosts left
-                            break
-                        self.q.commit()
-                        self.sleep(1)
-                        continue
+                        halt = 'nothing_ready'
+                        break
                     self.q.commit()                         # never hold the write lock while waiting on the network
                     done, _ = cf.wait(list(inflight), timeout=1, return_when=cf.FIRST_COMPLETED)
                     for f in done:
-                        task = inflight.pop(f)
-                        res = f.result()
-                        self.next_ok[task['host']] = self.clock() + res.get('delay', self.caps['per_domain_delay_sec'])
-                        lost = self.handle(res)
-                        if lost:
-                            halt = lost                     # tunnel gone: start nothing new, let in-flight requests fail on their own
+                        inflight.pop(f)
+                        self.handle(f.result())
                     self.q.commit()
         except Exception as e:  # noqa: BLE001
             halt = f'crash:{type(e).__name__}'
-            import traceback
-            traceback.print_exc(file=sys.stderr)
+        finally:
+            self.access.finish_run()
+            if self.route.name:
+                rep.update(egress=self.route.name, egress_reason=self.route.reason)
         reason = halt or 'idle'
         if halt and halt.startswith('crash:'):
             return self._end(rep, 'halted', halt)
@@ -584,7 +458,7 @@ class HeavyCrawler:
         self.q.execute('INSERT OR REPLACE INTO run(run_id,started,ended,block,outcome,stats) VALUES (?,?,?,?,?,?)',
                        (rep['run_id'], getattr(self, 'started', None), self.clock(), rep['block'], f'{outcome}:{reason}', json.dumps(rep, ensure_ascii=False)))
         self.q.commit()
-        line = {k: rep.get(k) for k in ('run_id', 'block', 'started_kst', 'ended_kst', 'outcome', 'reason', 'egress', 'egress_retries', 'traffic', 'stats', 'day_totals', 'month_bytes', 'max_rss_mb')}
+        line = {k: rep.get(k) for k in ('run_id', 'block', 'started_kst', 'ended_kst', 'outcome', 'reason', 'egress', 'egress_reason', 'traffic', 'stats', 'day_totals', 'month_bytes', 'max_rss_mb')}
         line['day'] = self.day()
         os.makedirs(os.path.dirname(os.path.abspath(self.log_path)), exist_ok=True)
         with open(self.log_path, 'a', encoding='utf-8') as f:
@@ -606,9 +480,15 @@ def main(argv=None) -> int:
     sub.add_parser('status')
     a = ap.parse_args(argv)
     if a.cmd == 'egress':
-        ok, info = proxynet.egress_ok()
-        print(f"EGRESS={'ok' if ok else 'skip'} {'ip' if ok else 'reason'}={info}")
-        return 0 if ok else 3
+        conn = connect(a.db)
+        migrate(conn)
+        net = PoliteNet(conn=conn)
+        try:
+            _, reason = proxynet.egress_ok(probe=lambda url, timeout: net.get(url, diagnostic=True, timeout=timeout))
+            print(f"egress={proxynet.DEFAULT_ROUTE.name} egress_reason={reason}")
+        finally:
+            net.finish_run()
+        return 0
     conn = connect(a.db)
     migrate(conn)
     queue = a.queue or os.path.join(os.path.dirname(os.path.abspath(a.db)), 'heavy_queue.db')
@@ -624,7 +504,7 @@ def main(argv=None) -> int:
     signal.signal(signal.SIGTERM, _term)
     rep = hc.run(deadline_for(a.until), block=a.block, max_requests=a.max_requests, optional=a.optional)
     s, tr = rep.get('stats') or {}, rep.get('traffic') or {}
-    print(f"HEAVY={rep['outcome']} reason={rep['reason']} block={a.block} egress={rep.get('egress')} requests={s.get('requests', 0)} items={s.get('items_seen', 0)} "
+    print(f"HEAVY={rep['outcome']} reason={rep['reason']} block={a.block} egress={rep.get('egress')} egress_reason={rep['egress_reason']} requests={s.get('requests', 0)} items={s.get('items_seen', 0)} "
           f"candidates={s.get('candidates_new', 0)} content={s.get('content_handoff', 0)} bytes_in={tr.get('bytes_in', 0)} bytes_out={tr.get('bytes_out', 0)} rss_mb={rep.get('max_rss_mb')}")
     return 0
 

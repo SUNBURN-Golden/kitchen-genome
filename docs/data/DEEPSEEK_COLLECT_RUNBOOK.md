@@ -1,12 +1,11 @@
 # DeepSeek web and Kitchen Genome Instagram collection
 
-Current owner policy (2026-11-10): **no spend; `KG_IG=0`**. Do not run the live
-smoke examples below or Argon while this order holds. The current platform
-balance is zero; verification uses injected HTTP only. The balance endpoint is
-also mocked in tests. `balance_low` / `balance_unavailable` pauses model work
-without charging a reservation or failing deterministic stages; `reason=` is
-preserved through COLLECT, AI_REVIEW, DAEMON and final RESULT summaries. Review
-work awaiting a provider decision remains open with a visible reason.
+The November 20 access policy enables saved-session Instagram in the daily
+pipeline and selects web egress by local tunnel health. The shared model allowance
+still applies. Offline verification uses injected HTTP and balance responses.
+`balance_low` and `balance_unavailable` pause model work while deterministic
+stages continue. The reason is carried through COLLECT, AI_REVIEW, DAEMON and
+the final RESULT summary.
 
 AI findings publish only after the common DeepSeek review approves an exact
 source quote. Publication adds `ai_reviewed`, the `AI 검토` badge, source URL,
@@ -60,7 +59,6 @@ Supply credentials through the process environment or the operator's secret
 manager. Never pass their values as CLI arguments or enable shell tracing:
 
 - `DEEPSEEK_API_KEY`: shared DeepSeek client; absent key disables AI explicitly.
-- `KITCHENGENOME_IG_PASSWORD`: used only for the dedicated initial login.
 - Session: `/home/box/.secrets/kg_ig_kitchen_genome.session`, mode 0600.
   A missing file skips before any network call. The collector does not
   password-login and does not create a session.
@@ -125,7 +123,7 @@ Instagram is skipped. Direct equivalents:
 
 ```bash
 PYTHONPATH=daemon python3 -m kg_collect --db "$KG_SERVICE_DB" cycle --units 60 --cost-cap 78 --no-browser --deepseek
-PYTHONPATH=daemon python3 crawler/instagram_kg.py --db "$KG_SERVICE_DB" --cost-cap 20 --deepseek
+PYTHONPATH=daemon python3 crawler/instagram_kg.py --db "$KG_SERVICE_DB" --deepseek
 PYTHONPATH=daemon python3 -m kg_daemon --db "$KG_SERVICE_DB" run --cost-cap 20 --deepseek
 ```
 
@@ -168,15 +166,13 @@ Default pipeline controls:
 | `KG_COLLECT_COST_CAP` | `78` | Web run internal cost cap |
 | `KG_DEEPSEEK` | `1` | Pass `--deepseek` to all three callers |
 | `KG_AI_DAILY_COST_CAP` | `20` | Shared KST-day model allowance, clamped to 0–20 |
-| `KG_IG` | `0` | Disabled by default; owner order keeps it off |
-| `KG_IG_COST_CAP` | `20` | IG run internal cost cap |
+| `KG_IG` | Daily pipeline `1`, heavy and standalone wrapper `0` | Read Instagram with the saved Kitchen Genome session |
 | `KG_DAEMON_COST_CAP` | `20` | Local-document daemon cap |
-| `KG_IG_FOLLOW` | `0` | Optional follow gate; read backend cannot follow |
 | `KG_SERVICE_DB` | `$KG_HOME/data_store/kg_service.db` (`KG_HOME` defaults to `/workspace/kitchen-genome`) | Shared private service state |
 
 Cost units are internal, not dollar prices: 0.5 units per 1,000 total model tokens.
 The client reserves UTF-8 request bytes plus framing allowance plus maximum output
-against both the run cap and the day cap before HTTP. When that ceiling is larger
+against the caller’s run allowance where configured and the shared day cap before HTTP. When that ceiling is larger
 than the room left in either cap, the excerpt is shortened until it fits. A call
 that cannot fit even a short excerpt is not sent; the model stops for that run
 with `reason=cost_cap` and deterministic stages still finish. Successful responses
@@ -192,53 +188,36 @@ extraction contract changes.
 
 ## Limits and stop behavior
 
-Web admission is limited to 500 distinct candidate URLs/day and 200 attempted
-content requests/day, including pagination. Candidate URLs are counted when a
-request is actually dispatched, not when a feed item is enumerated or a job is
-queued, so unfetched links do not consume the quota. robots.txt lookups have a
-separate auxiliary counter (200/day) and do not consume content slots. Both web
-entry points share durable KST-day counters and a dispatch lock. Depth never
-exceeds two. Every domain waits at least five seconds; a longer robots delay
-persists across processes. Robots 403/429/503 and challenge responses stop content
-dispatch. Domain pauses persist in `web_host_guard` until an operator reviews and
-clears the specific pause.
+Daily and legacy web collection retain the shared KST-day counts and limits
+for candidate URLs, content dispatches and robots queries. Heavy collection
+retains its scheduled blocks, traffic and frontier limits.
 
-Automatic redirects are declined, preserving the request/robots boundary. Live
-browser fallback is disabled because its subrequests are not instrumented by this
-guard. Redirect-only and browser-only pages therefore remain collection gaps;
-no alternate access is attempted.
+The shared HTTP guard uses one lock per normalized host, including redirects
+and robots retrieval. Only Korean press hosts consult robots.txt and wait at
+least five seconds or the longer Crawl-delay. Unavailable robots permission
+defers the Korean press request. Other hosts have no fixed request interval.
+Authentication walls, challenges, 401, 403, 429 and explicit server blocks stop
+the host for the run and any overlapping runs. A valid Retry-After can carry
+across runs. Migration 0012 keeps historical block records and requeues stale
+Michelin policy skips. Existing Michelin selection URLs can be read as HTTP
+sources. Browser-only shells are deferred with `js_renderer_unavailable`.
 
-Instagram runs only 06:45–08:00 Asia/Seoul; the 09:30–10:30 and 20:30–21:30 blackout
-windows are outside that collection window. Request guards cover temporary login
-sessions, session validation, profile metadata and lazy pagination. Limits are
-25 distinct restaurant/brand handles/day, eight seconds between every dispatch,
-six caption inspections per handle/day, and excerpts of at most 40 Unicode
-characters. Only public restaurant/brand handles from existing seed records are
-eligible; no model-supplied handles or follower harvesting are accepted. Private
-profiles are skipped. No media, stories, comments or DMs are collected.
+Web egress prefers zecbot. A confirmed local tunnel failure uses the box route
+for the rest of the collector invocation. Origin responses and ambiguous
+timeouts stay on the selected route. `egress` and `egress_reason` report route
+selection and the advisory exit-IP check.
 
-A checkpoint/challenge/429/access denial stops immediately and writes
-`crawler/out/ig_kg_blocked.flag`. A transient transport failure (DNS/TLS/socket
-reset/timeout) stops the current run without writing the flag or pinning
-`stopped_day`, so a same-day rerun may retry; it still never retries in-process or
-swaps identity. Partial findings have already been committed to the private inbox.
-The account lock, quotas and dispatch time survive restarts. A process killed
-during a request leaves a same-day stop marker. A blocked flag survives midnight.
-After human account inspection, clearing the flag still does not allow a same-day
-retry for an access-control stop.
-Neither this collector nor the pipeline falls back to `agamajung`, a proxy or a
-new account. `crawler/out/ig_blocked.flag` skips Kitchen Genome Instagram before
-any request, same as `crawler/out/ig_kg_blocked.flag`. Neither flag is deleted.
-The legacy session file is not read. Outside 06:45–08:00 Asia/Seoul, or without
-the saved `kitchen.genome` session, Instagram skips before network. Web collection
-still runs.
-
-Following is optional and disabled by default. DeepSeek's validated recommendation
-cannot enable it. The bundled read backend reports
-`follows_disabled_backend_unavailable` if following is requested. A future injected
-follow backend must use the same request guard and account lock; only checked,
-public, eligible, not-already-followed handles may be attempted. The durable
-10-attempt/day limit consumes uncertain attempts and prevents replay.
+The daily Instagram reader uses the existing `@kitchen.genome` session under a
+single-reader lock. It reads the public restaurant and brand handles in the seed
+and checks captions within the latest 30 days. A per-handle watermark marks the
+newest post in a completed scan. Interrupted scans retain committed post
+checkpoints and findings. The excerpt limit is 40 Unicode characters.
+Checkpoint, challenge, 2FA, 429 and access denial stop the reader and exclusively
+create `crawler/out/ig_blocked.flag`. Either that flag or the existing
+`crawler/out/ig_kg_blocked.flag` prevents all contact. Existing flags are
+preserved. A missing session skips the reader. A transient failure or wrapper
+timeout stops the invocation and keeps its checkpoint. The timeout summary is
+`IG_FAILED account=kitchen.genome reason=timeout`.
 
 ## Review and retention
 

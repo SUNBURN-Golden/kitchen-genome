@@ -26,9 +26,9 @@ def test_net_obeys_robots_disallow_and_crawl_delay():
             return Response(url, 200, {'content-type': 'text/plain'}, b'User-agent: *\nDisallow: /private\nCrawl-delay: 9\n')
         return Response(url, 200, {'content-type': 'text/html'}, b'<html>ok</html>')
     net, sleeps = make_net(routes)
-    assert net.get('https://x.test/private/a').error == 'robots'
-    net.get('https://x.test/a')
-    net.get('https://x.test/b')
+    assert net.get('https://hankyung.com/private/a').error == 'robots'
+    net.get('https://hankyung.com/a')
+    net.get('https://hankyung.com/b')
     assert max(sleeps) >= 8.9                                  # Crawl-delay 9 beats our 5 s minimum
 
 

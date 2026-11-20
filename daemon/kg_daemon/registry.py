@@ -47,25 +47,29 @@ def validate_registry(reg: dict) -> None:
             errs.append(f'{sid}: {s.get("collect_permission")} source must not have an automated adapter')
         if s.get('collect_permission') == 'prohibited' and s.get('collectible_fields'):
             errs.append(f'{sid}: prohibited source lists collectible fields')
-    ig = srcs.get('instagram_public')
+    legacy = srcs.get('instagram_public')
+    if not legacy or legacy.get('collect_permission') != 'prohibited' or legacy.get('adapter') != 'none':
+        errs.append('instagram_public must be registered and disabled')
+    ig = srcs.get('instagram_kitchen_genome')
     if not ig:
-        errs.append('instagram_public must be registered (required candidate-discovery source)')
+        errs.append('instagram_kitchen_genome must be registered')
     else:
-        if ig.get('role') != 'required_candidate_discovery':
-            errs.append('instagram_public.role must be required_candidate_discovery')
-        if ig.get('block_evasion') != 'forbidden':
-            errs.append('instagram_public.block_evasion must be forbidden')
-        if ig.get('trust_ceiling') != 'unverified':
-            errs.append('instagram_public.trust_ceiling must be unverified')
-        for sig in ('checkpoint', 'http_429'):
+        safeguards = {
+            'role': 'required_candidate_discovery', 'account': 'kitchen.genome', 'access_mode': 'saved_session_only',
+            'block_evasion': 'forbidden', 'trust_ceiling': 'unverified', 'pause_flag': os.path.relpath(IG_FLAG, ROOT),
+            'adapter': 'instagram_kg_review_only', 'retention_days': 30, 'quote_max_chars': 40,
+        }
+        for field, value in safeguards.items():
+            if ig.get(field) != value:
+                errs.append(f'instagram_kitchen_genome.{field} must be {value}')
+        if 'crawler/out/ig_kg_blocked.flag' not in (ig.get('also_pause_flags') or []):
+            errs.append('instagram_kitchen_genome.also_pause_flags must include the dedicated pause flag')
+        for sig in ('checkpoint', 'challenge', 'two_factor', 'http_429', 'login_failed', 'access_denied', 'invalid_session'):
             if sig not in (ig.get('pause_on') or []):
-                errs.append(f'instagram_public.pause_on must include {sig}')
-        if not ig.get('pause_flag'):
-            errs.append('instagram_public.pause_flag missing')
-        # unsupported_scope may NAME bypass techniques only to state they are not implemented.
+                errs.append(f'instagram_kitchen_genome.pause_on must include {sig}')
         for item in ig.get('unsupported_scope', []):
             if any(w in item.lower() for w in BYPASS_WORDS) and 'not implemented' not in item.lower():
-                errs.append(f'instagram_public: unsupported_scope mentions bypass without stating it is not implemented: {item}')
+                errs.append(f'instagram_kitchen_genome: unsupported_scope mentions bypass without stating it is not implemented: {item}')
     if errs:
         raise RegistryError('; '.join(errs))
 
