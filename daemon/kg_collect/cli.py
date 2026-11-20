@@ -8,7 +8,7 @@ import time
 
 from kg_daemon.db import DEFAULT_DB, connect, migrate
 
-from . import cycle
+from . import cycle, michelin
 
 
 def main(argv=None) -> int:
@@ -42,7 +42,8 @@ def main(argv=None) -> int:
         wall = float(os.environ.get('KG_COLLECT_TIMEOUT', '1500'))
         work_until = max(0, wall - min(120, wall / 5))
         bot = cycle.Bot(conn, data_dir=data_dir, deepseek=a.deepseek,
-                        deadline=now + work_until, fetch_deadline=now + work_until / 2)
+                        deadline=now + work_until, fetch_deadline=now + work_until / 2,
+                        roster_config=michelin.load_config())
         from . import proxynet
         daily_scope = os.environ.get('KG_WEB_RUN_ID')
         bot.net.deadline = time.time() + max(0, bot.fetch_deadline - time.monotonic())

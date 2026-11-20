@@ -1,0 +1,19 @@
+== Sélections ==
+{| class="wikitable"
+! Restaurant !! Ville !! 2025 !! 2026
+|-
+| rowspan="2" | [[Le Cèdre]]
+| [[Paris]]
+| {{Étoiles Michelin|3}}
+| {{Michelin stars|2}}<ref>Publication</ref>
+|-
+| [[Lyon]]
+| —
+| ★★★
+|-
+| [[L’Écorce|L'Écorce]] || [[Nice]] || ⭐⭐ || ⭐⭐⭐
+|-
+| [[Amarante]] || [[Lyon]] || 2 étoiles || {{Michelin|2}}
+|-
+| [[Vert]] || [[Nice]] || Bib Gourmand || Green Star
+|}

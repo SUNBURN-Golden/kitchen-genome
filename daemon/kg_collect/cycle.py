@@ -16,7 +16,7 @@ from kg_daemon.db import DEFAULT_DB, ROOT, connect, migrate, new_id, utcnow
 from . import EXTRACTOR_VERSION, apply as apply_mod, booking, discover, evaluate, gaps, official, review, scheduler, recheck, site_publish
 from .fetch import Doc, Fetcher, canonicalize_url, parse_feed
 from .htmlx import parse_html
-from . import net as net_mod
+from . import global_queue, michelin, net as net_mod
 from .guard import Guard
 from .net import PoliteNet, host_of
 from .pipeline import check_extractor_health, fetch_regression_alert, official_hosts, process_doc, reconcile_host_yield_alerts
@@ -32,7 +32,8 @@ class Bot:
     """Collaborators. Everything the network touches is injectable (tests use a fixture server / fake clock)."""
 
     def __init__(self, conn, data_dir=None, net=None, browser=None, seeds=None, model_hook=None, today=None, ocr=True,
-                 registry_path=None, seeds_path=None, deepseek=False, seed_path=None, clock=None, deadline=None, fetch_deadline=None):
+                 registry_path=None, seeds_path=None, deepseek=False, seed_path=None, clock=None, deadline=None, fetch_deadline=None,
+                 roster_config=None):
         self.conn = conn
         self.data_dir = data_dir or os.path.join(ROOT, 'data_store')
         self.raw = RawStore(os.path.join(self.data_dir, 'raw'))
@@ -41,6 +42,7 @@ class Bot:
         self.deepseek = deepseek
         self.ai = None
         self.model_hook = model_hook
+        self.roster_config = roster_config
         self.clock = clock or (lambda: dt.datetime.now(dt.timezone.utc))
         self.today = today or self.clock().astimezone(site_publish.KST).date()
         self.seed_path = Path(seed_path or Path(ROOT) / 'data' / 'seed.json')
@@ -225,6 +227,8 @@ def stage_fetch(ctx):
     gaz = bot.gaz()
     caps = bot.seeds['caps']
     stats = {'jobs_run': 0, 'ok_docs': 0, 'failed_docs': 0, 'blocked': 0, 'children_queued': 0, 'chain': {'subpages': 0, 'sns_leads': 0, 'booking_leads': 0, 'attachments': 0}}
+    if bot.roster_config and not bot.expired(bot.fetch_deadline):
+        stats['michelin'] = refresh_roster(bot, ctx.cost)
     dispatches = stats['rss_queries'] = dict.fromkeys(discover.QUERY_FAMILIES, 0)
     def quarantine(job, attempts):
         from kg_daemon.claims import queue_review
@@ -421,6 +425,52 @@ def load_doc(conn, raw: RawStore, f) -> Doc:
     return d
 
 
+def extract_roster(conn, raw, fetch, gaz, adapter, deadline):
+    """Shared Korean article extraction. The caller checkpoints completion in its lease."""
+    if deadline is not None and time.monotonic() >= deadline:
+        return False
+    if adapter:
+        adapter.client.deadline = deadline
+        adapter.client.use_task('web-extract-2')
+        adapter.defer_extract = False
+    doc = load_doc(conn, raw, fetch)
+    process_doc(conn, doc, gaz, tier=_tier_of(conn)(doc.host), via=fetch['url'], model_adapter=adapter)
+    return not adapter or not adapter.defer_extract
+
+
+def refresh_roster(bot, meter):
+    net, conn = bot.net, bot.conn
+    previous_deadline = net.deadline
+    remaining = max(0, bot.fetch_deadline - time.monotonic()) if bot.fetch_deadline is not None else 0
+    soft_stop = time.monotonic() + remaining / 3
+    net.deadline = net.clock() + remaining / 3
+    stats = {}
+    try:
+        michelin.bootstrap(conn, net.clock(), bot.roster_config, bot.seeds)
+        roster = michelin.Roster(conn, net, bot.raw, bot.roster_config, bot.seeds)
+
+        def extract(fetch, gaz):
+            if bot.deepseek and not bot.ai:
+                from .deepseek import Adapters
+
+                bot.ai = Adapters.for_meter(meter)
+            return extract_roster(conn, bot.raw, fetch, gaz, bot.ai, soft_stop)
+
+        while time.monotonic() < soft_stop:
+            job = global_queue.claim(conn, net.clock(), daily=True)
+            if not job:
+                break
+            try:
+                result = roster.work(job, extractor=extract)
+            except Exception as exc:
+                michelin.record_exception(conn, job, net.clock, exc)
+                result = type(exc).__name__
+            stats[result] = stats.get(result, 0) + 1
+    finally:
+        net.deadline = previous_deadline
+    return stats
+
+
 def profile_facts_for(conn, doc: Doc, target_row, now: str) -> int:
     """Restaurant's own page / allowed booking page -> field-level profile facts (official.py / booking.py)."""
     if not target_row or target_row['kind'] != 'restaurant' or doc.method in ('feed', 'sitemap'):
@@ -452,7 +502,8 @@ def stage_extract(ctx):
     # Highest priority first (heavy collector scores; unscored rows weigh 0.75).
     rows = conn.execute("""SELECT f.* FROM fetch_record f LEFT JOIN fetch_priority p ON p.fetch_id=f.fetch_id
                            WHERE f.outcome='ok' AND (f.extracted_at IS NULL OR f.extractor_version<>?)
-                           ORDER BY COALESCE(p.score, 0.75) DESC, f.fetched_at, f.rowid""", (EXTRACTOR_VERSION,)).fetchall()
+                             AND f.fetcher_version<>?
+                           ORDER BY COALESCE(p.score, 0.75) DESC, f.fetched_at, f.rowid""", (EXTRACTOR_VERSION, michelin.VERSION)).fetchall()
     stats = {'docs': 0, 'new_extractions': 0, 'labels': {}, 'alerts': []}
     for f in rows:
         if bot.expired():
@@ -525,7 +576,8 @@ def stage_evaluate(ctx):
     conn = bot.conn
     gaz, off = bot.gaz(), official_hosts(conn)
     res = []
-    for r in conn.execute("SELECT DISTINCT host FROM fetch_record").fetchall():
+    for r in conn.execute("""SELECT DISTINCT host FROM fetch_record
+        WHERE fetcher_version<>? OR extracted_at IS NOT NULL""", (michelin.VERSION,)).fetchall():
         h = r['host']
         if discover.is_search_host(h):
             continue

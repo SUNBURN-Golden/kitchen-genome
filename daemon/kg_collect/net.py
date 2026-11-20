@@ -433,7 +433,7 @@ class PoliteNet:
         rp, _ = self._robots_for(url)
         return list(rp.site_maps() or []) if rp else []
 
-    def get(self, url, extra_headers=None, *, method='GET', diagnostic=False, timeout=None, before_send=None):
+    def get(self, url, extra_headers=None, *, method='GET', diagnostic=False, timeout=None, before_send=None, restrict_host=None):
         if method != 'GET':
             return Response(url, 0, {}, b'', error='unsupported_method')
         self._ensure_run()
@@ -446,6 +446,8 @@ class PoliteNet:
             if invalid := self._dispatchable(url):
                 return invalid
             host = host_of(url)
+            if restrict_host and host != restrict_host:
+                return Response(url, 0, {}, b'', error='redirect_outside_host')
             delay = None
             if self.korean_press(host):
                 rp, rr = self._robots_for(url)

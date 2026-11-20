@@ -28,22 +28,38 @@ def _checksum(sql: str) -> str:
 
 
 def migrate(conn: sqlite3.Connection, schema_dir: str = SCHEMA_DIR, now: str | None = None) -> list[str]:
-    """Apply pending *.sql files in name order. Applied files are checksum-pinned: editing one is an error."""
+    """Apply checksum-pinned migrations atomically, including during concurrent startup."""
     conn.execute("CREATE TABLE IF NOT EXISTS schema_migration (version TEXT PRIMARY KEY, checksum TEXT NOT NULL, applied_at TEXT NOT NULL)")
-    done = {r['version']: r['checksum'] for r in conn.execute('SELECT version, checksum FROM schema_migration')}
     applied = []
     for fn in sorted(f for f in os.listdir(schema_dir) if f.endswith('.sql')):
-        sql = open(os.path.join(schema_dir, fn), encoding='utf-8').read()
+        with open(os.path.join(schema_dir, fn), encoding='utf-8') as script:
+            sql = script.read()
         ck = _checksum(sql)
-        if fn in done:
-            if done[fn] != ck:
-                raise RuntimeError(f'migration {fn} was modified after being applied; add a new migration instead')
+        done = conn.execute('SELECT checksum FROM schema_migration WHERE version=?', (fn,)).fetchone()
+        if done and done[0] == ck:
             continue
-        # schema_migration is created idempotently above, so strip nothing: scripts use IF NOT EXISTS for it.
-        conn.executescript(sql)
-        conn.execute('INSERT INTO schema_migration(version, checksum, applied_at) VALUES (?,?,?)', (fn, ck, now or utcnow()))
-        conn.commit()
-        applied.append(fn)
+        if conn.in_transaction:
+            conn.commit()
+        conn.execute('BEGIN IMMEDIATE')
+        with conn:
+            # Another collector may have applied the script while waiting for the lock.
+            done = conn.execute('SELECT checksum FROM schema_migration WHERE version=?', (fn,)).fetchone()
+            if done:
+                if done[0] != ck:
+                    raise RuntimeError(f'migration {fn} was modified after being applied; add a new migration instead')
+                continue
+            # executescript commits an existing transaction. Complete statements keep
+            # the DDL, CREATE TRIGGER bodies and checksum under one lock.
+            statement = ''
+            for piece in sql.split(';'):
+                statement += piece + ';'
+                if sqlite3.complete_statement(statement):
+                    conn.execute(statement)
+                    statement = ''
+            if statement.strip():
+                conn.execute(statement)
+            conn.execute('INSERT INTO schema_migration(version, checksum, applied_at) VALUES (?,?,?)', (fn, ck, now or utcnow()))
+            applied.append(fn)
     return applied
 
 

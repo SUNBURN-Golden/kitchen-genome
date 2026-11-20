@@ -1,0 +1,108 @@
+# The directory's links define coverage. Names and locales resolve links that lack ISO metadata.
+directory: https://guide.michelin.com/en/restaurants
+refresh_days: 7
+daily_scopes:
+  - scope: south-korea
+    label: South Korea
+    url: https://guide.michelin.com/kr/en/selection/south-korea/restaurants
+    countries: [KR]
+    locale: ko
+countries:
+  AR: {name: Argentina, locale: es}
+  AT: {name: Austria, aliases: [Österreich], locale: de}
+  AU: {name: Australia}
+  BE: {name: Belgium, aliases: [Belgique, België], locale: fr}
+  BR: {name: Brazil, aliases: [Brasil], locale: pt}
+  CA: {name: Canada}
+  CH: {name: Switzerland, aliases: [Suisse, Schweiz, Svizzera], locale: de}
+  CN: {name: China, aliases: [China Mainland, Mainland China, 中国大陆, 中国], locale: zh}
+  CZ: {name: Czechia, aliases: [Czech Republic, Česko], locale: cs}
+  DE: {name: Germany, aliases: [Deutschland], locale: de}
+  DK: {name: Denmark, aliases: [Danmark], locale: da}
+  EE: {name: Estonia, aliases: [Eesti], locale: et}
+  ES: {name: Spain, aliases: [España], locale: es}
+  FI: {name: Finland, aliases: [Suomi], locale: fi}
+  FR: {name: France, locale: fr}
+  GB: {name: United Kingdom, aliases: [UK, Great Britain, England, Scotland, Wales, Northern Ireland]}
+  GR: {name: Greece, aliases: [Ελλάδα], locale: el}
+  HK: {name: Hong Kong, aliases: [Hong Kong SAR, 香港], locale: zh}
+  HR: {name: Croatia, aliases: [Hrvatska], locale: hr}
+  HU: {name: Hungary, aliases: [Magyarország], locale: hu}
+  IE: {name: Ireland}
+  IS: {name: Iceland, aliases: [Ísland], locale: is}
+  IT: {name: Italy, aliases: [Italia], locale: it}
+  JP: {name: Japan, aliases: [日本], locale: ja}
+  KR: {name: South Korea, aliases: [Korea, Republic of Korea, 대한민국, 한국], locale: ko}
+  LU: {name: Luxembourg, locale: fr}
+  MA: {name: Morocco, aliases: [Maroc], locale: fr}
+  MC: {name: Monaco, locale: fr}
+  MO: {name: Macau, aliases: [Macao, Macau SAR, Macao SAR, 澳門, 澳门], locale: zh}
+  MT: {name: Malta}
+  MX: {name: Mexico, aliases: [México], locale: es}
+  MY: {name: Malaysia, locale: ms}
+  NL: {name: Netherlands, wiki_name: the Netherlands, aliases: [The Netherlands, Nederland], locale: nl}
+  'NO': {name: Norway, aliases: [Norge], locale: 'no'}
+  NZ: {name: New Zealand, aliases: [Aotearoa]}
+  PE: {name: Peru, aliases: [Perú], locale: es}
+  PH: {name: Philippines}
+  PL: {name: Poland, aliases: [Polska], locale: pl}
+  PT: {name: Portugal, locale: pt}
+  QA: {name: Qatar, locale: ar}
+  SA: {name: Saudi Arabia, locale: ar}
+  SE: {name: Sweden, aliases: [Sverige], locale: sv}
+  SG: {name: Singapore}
+  SI: {name: Slovenia, aliases: [Slovenija], locale: sl}
+  SK: {name: Slovakia, locale: sk}
+  TH: {name: Thailand, aliases: [ประเทศไทย], locale: th}
+  TR: {name: Turkey, aliases: [Türkiye], locale: tr}
+  TW: {name: Taiwan, aliases: [臺灣, 台灣], locale: zh}
+  AE: {name: United Arab Emirates, aliases: [UAE], locale: ar}
+  US: {name: United States, aliases: [USA, United States of America]}
+  VN: {name: Vietnam, aliases: [Viet Nam, Việt Nam], locale: vi}
+regions:
+  great-britain-ireland: {countries: [GB, IE]}
+  united-kingdom-and-ireland: {countries: [GB, IE]}
+  nordic-countries: {countries: [DK, FI, IS, NO, SE]}
+  nordic: {countries: [DK, FI, IS, NO, SE]}
+  belgium-and-luxembourg: {countries: [BE, LU]}
+  france-and-monaco: {countries: [FR, MC]}
+  hong-kong-macau: {countries: [HK, MO]}
+  hong-kong-and-macau: {countries: [HK, MO]}
+  seoul-busan: {countries: [KR]}
+  seoul-and-busan: {countries: [KR]}
+  seoul: {countries: [KR], city: Seoul}
+  busan: {countries: [KR], city: Busan}
+  tokyo: {countries: [JP], city: Tokyo}
+  kyoto-osaka: {countries: [JP], aliases: [Kyoto and Osaka]}
+  singapore: {countries: [SG], city: Singapore}
+  dubai: {countries: [AE], city: Dubai}
+  abu-dhabi: {countries: [AE], city: Abu Dhabi}
+  doha: {countries: [QA], city: Doha}
+  new-york-city: {countries: [US], city: New York City}
+  new-york: {countries: [US]}
+  california: {countries: [US]}
+  florida: {countries: [US]}
+  chicago: {countries: [US], city: Chicago}
+  washington-dc: {countries: [US], city: Washington, D.C.}
+  paris: {countries: [FR], city: Paris}
+  bangkok: {countries: [TH], city: Bangkok}
+wikipedia:
+  KR:
+    - {locale: ko, title: 미쉐린 가이드 서울, city: Seoul}
+  FR:
+    - {locale: fr, title: Liste des restaurants étoilés par le Guide Michelin en France}
+  JP:
+    - {locale: en, title: List of Michelin-starred restaurants in Tokyo, city: Tokyo}
+  US:
+    - {locale: en, title: List of Michelin-starred restaurants in New York City, city: New York City}
+modifiers:
+  en: {chef: [head chef, chef interview, chef career], guide: Michelin Guide}
+  ko: {chef: [헤드셰프, 셰프 인터뷰, 셰프 경력], guide: 미쉐린 가이드}
+  fr: {chef: [chef de cuisine, entretien chef, parcours chef], guide: Guide Michelin}
+  ja: {chef: [料理長, シェフ インタビュー, シェフ 経歴], guide: ミシュランガイド}
+  zh: {chef: [主廚, 主廚 專訪, 主廚 經歷], guide: 米其林指南}
+  es: {chef: [jefe de cocina, entrevista chef, trayectoria chef], guide: Guía Michelin}
+  it: {chef: [capo chef, intervista chef, carriera chef], guide: Guida Michelin}
+  de: {chef: [Küchenchef, Koch Interview, Koch Karriere], guide: Guide Michelin}
+  pt: {chef: [chefe de cozinha, entrevista chef, carreira chef], guide: Guia Michelin}
+  th: {chef: [หัวหน้าเชฟ, สัมภาษณ์เชฟ], guide: มิชลิน ไกด์}

@@ -4,8 +4,9 @@ Korean press uses robots.txt and at least five seconds between requests. All hos
 are serialized and access refusals stop the host for the run. Egress uses zecbot
 when healthy and falls back to the box on a confirmed local tunnel failure.
 
-Output: pages that mention a registered active chef/restaurant are handed to the 07:00 pipeline as ordinary fetch_record rows
-(raw store + fetch_priority score). The 07:00 extract stage reads the highest scores first. This module never calls DeepSeek, never commits, merges or deploys."""
+The Michelin frontier shares the service DB with the 07:00 collector. Eligible
+Korean article snapshots use the existing extractor and Qwen-first guarded model
+chain. The block writes private collection state for subsequent integration."""
 import argparse
 import contextlib
 import concurrent.futures as cf
@@ -24,14 +25,16 @@ from zoneinfo import ZoneInfo
 import yaml
 
 from kg_daemon.db import DEFAULT_DB, ROOT, connect, migrate, stable_id, utcnow
+from kg_daemon.runner import CostMeter
 
-from . import EXTRACTOR_VERSION, FETCHER_VERSION, proxynet
+from . import EXTRACTOR_VERSION, FETCHER_VERSION, global_queue, michelin, proxynet
+from .cycle import UNIT_COSTS, extract_roster
 from .discover import FOOD_CUE, item_relevance
 from .fetch import MIN_TEXT_CHARS, canonicalize_url, parse_feed, unreadable_js_shell
 from .htmlx import parse_html
 from .guard import Guard, threshold
 from kg_daemon.claims import queue_review
-from .net import PoliteNet, Response, TRAP, host_of, is_banned, matches_domain, to_uri, valid_destination
+from .net import PoliteNet, Response, host_of, is_banned, matches_domain, to_uri, valid_destination
 from .rawstore import RawStore
 from .targets import Gazetteer, eligibility
 
@@ -82,17 +85,17 @@ def excluded(url: str, cfg) -> bool:
         return True
     low = url.lower()
     path = urllib.parse.urlsplit(low).path
-    return path.endswith(proxynet.SKIP_EXT) or any(t in low for t in TRAP)
-
-
-class Terminated(Exception):
-    """SIGTERM (cron timeout): unwind the loop so the run and traffic records are still written."""
+    return path.endswith(proxynet.SKIP_EXT) or michelin.trapped(url)
 
 
 class HeavyCrawler:
     def __init__(self, queue_path, service_conn, cfg=None, transport=None, clock=time.time, sleep=time.sleep, egress=None, data_dir=None,
-                 traffic=None, log_path=None):
+                 traffic=None, log_path=None, roster_config=None):
         self.cfg = cfg or load_cfg()
+        self.roster_config = roster_config
+        self.terminating = False
+        self.svc_busy_timeout = 5000
+        service_conn.execute(f'PRAGMA busy_timeout={self.svc_busy_timeout}')
         self.caps = self.cfg['caps']
         self.q = sqlite3.connect(queue_path, timeout=30, check_same_thread=False)
         self.q.row_factory = sqlite3.Row
@@ -195,6 +198,26 @@ class HeavyCrawler:
 
     def backlog(self) -> int:
         return self.q.execute("SELECT COUNT(*) FROM frontier WHERE state='queued' AND next_due<=?", (self.clock(),)).fetchone()[0]
+
+    def _global_work(self, task):
+        with contextlib.closing(connect(self.service_db)) as conn:
+            conn.execute(f'PRAGMA busy_timeout={self.svc_busy_timeout}')
+            net = self._net(conn, run_id=self.access.run_id, deadline=self.stop_at)
+            roster = michelin.Roster(conn, net, self.raw, self.roster_config, self.roster_seeds)
+
+            def extract(fetch, gaz):
+                from .deepseek import Adapters
+
+                meter = CostMeter(conn, self.access.run_id, UNIT_COSTS)
+                meter.stage = 'extract'
+                adapter = Adapters.for_meter(meter)
+                deadline = time.monotonic() + max(0, min(global_queue.LEASE_SECONDS - 20,
+                                                          task['lease_expires_at'] - self.clock() - 10,
+                                                          self.stop_at - self.clock() - 5))
+                return extract_roster(conn, self.raw, fetch, gaz, adapter, deadline)
+
+            state = roster.work(task, extractor=extract)
+            return state, net.request_count, net.robots_count
 
     def _net(self, conn, **options):
         def record(route, traffic):
@@ -404,7 +427,13 @@ class HeavyCrawler:
         if deadline <= started + 60:
             return self._end(rep, 'skipped', 'block_over')
         rep['seeded'] = self.seed()
-        if optional and self.backlog() < int(self.caps.get('backlog_for_optional_block', 1)):
+        if self.roster_config:
+            from .discover import load_seeds
+
+            self.roster_seeds = load_seeds()
+            michelin.bootstrap(self.svc, started, self.roster_config, self.roster_seeds)
+            rep['michelin'] = {'jobs': 0, 'results': {}}
+        if optional and self.backlog() + self.global_backlog() < int(self.caps.get('backlog_for_optional_block', 1)):
             return self._end(rep, 'skipped', 'backlog_small')
         stop_at = deadline - 25
         self.stop_at = deadline                       # leave room for the 20 s request timeout before the hard stop
@@ -414,6 +443,10 @@ class HeavyCrawler:
         halt, inflight = None, {}
         self.stopped_hosts = set()
         try:
+            if self.roster_config:
+                with self.svc:
+                    self.svc.execute("""INSERT INTO daemon_run(run_id,daemon,status,trigger,cost_cap_units,started_at)
+                        VALUES (?,'kg-heavy','running',?,0,?)""", (run_id, block, michelin.iso_stamp(started)))
             if self.egress:
                 _, rep['egress_reason'] = self.egress()
             elif self.transport is None:
@@ -422,19 +455,29 @@ class HeavyCrawler:
                 while True:
                     now = self.clock()
                     self.flush_traffic()
-                    if halt is None:
-                        if now >= stop_at:
-                            halt = 'deadline'
+                    if halt is None and self.terminating:
+                        halt = 'sigterm'
+                    if halt is None and now >= stop_at:
+                        halt = 'deadline'
                     if halt is None:
                         free = self.caps['max_concurrency'] - len(inflight)
                         if free > 0:
                             busy = {t['host'] for t in inflight.values()}
-                            for task in self.pick(busy, free):
-                                inflight[ex.submit(self.work, task)] = task
+                            if self.roster_config:
+                                while free > 0 and not self.terminating and self.clock() < stop_at:
+                                    task = global_queue.claim(self.svc, self.clock(), busy=busy)
+                                    if not task:
+                                        break
+                                    busy.add(task['host'])
+                                    inflight[ex.submit(self._global_work, task)] = task
+                                    free -= 1
+                            if not self.terminating:
+                                for task in self.pick(busy, free):
+                                    inflight[ex.submit(self.work, task)] = task
                     if not inflight:
                         if halt:
                             break
-                        if self.backlog() == 0:
+                        if self.backlog() + self.global_backlog() == 0:
                             halt = 'queue_empty'
                             break
                         halt = 'nothing_ready'
@@ -443,6 +486,19 @@ class HeavyCrawler:
                     done, _ = cf.wait(list(inflight), timeout=1, return_when=cf.FIRST_COMPLETED)
                     for f in done:
                         task = inflight.pop(f)
+                        if 'job_key' in task:
+                            try:
+                                state, requests, robots = f.result()
+                            except Exception as exc:
+                                michelin.record_exception(self.svc, task, self.clock, exc)
+                                state, requests, robots = type(exc).__name__, 0, 0
+                            rep['michelin']['jobs'] += 1
+                            results = rep['michelin']['results']
+                            results[state] = results.get(state, 0) + 1
+                            self.stats['requests'] += requests
+                            self.stats['robots_requests'] += robots
+                            self.bump(requests=requests)
+                            continue
                         lane = Guard(self.svc, run_id, 'heavy:' + task['host'])
                         try:
                             result = f.result()
@@ -478,6 +534,17 @@ class HeavyCrawler:
             halt = f'crash:{type(e).__name__}'
         finally:
             self.access.finish_run()
+            if self.roster_config:
+                rep['michelin']['tier'] = global_queue.cursor(self.svc)
+                rep['michelin']['due'] = self.global_backlog()
+                rep['michelin']['coverage'] = [dict(row) for row in self.svc.execute("""
+                    SELECT tier,disposition,COUNT(*) AS scopes FROM global_tier_pass
+                    WHERE sweep_id=? AND scope<>'worldwide' GROUP BY tier,disposition ORDER BY tier DESC,disposition""",
+                    (global_queue.SWEEP,))]
+                with self.svc:
+                    self.svc.execute("UPDATE daemon_run SET status=?,finished_at=? WHERE run_id=?",
+                                     ('failed' if halt and halt.startswith('crash:') else 'succeeded',
+                                      michelin.iso_stamp(self.clock()), run_id))
             if self.route.name:
                 rep.update(egress=self.route.name, egress_reason=self.route.reason)
         rep['guard_stops'] = {r['lane']: r['reason'] for r in self.svc.execute(
@@ -485,7 +552,10 @@ class HeavyCrawler:
         reason = halt or 'idle'
         if halt and halt.startswith('crash:'):
             return self._end(rep, 'halted', halt)
-        return self._end(rep, 'stopped' if reason in ('deadline', 'queue_empty', 'nothing_ready', 'idle') else 'halted', reason)
+        return self._end(rep, 'stopped' if reason in ('deadline', 'queue_empty', 'nothing_ready', 'idle', 'sigterm') else 'halted', reason)
+
+    def global_backlog(self):
+        return global_queue.due(self.svc, self.clock()) if self.roster_config else 0
 
     def _end(self, rep, outcome, reason) -> dict:
         self.flush_traffic()
@@ -499,7 +569,7 @@ class HeavyCrawler:
         self.q.execute('INSERT OR REPLACE INTO run(run_id,started,ended,block,outcome,stats) VALUES (?,?,?,?,?,?)',
                        (rep['run_id'], getattr(self, 'started', None), self.clock(), rep['block'], f'{outcome}:{reason}', json.dumps(rep, ensure_ascii=False)))
         self.q.commit()
-        line = {k: rep.get(k) for k in ('run_id', 'block', 'started_kst', 'ended_kst', 'outcome', 'reason', 'egress', 'egress_reason', 'traffic', 'stats', 'day_totals', 'month_bytes', 'guard_stops', 'max_rss_mb')}
+        line = {k: rep.get(k) for k in ('run_id', 'block', 'started_kst', 'ended_kst', 'outcome', 'reason', 'egress', 'egress_reason', 'traffic', 'stats', 'day_totals', 'month_bytes', 'guard_stops', 'michelin', 'max_rss_mb')}
         line['day'] = self.day()
         os.makedirs(os.path.dirname(os.path.abspath(self.log_path)), exist_ok=True)
         with open(self.log_path, 'a', encoding='utf-8') as f:
@@ -532,15 +602,15 @@ def main(argv=None) -> int:
     conn = connect(a.db)
     migrate(conn)
     queue = a.queue or os.path.join(os.path.dirname(os.path.abspath(a.db)), 'heavy_queue.db')
-    hc = HeavyCrawler(queue, conn)
+    hc = HeavyCrawler(queue, conn, roster_config=michelin.load_config())
     if a.cmd == 'status':
-        print(json.dumps({'backlog_due': hc.backlog(), 'today': hc.daily(), 'month_bytes': hc.month_bytes(),
+        print(json.dumps({'backlog_due': hc.backlog(), 'michelin_due': hc.global_backlog(), 'today': hc.daily(), 'month_bytes': hc.month_bytes(),
                           'queue': {x['state']: x['n'] for x in hc.q.execute('SELECT state, COUNT(*) n FROM frontier GROUP BY state')}}, ensure_ascii=False))
         return 0
     import signal
 
     def _term(*_):
-        raise Terminated()
+        hc.terminating = True
     signal.signal(signal.SIGTERM, _term)
     rep = hc.run(deadline_for(a.until), block=a.block, optional=a.optional)
     s, tr = rep.get('stats') or {}, rep.get('traffic') or {}
