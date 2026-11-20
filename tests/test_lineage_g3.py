@@ -148,11 +148,24 @@ def test_quote_and_optional_fields_validate_independently(world, monkeypatch):
     ('한정수가 개업했고 김철수가 한정원에서 수셰프로 2014년부터 일했다.', '한정수', '한정원', 'opening', {}, 'ko'),
     ('山田花子が開業し、田中一郎が青庭レストランで勤務した。', '山田花子', '青庭レストラン', 'former', {}, 'ja'),
     ('한정수가 현재 김철수가 한정원에서 근무한다고 말했다.', '한정수', '한정원', 'current', {}, 'ko'),
+    # An honorific/title on the SECOND subject must not pass as an appositive of the chef.
+    ('한정수가 일했고 김철수 씨가 한정원에서 일했다.', '한정수', '한정원', 'former', {}, 'ko'),
+    ('한정수가 개업했고 김철수 씨가 한정원에서 수셰프로 2014년부터 일했다.', '한정수', '한정원', 'former',
+     dict(role_text='수셰프', from_text='2014년'), 'ko'),
+    ('한정수가 일했고 김철수 셰프가 한정원에서 일했다.', '한정수', '한정원', 'former', {}, 'ko'),
+    ('한정수가 일했고 김철수 님이 한정원에서 일했다.', '한정수', '한정원', 'former', {}, 'ko'),
+    ('山田花子が開業し、田中一郎さんが青庭レストランで勤務した。', '山田花子', '青庭レストラン', 'former', {}, 'ja'),
+    ('山田花子が開業し、田中一郎氏は青庭レストランで勤務した。', '山田花子', '青庭レストラン', 'former', {}, 'ja'),
+    ('山田花子が開業し、田中一郎シェフが青庭レストランで勤務した。', '山田花子', '青庭レストラン', 'former', {}, 'ja'),
+    ('山田花子が開業し、田中一郎総料理長が青庭レストランで勤務した。', '山田花子', '青庭レストラン', 'former',
+     dict(role_text='料理長', from_text='2014年'), 'ja'),
 ])
 def test_eastern_compound_clause_cannot_steal_the_subject(quote, chef, venue, relation, fields, lang):
     # A -고/-し compound keeps one clause; the verb after the venue belongs to the
     # second subject, so the named chef's career must stay unbound (private review).
-    assert lineage.validate_item(item(quote, chef, venue, relation, **fields), quote, lang)[1] == 'unbound_career'
+    row, reason = lineage.validate_item(item(quote, chef, venue, relation, **fields), quote, lang)
+    assert reason == 'unbound_career'
+    assert row.get('role_text') is None and row.get('valid_from') is None
 
 
 def test_eastern_binding_keeps_the_named_chef_and_venue():
@@ -166,17 +179,44 @@ def test_eastern_binding_keeps_the_named_chef_and_venue():
     ja = '山田花子は青庭レストランで料理長として勤務した。'
     row, reason = lineage.validate_item(item(ja, '山田花子', '青庭レストラン', role_text='料理長'), ja, 'ja')
     assert reason is None and row['role_text'] == '料理長'
+    # A title appositive is allowed only when it attaches to the named chef itself.
+    anchored = '한정수 셰프는 한정원에서 수셰프로 일했다.'
+    row, reason = lineage.validate_item(item(anchored, '한정수', '한정원', role_text='수셰프'), anchored, 'ko')
+    assert reason is None and row['role_text'] == '수셰프'
+    ja_titled = '山田花子シェフは青庭レストランで勤務した。'
+    assert lineage.validate_item(item(ja_titled, '山田花子', '青庭レストラン'), ja_titled, 'ja')[1] is None
+    ja_long = '山田花子総料理長は青庭レストランで勤務した。'
+    assert lineage.validate_item(item(ja_long, '山田花子', '青庭レストラン'), ja_long, 'ja')[1] is None
+    ko_rementioned = '한정수 씨가 일했고 한정수 씨가 한정원에서 일했다.'
+    assert lineage.validate_item(item(ko_rementioned, '한정수', '한정원'), ko_rementioned, 'ko')[1] is None
+
+
+@pytest.mark.parametrize('quote', [
+    '한정수는 2014년 이후 한정원에서 일했다.',
+    '한정수는 2014년 이상 한정원에서 일했다.',
+    '한정수는 은퇴 전까지 한정원에서 일했다.',
+    '한정수는 김철수가 운영하는 한정원에서 일했다.',
+    '한정수는 김철수가 운영한 한정원에서 일했다.',
+])
+def test_eastern_binding_keeps_single_subject_sentences(quote):
+    # 이후/이상/은퇴 open ordinary words, not a second subject; a relative clause
+    # modifying the venue carries its own subject and must not steal the main verb.
+    assert lineage.validate_item(item(quote, '한정수', '한정원'), quote, 'ko')[1] is None
 
 
 def test_wrong_subject_stitch_stays_private_review(world, monkeypatch):
     conn, _ = world
     quote = '한정수가 개업했고 김철수가 한정원에서 수셰프로 2014년부터 일했다.'
-    adapter = fake_adapter(conn, [(quote, item(quote, '한정수', '한정원', role_text='수셰프', from_text='2014년'))],
+    titled = '한정수가 개업했고 김철수 씨가 한정원에서 수셰프로 2014년부터 일했다.'
+    adapter = fake_adapter(conn, [(quote, item(quote, '한정수', '한정원', role_text='수셰프', from_text='2014년')),
+                                  (titled, item(titled, '한정수', '한정원', role_text='수셰프', from_text='2014년'))],
                            [], monkeypatch)
     assert ingest(world, fetch(world, 'stitch', quote), adapter)
-    row = conn.execute('SELECT state, role_text, valid_from FROM career_assertion').fetchone()
-    assert row['state'] == 'review' and row['role_text'] is None and row['valid_from'] is None
-    assert conn.execute("SELECT COUNT(*) FROM review_queue WHERE reason='unbound_career'").fetchone()[0] == 1
+    assert ingest(world, fetch(world, 'stitch-titled', titled), adapter)
+    rows = conn.execute('SELECT state, role_text, valid_from FROM career_assertion').fetchall()
+    assert len(rows) == 2
+    assert all(row['state'] == 'review' and row['role_text'] is None and row['valid_from'] is None for row in rows)
+    assert conn.execute("SELECT COUNT(*) FROM review_queue WHERE reason='unbound_career'").fetchone()[0] == 2
     assert conn.execute('SELECT COUNT(*) FROM employment').fetchone()[0] == 0
     assert not list(site_projection._career_rows(conn))
 

@@ -259,26 +259,45 @@ def validate_item(raw, text, lang):
 # locative/object marker, and the named chef must remain the subject up to that verb.
 EAST_LOCATIVE = re.compile(r'\s*(?:에서|에|で|に|を|를|을|의|の)')
 EAST_SUBJECT_MARK = re.compile(r'[가이는은がは]')
-EAST_APPOSITIVE = ('셰프', '쉐프', '요리사', '주방장', '총주방장', '料理長', '総料理長', '副料理長',
-                   'シェフ', '料理人', 'パティシエ', '씨', '님', 'さん', '氏')
+# Longest first so 総料理長/副料理長 anchor as a whole instead of matching 料理長 inside them.
+EAST_APPOSITIVE = tuple(sorted(('셰프', '쉐프', '요리사', '주방장', '총주방장', '料理長', '総料理長', '副料理長',
+                                'シェフ', '料理人', 'パティシエ', '씨', '님', 'さん', '氏'), key=len, reverse=True))
 EAST_PARTICLE = ('에서', 'で', 'に', 'を')
+# 가/이/는/은/が/は are subject/topic particles only on a name-like token. These syllables
+# instead open an ordinary word (이후/이전/이상/은퇴…), so they are not a new subject.
+EAST_NON_PARTICLE = ('이후', '이전', '이상', '이내', '이외', '은퇴', '은신', '은폐', '은하', '은혜')
+# An adnominal (relative) clause with its own subject directly modifying the venue: its
+# subject marker belongs to the modifier, not to the main-clause career verb.
+EAST_ADNOMINAL = re.compile(r'[^\s]{1,24}[가이는은がは]\s+[가-힣]{1,16}(?:는|은|던|한|할|된)\s+$')
 
 
 def _eastern_subject_kept(clause, subject, employer, verb_end):
     """A compound -고/-し clause can hand the verb to a different subject. The named chef
-    keeps the verb only while no later 가/이/는/은/が/は marks another name as the subject."""
-    lead = clause[subject.end():verb_end]
-    if subject.end() <= employer.start() and employer.end() <= verb_end:
-        lead = clause[subject.end():employer.start()] + clause[employer.end():verb_end]
+    keeps the verb only while no later 가/이/는/은/が/は marks another name as the subject.
+    A title/honorific appositive counts only when it attaches to the named chef itself."""
     chef = subject.group()
-    for mark in EAST_SUBJECT_MARK.finditer(lead):
-        before = lead[:mark.start()].rstrip()
+    masked = clause
+    if subject.end() <= employer.start() and employer.end() <= verb_end:
+        start = employer.start()
+        modifier = EAST_ADNOMINAL.search(clause[:employer.start()])
+        if modifier:
+            start = modifier.start()
+        masked = clause[:start] + ' ' * (employer.end() - start) + clause[employer.end():]
+    for mark in EAST_SUBJECT_MARK.finditer(masked, subject.end(), verb_end):
+        pos = mark.start()
+        before = masked[:pos].rstrip()
         if not before:
             continue                                   # the chef's own subject/topic marker
+        if masked[pos:pos + 3].startswith(EAST_NON_PARTICLE):
+            continue                                   # word-internal syllable, not a particle on a name
         if before.endswith(chef) and (len(before) == len(chef) or not before[-len(chef) - 1].isalnum()):
             continue                                   # the same chef named again
-        if any(before.endswith(word) for word in EAST_APPOSITIVE):
-            continue                                   # a title/honorific appositive of the chef
+        title = next((word for word in EAST_APPOSITIVE if before.endswith(word)), None)
+        if title:
+            stem = before[:-len(title)].rstrip()
+            if stem.endswith(chef) and (len(stem) == len(chef) or not stem[-len(chef) - 1].isalnum()):
+                continue                               # a title/honorific appositive of the named chef
+            return False                               # a title on a different name is a new subject
         if any(before.endswith(particle) for particle in EAST_PARTICLE):
             continue                                   # a marker on the venue phrase, not a new subject
         return False
