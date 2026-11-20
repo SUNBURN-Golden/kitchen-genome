@@ -7,7 +7,7 @@
 # Exit 0 always on success; last line is one of: RESULT=NO_CHANGE | RESULT=MERGED_NO_DEPLOY pr=<url> | RESULT=NEEDS_DEPLOY pr=<url> | RESULT=DEPLOYED pr=<url>
 # Collection is in-place and never calls the legacy Instagram account. AI findings never apply through the rule path;
 # the DeepSeek review stage (daemon/kg_ai/review.py) reviews each one: approved -> seed `ai_reviewed` (badged 'AI 검토',
-# source URL, data/ai_review_log.jsonl for rollback), rejected -> closed with reason. Nothing stays pending.
+# source URL, data/ai_review_log.jsonl for rollback), rejected -> closed with reason.
 set -euo pipefail
 REPO="${1:-/tmp/kg}"; KG_HOME="${KG_HOME:-/workspace/kitchen-genome}"
 SCRIPT_DIR=$(cd "$(dirname "$0")" && pwd)
@@ -97,7 +97,7 @@ assert_branch() {
 KG_DB="${KG_SERVICE_DB:-$KG_HOME/data_store/kg_service.db}"
 export KG_SERVICE_DB="$KG_DB" KG_HOME
 ai_review() {
-  # DeepSeek review of open AI findings; its cost counts within KG_AI_DAILY_COST_CAP (max 20).
+  # Review open AI findings on the configured model route.
   if [ "${KG_DEEPSEEK:-1}" = 1 ] && [ "${KG_AI_REVIEW:-1}" = 1 ] && [ -f "$KG_DB" ]; then
     local out
     out=$(PYTHONPATH=daemon timeout 600 python3 -m kg_ai --db "$KG_DB" --seed "$REPO/data/seed.json" --log "$REPO/data/ai_review_log.jsonl" 2>/dev/null) \
@@ -115,7 +115,7 @@ python3 crawler/crawl.py
 # Web collection does not wait on Instagram. The legacy account is not invoked.
 STAGE=collect
 COLLECT_LOG=$(bash "$SCRIPT_DIR/collect_daily.sh" "$REPO" || true)
-printf '%s\n' "$COLLECT_LOG"
+printf '%s\n' "$COLLECT_LOG"  # includes the closed-day COLLECT_METRICS line
 COLLECT_OUT=$(printf '%s\n' "$COLLECT_LOG" | sed -n '/^COLLECT=/p' | tail -1)
 IG_OUT=$(printf '%s\n' "$COLLECT_LOG" | sed -n '/^IG_/p' | tail -1)
 [ -n "$COLLECT_OUT" ] || COLLECT_OUT='COLLECT=failed reason=missing_summary'
@@ -131,7 +131,7 @@ if [ "${KG_COLLECT:-1}" = 1 ] && [ -f "$KG_DB" ]; then
   DAEMON_RC=0
   DAEMON_JSON=$(mktemp)
   PYTHONPATH=daemon timeout 600 python3 -m kg_daemon --db "$KG_DB" run --collect-db "$KG_DB" \
-    --cost-cap "${KG_DAEMON_COST_CAP:-20}" "${AI_ARGS[@]}" >"$DAEMON_JSON" 2>/dev/null || DAEMON_RC=$?
+    "${AI_ARGS[@]}" >"$DAEMON_JSON" 2>/dev/null || DAEMON_RC=$?
   if [ ! -s "$DAEMON_JSON" ]; then
     DAEMON_OUT="DAEMON=finished exit=$DAEMON_RC reason=missing_summary"
   else
@@ -165,7 +165,7 @@ assert_branch
 [ "$(git rev-list --count "$BASE_SHA"..HEAD)" = 1 ] || { FINAL=1; echo "RESULT=FAILED stage=pr reason=unexpected_commits expected=$BR ai_reason=$AI_REASON"; exit 4; }
 git push -q -u origin "$BR" --force
 PR=$(gh pr create --repo SUNBURN-Golden/kitchen-genome --base main --head "$BR" --title "crawl $DAY: $SUM" \
-  --body "Automated daily crawl (scripts/daily_pipeline.sh). $SUM. See crawler/applied.json for source audit and crawler/pending.json for crawler review. New alumni with corroborated sources are verified. Single-source alumni require bundle approval and show 확인 중. Rollback: scripts/site_publication_rollback.py. AI-reviewed quotes are badged AI 검토 and logged in data/ai_review_log.jsonl. Quote rollback: scripts/ai_review_rollback.py. Site guards passed.")
+  --body "Automated daily crawl (scripts/daily_pipeline.sh). $SUM. See crawler/applied.json for source audit and crawler/pending.json for crawler review. New alumni with corroborated sources are verified. Source-attributed single-source alumni show 확인 중. Independent corroboration upgrades the existing entry. Rollback: scripts/site_publication_rollback.py. AI-reviewed quotes are badged AI 검토 and logged in data/ai_review_log.jsonl. Quote rollback: scripts/ai_review_rollback.py. Site guards passed.")
 gh pr merge "$PR" --squash --delete-branch
 PR_SUCCEEDED=1
 to_main

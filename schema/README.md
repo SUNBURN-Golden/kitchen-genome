@@ -12,6 +12,7 @@ SQLite / Cloudflare D1–compatible SQL. Applied in filename order by `daemon/kg
 | `0006_deepseek_collection.sql` | ai_request, web_daily_url/fetch, web_host_guard, ig_account_state/handle_day/follow_day, AI provenance columns |
 | `0007_aux_robots_counter.sql` | separate daily robots.txt counter on `web_daily_fetch` |
 | `0012_web_access_guard.sql` | expiring web access scopes, host block history, Retry-After and robots cache, Instagram post watermarks and checkpoints |
+| `0013_global_ontology.sql` | branch country, chef location claims, target-to-entity mapping, guide observations, work guards and daily outcome/usage accounting |
 
 Design: [`docs/data/ONTOLOGY.md`](../docs/data/ONTOLOGY.md), [`docs/data/DAEMON.md`](../docs/data/DAEMON.md).
 

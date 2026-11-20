@@ -57,3 +57,116 @@ def _official(conn) -> dict:
     except Exception:  # noqa: BLE001  (DB before migration 0004)
         return {}
     return {'verified_sites_by_basis': sites, 'profile_facts': facts, 'gaps_resolved_by_profile_fact': by_fact, 'probe_jobs': probes, 'booking_fetches': booking}
+
+
+# USD per million input, output and cached-input tokens. Qwen uses the G1 design
+# estimate for the Token Plan route. Other routes are unpriced until configured.
+RATE_VERSION = 'global-genome-2026-11-20'
+MODEL_RATES = {('qwen', 'qwen4-max-preview'): (1.50, 4.50, 1.50)}
+
+
+def record_first(conn, kind, entity_id, at):
+    conn.execute("""INSERT INTO outcome_first(kind,entity_id,first_at) VALUES (?,?,?)
+        ON CONFLICT(kind,entity_id) DO UPDATE SET first_at=min(first_at,excluded.first_at)""",
+        (kind, entity_id, at))
+
+
+def record_publication(conn, seed):
+    """Recover immutable first transitions from the committed seed."""
+    from kg_daemon.ontology import link_resolved_chef, sync_seed_geography
+    from .targets import tid
+
+    sync_seed_geography(conn, seed)
+
+    for row in seed.get('restaurants', []):
+        record = row.get('publication')
+        if not record:
+            continue
+        chef = link_resolved_chef(conn, record['chef_target_id'], record['published_at'])
+        record_first(conn, 'resolved_chef', chef, record['published_at'])
+        if row.get('lineage_status') != 'verified':
+            continue
+        verified = record.get('verified_at')
+        if not verified and record.get('upgrade_review_id'):
+            existing = conn.execute('SELECT resolved_at FROM review_queue WHERE review_id=?',
+                                    (record['upgrade_review_id'],)).fetchone()
+            verified = existing[0] if existing else None
+        if not verified and record.get('creation_gate') == 'verified':
+            verified = record['published_at']
+        if verified:
+            origin = next((k for k in seed.get('kitchens', []) if k['id'] == row['kitchen']), None)
+            target = tid('restaurant', origin['name']) if origin else None
+            branch = conn.execute('SELECT branch_id FROM target_entity WHERE target_id=?', (target,)).fetchone()
+            employer = branch[0] if branch and branch[0] else row['kitchen']
+            record_first(conn, 'verified_link', chef + ':' + employer, verified)
+    conn.commit()
+
+
+def daily_summary(conn, *, now=None, rule_path=GOLD_SYNTH, heldout_path=None, seed_path=None):
+    import datetime as dt
+    from zoneinfo import ZoneInfo
+    from .gold import daily_accuracy
+
+    kst = ZoneInfo('Asia/Seoul')
+    end = (now or dt.datetime.now(kst)).astimezone(kst).replace(hour=0, minute=0, second=0, microsecond=0)
+    day = (end - dt.timedelta(days=1)).date().isoformat()
+    start_utc, end_utc = ((value.astimezone(dt.timezone.utc).strftime('%Y-%m-%dT%H:%M:%SZ'))
+                          for value in (end - dt.timedelta(days=1), end))
+    if seed_path:
+        with open(seed_path, encoding='utf-8') as f:
+            record_publication(conn, json.load(f))
+    # Employment and site publication share the same chef-to-branch identity.
+    conn.execute('''INSERT INTO outcome_first(kind,entity_id,first_at)
+        SELECT 'verified_link', e.chef_id || ':' || e.branch_id, MIN(h.changed_at)
+        FROM employment e JOIN claim_status_history h USING(claim_id)
+        WHERE e.branch_id IS NOT NULL AND h.to_status='verified'
+        GROUP BY e.chef_id,e.branch_id
+        ON CONFLICT(kind,entity_id) DO UPDATE SET first_at=MIN(first_at,excluded.first_at)''')
+    conn.commit()
+    counts = dict(conn.execute("""SELECT kind,COUNT(*) FROM outcome_first
+        WHERE julianday(first_at)>=julianday(?) AND julianday(first_at)<julianday(?) GROUP BY kind""",
+        (start_utc, end_utc)))
+    models = []
+    for r in conn.execute("""WITH attribution AS (
+          SELECT *, COALESCE(provider,CASE WHEN model LIKE 'qwen%' THEN 'qwen'
+             WHEN model LIKE 'deepseek%' THEN 'deepseek' ELSE 'unknown' END) AS route
+          FROM ai_request
+        )
+        SELECT route AS provider,a.model,
+          SUM(a.day=?) AS requests,
+          SUM(a.day=? AND (prompt_tokens IS NULL OR completion_tokens IS NULL)) AS missing_usage,
+          SUM(CASE WHEN a.day=? THEN COALESCE(prompt_tokens,0) ELSE 0 END) AS input_tokens,
+          SUM(CASE WHEN a.day=? THEN COALESCE(completion_tokens,0) ELSE 0 END) AS output_tokens,
+          SUM(CASE WHEN a.day=? THEN COALESCE(cache_tokens,0) ELSE 0 END) AS cache_input_tokens,
+          SUM(COALESCE(c.hits,0)) AS cache_hits
+        FROM attribution a LEFT JOIN ai_cache_day c ON a.request_key=c.request_key AND c.day=?
+        WHERE a.day=? OR c.hits IS NOT NULL GROUP BY route,a.model ORDER BY route,a.model""", (day,) * 7):
+        row = dict(r)
+        rates = MODEL_RATES.get((r['provider'], r['model']))
+        if not r['requests']:
+            dollars = 0
+        elif not rates or r['missing_usage']:
+            dollars = 'unknown'
+        else:
+            uncached = r['input_tokens'] - r['cache_input_tokens']
+            dollars = round((uncached * rates[0] + r['output_tokens'] * rates[1] + r['cache_input_tokens'] * rates[2]) / 1_000_000, 8)
+        models.append({**row, 'estimated_usd': dollars})
+    total = 'unknown' if any(r['estimated_usd'] == 'unknown' for r in models) else sum(r['estimated_usd'] for r in models)
+
+    def per(kind):
+        n = counts.get(kind, 0)
+        return 'n/a' if n == 0 else total if total == 'unknown' else round(total / n, 8)
+
+    docs = conn.execute("""SELECT COUNT(*) FROM fetch_record WHERE outcome='ok' AND method IN ('html','jsonld','browser')
+        AND fetched_at>=? AND fetched_at<?""", (start_utc, end_utc)).fetchone()[0]
+    traffic = {r['route']: {k: r[k] for k in ('requests', 'bytes_in', 'bytes_out')}
+               for r in conn.execute('SELECT * FROM web_traffic_day WHERE day=? ORDER BY route', (day,))}
+    requests = conn.execute('SELECT attempts,robots FROM web_daily_fetch WHERE day=?', (day,)).fetchone()
+    candidates = conn.execute('SELECT COUNT(*) FROM web_daily_url WHERE day=?', (day,)).fetchone()[0]
+    return {'day_kst': day, 'rates': RATE_VERSION, 'models': models, 'estimated_usd': total,
+            'newly_resolved_chefs': counts.get('resolved_chef', 0), 'verified_career_links': counts.get('verified_link', 0),
+            'usd_per_newly_resolved_chef': per('resolved_chef'), 'usd_per_verified_career_link': per('verified_link'),
+            'successful_html_documents': docs, 'transport': traffic,
+            'web_dispatches': {'content': requests[0] if requests else 0, 'robots': requests[1] if requests else 0,
+                               'distinct_candidates': candidates},
+            'accuracy': daily_accuracy(conn, rule_path, heldout_path)}

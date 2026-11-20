@@ -5,7 +5,7 @@
 ```
 PYTHONPATH=daemon python3 -m kg_daemon --db data_store/kg_service.db migrate
 PYTHONPATH=daemon python3 -m kg_daemon --db data_store/kg_service.db seed-migrate      # seed.json 읽기 전용
-PYTHONPATH=daemon python3 -m kg_daemon --db data_store/kg_service.db run [--cost-cap N] [--no-resume]
+PYTHONPATH=daemon python3 -m kg_daemon --db data_store/kg_service.db run [--no-resume]
 PYTHONPATH=daemon python3 -m kg_daemon --db data_store/kg_service.db status | requeue <failure_id>
 pip install -r daemon/requirements.txt   # pyyaml
 ```
@@ -28,14 +28,14 @@ pip install -r daemon/requirements.txt   # pyyaml
 - **실행 잠금**: `run_lock`(DB 임대, TTL 1800s). 이미 잡혀 있으면 `locked`로 즉시 종료(단일 실행). TTL 만료된 잠금은 인수. 종료 시 해제.
 - **체크포인트**: 단계마다 `stage_checkpoint(status, attempts, cursor, output, error)`. 단계 출력은 다음 단계의 입력(`ctx.prev`).
 - **멱등**: 결정적 id, `INSERT OR IGNORE`, `candidate_fact.idempotency_key`(문서 해시+종류+payload), seed_ref 유니크 인덱스. 재실행해도 행이 늘지 않는다(테스트).
-- **재시도(상한)**: 단계 실패 시 `max_attempts=3`, 지수 백오프(2s·2ⁿ, 상한 30s). 시도 중 부분 쓰기는 롤백. NonRetryable은 즉시 실패.
+- **재시도(상한)**: 단계 실패 시 `KG_GUARD_MAX_ATTEMPTS=3`, 지수 백오프(2s·2ⁿ, 상한 30s). 시도 중 부분 쓰기는 롤백. NonRetryable은 즉시 실패.
 - **실패 큐**: 상한 초과 → `failure_queue(stage, error, attempts)` + run `failed`(`failed_stage`). 사람이 `requeue`로 표시.
-- **비용 상한**: `CostMeter`가 `http_request` / `llm_tokens_k` 단위로 계량해 `cost_ledger`에 기록. 상한(`cost_cap_units`, 기본 20) 초과 직전에 **중단 → run `paused_cost_cap`**(실패 아님, 큐 적재 없음). 재실행하면 이어서 진행하며 로컬 daemon 상한은 20 이하로 제한한다.
+- **비용 계량**: `CostMeter`가 `http_request` / `llm_tokens_k` 단위로 계량해 `cost_ledger`에 기록한다. 신규 run의 호환 필드 `cost_cap_units`는 `0`이며 기존 `paused_cost_cap` run은 재개한다.
 - **실패 단계부터 재개**: 다음 `run`은 직전 failed/paused/중단된 run을 `resumed_from`으로 잇고, 이미 `done`인 단계는 출력만 복사해 **다시 실행하지 않는다**(테스트로 검증). 중단돼 `running`으로 남은 run은 이어받는 순간 `abandoned`(finished_at = 후속 run 시작 시각)로 닫힌다 — failed/paused run은 자기 최종 상태를 유지.
 - **정지 규약**: 출처가 429/403/503/챌린지/체크포인트 신호를 내면 그 출처만 정지(플래그/`paused`), 신원·프록시·계정 교체 없음. 레지스트리 검증이 `block_evasion: forbidden`을 강제.
 
 ## 4.3 Phase 1에서 **실제로 구현된 것 / 스텁**
-구현: 스키마 2개, 레지스트리 검증·동기화, seed→온톨로지 마이그레이션, claim 승격 규칙, 이동·기준일 의미론, 데몬 9단계의 로컬 데이터 경로, 잠금·재시도·실패 큐·비용 상한·재개, 품질 불변식, 테스트.
+구현: 스키마 2개, 레지스트리 검증·동기화, seed→온톨로지 마이그레이션, claim 승격 규칙, 이동·기준일 의미론, 데몬 9단계의 로컬 데이터 경로, 잠금·재시도·실패 큐·비용 계량·재개, 품질 불변식, 테스트.
 스텁(인터페이스·보고만): ① http fetcher(공식 사이트·RSS·검색) ② AI 추출기 ③ 퍼지 엔티티 매칭 ④ 주기(cadence) 스케줄러 ⑤ raw purge 작업(`retention_expires_at`만 기록) ⑥ `daily_pipeline.sh` 연동 ⑦ IG는 기존 `crawler/instagram.py` 산출물만 읽음(**데몬이 IG에 로그인·접속하지 않음**) ⑧ D1 배포(로컬 SQLite만).
 
 ## 4.4 다음 단계 / Next phases (제안)
@@ -69,7 +69,5 @@ Low/unavailable balance is a clean model pause; deferred local documents retain
 their extraction checkpoint for a later run. Local AI `candidate_fact` findings
 now use the same DeepSeek review as collector extractions before annotation
 publication. `ai_reviewed` carries the badge, source and rollback IDs. Monthly
-rechecks and all AI requests share the daily model cap (at most 20); there is no
-extra recheck allowance. Instagram remains disabled. See
-[the efficiency design](DEEPSEEK_IMPROVE_DESIGN.md) for private migration 0008,
-review holds, schedule/backoff state, and mocked verification.
+rechecks enter the due queue. The G1 runbook documents model fallback, request
+accounting and the daily summary.

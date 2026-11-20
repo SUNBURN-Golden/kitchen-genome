@@ -20,6 +20,9 @@ def test_daily_pipeline_syntax_and_publish_contract():
     assert daily.index('collect_daily.sh') < daily.index('python3 crawler/apply.py') < daily.index('git add -A data crawler web scripts .gitignore')
     assert collect.read_text().index('-m kg_collect') < collect.read_text().index('crawler/instagram_kg.py')
     assert 's.get("failed",0)' in collect.read_text()
+    assert 'daily-summary' in text and 'COLLECT_METRICS' in daily
+    assert '--cost-cap' not in text and '--units' not in text
+    assert 'Single-source alumni require bundle approval' not in daily
     assert 'instagram_kg.py' in text and 'instagram.py' not in text
     assert 'git checkout' not in collect.read_text() and 'git pull' not in collect.read_text()
     assert 'gh pr merge' not in collect.read_text() and './deploy.sh' not in collect.read_text()

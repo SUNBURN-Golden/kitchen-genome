@@ -35,7 +35,7 @@ def evaluate_gold(gold: dict, gaz_conn=None, context_fn=None) -> dict:
     conn = gaz_conn or build_gold_db(gold)
     gaz = Gazetteer(conn)
     tp = fp = fn = 0
-    ep_ok = ep_n = 0
+    ep_ok = ep_n = exact = quotes = 0
     errors = []
     by_label: dict = {}
     for s in gold['sentences']:
@@ -45,6 +45,8 @@ def evaluate_gold(gold: dict, gaz_conn=None, context_fn=None) -> dict:
                                        official_hosts=set(s.get('official_hosts', []))) if g['span_start'] >= len(pre)]
         gotmap = {}
         for g in got:
+            quotes += 1
+            exact += int(bool(g.get('quote') and (pre + s['text'])[g['span_start']:g['span_end']] == g['quote']))
             gotmap.setdefault(_key(g['label'], g.get('chef_text'), g.get('restaurant_text'), g.get('org_text')), []).append(g)
         exp = {_key(e['label'], e.get('chef'), e.get('restaurant'), e.get('org')): e for e in s['expect']}
         for k, e in exp.items():
@@ -69,7 +71,7 @@ def evaluate_gold(gold: dict, gaz_conn=None, context_fn=None) -> dict:
     p = tp / (tp + fp) if tp + fp else 0.0
     r = tp / (tp + fn) if tp + fn else 0.0
     res = {'sentences': len(gold['sentences']), 'expected_items': tp + fn, 'precision': round(p, 3), 'recall': round(r, 3), 'f1': round(2 * p * r / (p + r), 3) if p + r else 0.0,
-           'epistemic_accuracy': round(ep_ok / ep_n, 3) if ep_n else None, 'by_label': by_label, 'errors': errors[:25]}
+           'quote_fidelity': round(exact / quotes, 3) if quotes else 'n/a', 'epistemic_accuracy': round(ep_ok / ep_n, 3) if ep_n else None, 'by_label': by_label, 'errors': errors[:25]}
     wrong = right = unres = 0
     for c in gold.get('resolve', []):
         ctx_t = [t['target_id'] for t in conn.execute('SELECT target_id FROM target WHERE kind=\'restaurant\' AND name_ko IN (%s)' % ','.join('?' * len(c.get('context', [])) or ['NULL']), c.get('context', []))] if c.get('context') else []
@@ -124,3 +126,66 @@ def run_file(path: str, gaz_conn=None, gaz_db: str | None = None, docs_db: str |
     if gaz_db and gaz_conn is None:
         gaz_conn = connect(gaz_db)
     return evaluate_gold(json.load(open(path, encoding='utf-8')), gaz_conn, doc_context_from_store(docs_db) if docs_db else None)
+
+
+def _scores(tp, fp, fn, fidelity, quotes, false_merges, samples):
+    p = tp / (tp + fp) if tp + fp else 0
+    r = tp / (tp + fn) if tp + fn else 0
+    return {'samples': samples, 'precision': round(p, 3), 'recall': round(r, 3),
+            'f1': round(2 * p * r / (p + r), 3) if p + r else 0,
+            'quote_fidelity': round(fidelity / quotes, 3) if quotes else 'n/a',
+            'false_merges': false_merges}
+
+
+def score_saved_articles(conn, gold):
+    """Score labelled held-out fetch jobs, including documents skipped by the prefilter."""
+    from collections import defaultdict
+
+    groups = defaultdict(lambda: [0] * 7)
+    for article in gold['articles']:
+        language = article['language']
+        rows = conn.execute("""SELECT e.* FROM extraction e
+            WHERE e.asserted_by='ai_inference' AND e.extractor LIKE 'deepseek:%' AND (fetch_id=? OR EXISTS (
+              SELECT 1 FROM article_extraction_fetch l WHERE l.fetch_id=? AND l.extraction_id=e.extraction_id))""",
+            (article['fetch_id'],) * 2).fetchall()
+        sample = conn.execute('SELECT 1 FROM model_document_sample WHERE fetch_id=?', (article['fetch_id'],)).fetchone()
+        if not sample and not rows and not article.get('prefilter_miss'):
+            continue
+        expected = {_key(r['label'], r.get('chef'), r.get('restaurant'), r.get('org')): r
+                    for r in article['expect']}
+        got = {_key(r['label'], r['chef_text'], r['restaurant_text'], r['org_text']): r for r in rows}
+        shared = expected.keys() & got.keys()
+        exact = sum(bool(r['quote'] and article['text'][r['span_start']:r['span_end']] == r['quote'])
+                    for r in got.values())
+        merges = sum(bool(expected[k].get('chef_target_id') and got[k]['resolved_chef_target']
+                          and expected[k]['chef_target_id'] != got[k]['resolved_chef_target']) for k in shared)
+        scores = (len(shared), len(got.keys() - expected.keys()), len(expected.keys() - got.keys()),
+                  exact, len(got), merges, 1)
+        for key in (language, 'overall'):
+            groups[key] = [a + b for a, b in zip(groups[key], scores)]
+    return {k: _scores(*v) for k, v in groups.items()}
+
+
+def daily_accuracy(conn, rule_path, heldout_path=None):
+    import hashlib
+    import os
+
+    def load(path):
+        with open(path, 'rb') as f:
+            data = f.read()
+        gold = json.loads(data)
+        return gold, gold.get('version') or hashlib.sha256(data).hexdigest()[:12]
+
+    report = {'korean_rules': 'n/a', 'saved_model': 'n/a'}
+    if rule_path and os.path.isfile(rule_path):
+        gold, version = load(rule_path)
+        rules = evaluate_gold(gold)
+        scores = {k: rules[k] for k in ('precision', 'recall', 'f1', 'quote_fidelity')}
+        scores.update(samples=rules['sentences'], false_merges=rules['entity_resolution']['false_merges'])
+        report['korean_rules'] = {'version': version, 'ko': scores, 'overall': scores}
+    if heldout_path and os.path.isfile(heldout_path):
+        gold, version = load(heldout_path)
+        scored = score_saved_articles(conn, gold)
+        report['saved_model'] = {'version': version, 'labelled_samples': len(gold['articles']),
+                                 **(scored or {'overall': 'n/a'})}
+    return report

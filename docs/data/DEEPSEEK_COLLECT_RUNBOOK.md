@@ -1,10 +1,9 @@
 # DeepSeek web and Kitchen Genome Instagram collection
 
 The November 20 access policy enables saved-session Instagram in the daily
-pipeline and selects web egress by local tunnel health. The shared model allowance
-still applies. Offline verification uses injected HTTP and balance responses.
-`balance_low` and `balance_unavailable` pause model work while deterministic
-stages continue. The reason is carried through COLLECT, AI_REVIEW, DAEMON and
+pipeline and selects web egress by local tunnel health. Offline verification uses
+injected HTTP and balance responses. `balance_low` and `balance_unavailable`
+select Qwen when configured. Deterministic work continues during provider pauses. The reason is carried through COLLECT, AI_REVIEW, DAEMON and
 the final RESULT summary.
 
 AI findings publish only after the common DeepSeek review approves an exact
@@ -19,11 +18,16 @@ target. The gate uses active seed/discovered Gazetteer aliases in the submitted
 sanitized context. Plan requests instead validate active open-gap metadata.
 
 Monthly rechecks bootstrap and stagger published targets over 30 days in the
-private service DB. Daily admission, a 20% fetch share and an AI sublimit of
-`min(8, 0.4 * shared_daily_cap)` protect fresh work. All changed-state candidates,
-including rules, use the same DeepSeek review. Failed/partial inspections and
-balance/budget deferrals do not advance last-checked time. Full inspections with
-no changed-state candidates mean “no change observed,” not confirmed open.
+private service DB. Due work enters the same rotating scheduler as other
+collection. Changed-state candidates, including rules, use the common review
+path. Deferred or partial inspections preserve the last completed check.
+A full inspection with no changed-state candidates records “no change observed.”
+
+Publisher-attributed lineage with clear identities and a sourced destination is
+eligible for publication as 확인 중. Two independent sources with verbatim quotes
+on each edge upgrade the entry in place to 출처 확인. An official biography counts
+as one source. Role and date use their own evidence. Conflicts go to review.
+The seed update, publication audit and rollback tombstones keep the stable row ID.
 
 After the last daily review, the offline weekly writer generates completed KST
 weeks beneath `marketing/drafts/`. Drafts MUST pass Gemini Argon review via
@@ -52,13 +56,13 @@ PYTHONPATH=daemon python3 -m kg_daemon --db data_store/kg_service.db migrate
 For a new development DB only, `PYTHONPATH=daemon python3 -m kg_collect init`
 creates schema and seeds targets. Do not initialize a replacement production DB to
 recover a missing mount. The daily script skips AI/IG when the service DB is absent;
-the deterministic crawler uses its separate ignored local web quota DB in that case.
-All callers must use the same `KG_SERVICE_DB` path to share daily model/web limits.
+the deterministic crawler can use its ignored local DB. The shared `KG_SERVICE_DB`
+path combines request accounting, access state and outcome history.
 
 Supply credentials through the process environment or the operator's secret
 manager. Never pass their values as CLI arguments or enable shell tracing:
 
-- `DEEPSEEK_API_KEY`: shared DeepSeek client; absent key disables AI explicitly.
+- `DEEPSEEK_API_KEY`: primary model credential. A configured Qwen Token Plan credential also supports Qwen-only runs.
 - Session: `/home/box/.secrets/kg_ig_kitchen_genome.session`, mode 0600.
   A missing file skips before any network call. The collector does not
   password-login and does not create a session.
@@ -95,36 +99,14 @@ bash scripts/daily_pipeline.sh /tmp/kg
 ```
 
 That script checks out and fast-forwards main, so it must not be pointed at an
-unmerged branch. Before merge, or for a bounded web-only check that does not
-touch git, publish, or the legacy Instagram account:
+unmerged branch. The daily pipeline calls `collect_daily.sh` for in-place
+collection with `--no-browser`. `KG_DEEPSEEK` enables the model chain. Web
+collection also runs when Instagram is skipped. Direct equivalents:
 
 ```bash
-KG_IG=0 KG_COLLECT_UNITS=2 KG_COLLECT_COST_CAP=23 \
-  bash scripts/collect_daily.sh /workspace/kitchen-genome
-```
-
-That is the bounded smoke. A live run at those settings (`run_b47e3a2d16ce`)
-validated one `deepseek-chat` plan, prompt 2399 / completion 1966, cost 2.1825,
-and stored a 40-item result. The cycle then paused because the next reservation
-was the full-document byte ceiling, which did not fit in the remaining daily
-allowance. The ceiling is still the safety bound. An excerpt is shortened until
-that bound fits in the remaining run cap and the daily cap of 20, so this smoke
-can finish every stage. The stored plan is reused and is not billed again.
-`COLLECT=succeeded` means the stages finished, including deterministic apply.
-Read `ai=` and `reason=` as well: `ai=enabled` means the model calls that ran
-were accepted; `ai=paused reason=cost_cap` means a later call could not fit even
-a short excerpt. `COLLECT=paused_cost_cap` means fetch cost, or usage past the
-reservation, stopped the run; the next run resumes that stage. Do not raise
-`KG_AI_DAILY_COST_CAP` (clamped at 20) or the default `KG_COLLECT_COST_CAP` (78).
-
-`collect_daily.sh` is also what the daily script calls for collection. It always
-passes `--no-browser`. `KG_DEEPSEEK` defaults to `1`. Web collection runs when
-Instagram is skipped. Direct equivalents:
-
-```bash
-PYTHONPATH=daemon python3 -m kg_collect --db "$KG_SERVICE_DB" cycle --units 60 --cost-cap 78 --no-browser --deepseek
+PYTHONPATH=daemon python3 -m kg_collect --db "$KG_SERVICE_DB" cycle --no-browser --deepseek
 PYTHONPATH=daemon python3 crawler/instagram_kg.py --db "$KG_SERVICE_DB" --deepseek
-PYTHONPATH=daemon python3 -m kg_daemon --db "$KG_SERVICE_DB" run --cost-cap 20 --deepseek
+PYTHONPATH=daemon python3 -m kg_daemon --db "$KG_SERVICE_DB" run --deepseek
 ```
 
 The collector refreshes deterministic gaps, adds validated query suggestions,
@@ -154,43 +136,46 @@ list remains valid. Run `749a8bdcf4fe` stored only
 now states the same limits (at most 8 findings, an exact quote, no date
 conversion, names copied from the page). Schema version stays `json-2`, so a
 cached gap plan is unchanged and the next extract is a new request. One schema
-rejection is still retried once and the retry names the category. If that retry
-cannot be reserved, the stored category remains and no second call is made.
-
-Default pipeline controls:
+rejection gets one correction that names the category.
 
 | Variable | Default | Effect |
 | --- | --- | --- |
 | `KG_COLLECT` | `1` | Run web collector and daemon bridge |
-| `KG_COLLECT_UNITS` | `60` | Scheduler allowance before run/model budget gates |
-| `KG_COLLECT_COST_CAP` | `78` | Web run internal cost cap |
-| `KG_DEEPSEEK` | `1` | Pass `--deepseek` to all three callers |
-| `KG_AI_DAILY_COST_CAP` | `20` | Shared KST-day model allowance, clamped to 0–20 |
+| `KG_COLLECT_TIMEOUT` | `1500` | Existing shell timeout in seconds. The collector leaves time for extraction and finalization. |
+| `KG_DEEPSEEK` | `1` | Enable the configured model chain |
+| `KG_QWEN_MODEL` | `qwen4-max-preview` | Model ID on the existing Qwen Token Plan route |
+| `KG_GUARD_IDENTICAL_FAILURES` | `5` | Consecutive identical failures in one lane |
+| `KG_GUARD_NO_PROGRESS` | `10` | Runnable passes with unchanged cursor or state |
+| `KG_GUARD_MAX_ATTEMPTS` | `3` | Transient attempts per job or document version |
 | `KG_IG` | Daily pipeline `1`, heavy and standalone wrapper `0` | Read Instagram with the saved Kitchen Genome session |
-| `KG_DAEMON_COST_CAP` | `20` | Local-document daemon cap |
-| `KG_SERVICE_DB` | `$KG_HOME/data_store/kg_service.db` (`KG_HOME` defaults to `/workspace/kitchen-genome`) | Shared private service state |
+| `KG_SERVICE_DB` | `$KG_HOME/data_store/kg_service.db` | Shared private service state |
 
-Cost units are internal, not dollar prices: 0.5 units per 1,000 total model tokens.
-The client reserves UTF-8 request bytes plus framing allowance plus maximum output
-against the caller’s run allowance where configured and the shared day cap before HTTP. When that ceiling is larger
-than the room left in either cap, the excerpt is shortened until it fits. A call
-that cannot fit even a short excerpt is not sent; the model stops for that run
-with `reason=cost_cap` and deterministic stages still finish. Successful responses
-settle to actual usage, which releases the unused hold so a later call can reserve.
-Malformed task JSON with valid usage is charged, without partial results. Unknown
-usage, timeout and process loss keep the reservation. New runs cannot erase it.
-A deterministic request key reuses a validated result, including one produced by
-the single allowed retry. A previously rejected task is not replayed and does not
-pause later documents. Unknown attempts still pause the run. Investigate those
-manually; do not delete accounting rows or alter task versions to retry them.
-Model/prompt/schema versions belong in audit metadata and must change when the
-extraction contract changes.
+The scheduler ranks due work by priority, age and query history and rotates
+across work pools. HTTP dispatch and byte counters are for reporting. Heavy
+collection keeps its scheduled blocks and uses six cross-host workers by
+default. Its optional block runs with at least one due item. Request timeouts,
+body bounds, freshness, deduplication and host access stops still apply.
 
-## Limits and stop behavior
+AI requests are registered atomically by request key. Settled requests record
+actual provider tokens and cache usage. Ambiguous responses retain an unknown
+usage row. Request context and output bounds determine batching, and cached
+validated results can be reused. A faulted lane records its reason and last
+committed item. Exhausted items go to review. Delayed and host-blocked jobs
+remain available under their normal policies.
 
-Daily and legacy web collection retain the shared KST-day counts and limits
-for candidate URLs, content dispatches and robots queries. Heavy collection
-retains its scheduled blocks, traffic and frontier limits.
+The daily `COLLECT_METRICS` line rolls up the previous closed KST day. It
+includes HTML documents, proxy and direct traffic, provider/model usage and
+versioned cost estimates, followed by per-chef and per-career-link cost using
+first transitions. Zero denominators show `n/a`. Unpriced or missing usage
+shows `unknown`. The Korean rule gold set reports precision, recall, F1,
+quote fidelity and false merges. A private
+`gold/gold_heldout_articles.json` beside the DB can supply a version and an
+`articles` array with `fetch_id`, `language`, labelled `expect` and the
+sanitized source `text`. The scorer reads saved model output and includes
+prefilter misses. An absent model sample is `n/a`. Reports affect no work
+selection or publication.
+
+## Access and stop behavior
 
 The shared HTTP guard uses one lock per normalized host, including redirects
 and robots retrieval. Only Korean press hosts consult robots.txt and wait at
@@ -239,7 +224,7 @@ caches when the collector is invoked (even outside the network window). Purged
 cache rows are marked `expired`: a resurfacing caption loses only that cached
 answer, it does not disable model calls for the rest of the run. Keep the collector
 scheduled daily for retention cleanup; offline backups require their own retention
-policy. Audit identifiers and budget reservations remain.
+policy. Request IDs and usage audit rows remain.
 
 No review row auto-publishes. Human acceptance must record a separate evidence and
 decision trail; do not rewrite model provenance into a source assertion. The legacy
@@ -270,8 +255,7 @@ RESULT=DEPLOYED pr=<url>
 change, so the site is not deployed. `NEEDS_DEPLOY` means `web/` changed and
 deploy did not run or did not succeed. `DEPLOYED` means `./deploy.sh main`
 succeeded. AI and dedicated-account findings are not in that PR: apply drops
-them before `seed.json`, `applied.json`, and the site are written. A model-budget
-stop does not by itself change `web/`. The cron command stays
+them before `seed.json`, `applied.json`, and the site are written. The cron command stays
 `bash scripts/daily_pipeline.sh`. After this lands on main that command no
 longer runs the legacy Instagram account. Build guards (`SHOW_VERDICTS`,
 `SHOW_NEWSLETTER`, no `noindex`) and `scripts/build_deploy.py` still run. No
@@ -298,7 +282,6 @@ bash -n scripts/daily_pipeline.sh
 ```
 
 Fixtures inject provider HTTP, IG HTTP, clocks and subprocesses. They check
-usage/reservations, lost responses, concurrent daily budgets, schema/quote
-validation, bridge provenance, pending-only isolation, daily network limits,
-request spacing, restart quotas, block persistence, optional follows, and the
-squash-merge result lines. No real secret paths, accounts, passwords or paid calls are needed.
+usage accounting, lost responses, concurrent request registration, quote
+validation, bridge provenance, publication, circuit breakers, request spacing,
+block persistence, Instagram checkpointing and squash-merge result lines. No real secret paths, accounts, passwords or paid calls are needed.

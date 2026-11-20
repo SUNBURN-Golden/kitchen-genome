@@ -4,7 +4,7 @@ import calendar
 import re
 
 from .claims import RANK, add_evidence, create_claim, link_evidence, queue_review
-from .db import new_id, utcnow
+from .db import new_id, stable_id, utcnow
 
 _DATE = re.compile(r'^(\d{4})(?:-(\d{2}))?(?:-(\d{2}))?$')
 
@@ -216,3 +216,90 @@ def alumni_of(conn, kitchen_restaurant_id, min_status='source_claim') -> list[di
             if RANK[r['claim_status']] >= RANK[min_status]:
                 a['opened'].append({'branch_id': r['branch_id'], 'restaurant': r['name'], 'effective_date': r['effective_date'], 'claim_status': r['claim_status']})
     return sorted(out.values(), key=lambda a: a['display_name'])
+
+
+# Only cities and seed IDs with an established location are inferred.
+SEED_CITY_COUNTRY = {'서울': 'KR', '울산': 'KR', '부산': 'KR', '인천': 'KR', '대구': 'KR',
+                     '대전': 'KR', '광주': 'KR', '제주': 'KR', '뉴욕': 'US'}
+
+
+def seed_country(row):
+    code = row.get('country_code')
+    if isinstance(code, str) and re.fullmatch('[A-Z]{2}', code):
+        return code
+    return SEED_CITY_COUNTRY.get(row.get('city'))
+
+
+def sync_seed_geography(conn, seed):
+    """Attach existing seed IDs to targets and backfill evidence-backed geography."""
+    from kg_collect.targets import tid
+
+    if not conn.execute("SELECT 1 FROM sqlite_master WHERE name='target_entity'").fetchone():
+        return
+    for row in (*seed.get('kitchens', []), *seed.get('restaurants', [])):
+        marker = row.get('publication') or {}
+        target = marker.get('restaurant_target_id') or tid('restaurant', row['name'])
+        branches = conn.execute("""SELECT b.branch_id,b.restaurant_id,b.city FROM branch b
+            JOIN alias a ON a.entity_type='restaurant' AND a.entity_id=b.restaurant_id
+            WHERE a.kind='legacy_id' AND a.alias=? AND b.label='main'""", (row['id'],)).fetchall()
+        if len(branches) > 1:
+            continue
+        if branches:
+            branch, restaurant, city = branches[0]
+        elif marker:
+            from .seed_migration import add_alias
+            restaurant = stable_id('rst', 'seed:restaurant:' + row['id'])
+            branch = stable_id('brn', restaurant, 'main')
+            city = row.get('city')
+            stamp = marker['published_at']
+            conn.execute('INSERT OR IGNORE INTO restaurant(restaurant_id,name,name_en,created_at) VALUES (?,?,?,?)',
+                         (restaurant, row['name'], row.get('name_en'), stamp))
+            conn.execute('INSERT OR IGNORE INTO branch(branch_id,restaurant_id,area,city,created_at) VALUES (?,?,?,?,?)',
+                         (branch, restaurant, row.get('area'), city, stamp))
+            add_alias(conn, 'restaurant', restaurant, row['id'], 'legacy_id', stamp)
+        else:
+            continue
+        code = seed_country(row) or SEED_CITY_COUNTRY.get(city)
+        conn.execute('UPDATE branch SET country_code=COALESCE(country_code,?),city=COALESCE(city,?) WHERE branch_id=?',
+                     (code, row.get('city'), branch))
+        conn.execute("""INSERT OR IGNORE INTO target_entity(target_id,restaurant_id,branch_id)
+            SELECT target_id,?,? FROM target WHERE target_id=? AND kind='restaurant'""", (restaurant, branch, target))
+
+    for target in conn.execute("SELECT target_id,name_ko FROM target WHERE kind='chef'"):
+        ids = conn.execute('SELECT chef_id FROM chef WHERE display_name=?', (target['name_ko'],)).fetchall()
+        if len(ids) == 1:
+            conn.execute('INSERT OR IGNORE INTO target_entity(target_id,chef_id) VALUES (?,?)', (target['target_id'], ids[0][0]))
+
+    for row in conn.execute("""SELECT e.*,b.city,b.country_code,c.status FROM employment e
+        JOIN branch b USING(branch_id) JOIN claim c USING(claim_id)
+        WHERE e.valid_to_kind='open' AND c.status IN ('verified','source_claim')
+          AND (b.city IS NOT NULL OR b.country_code IS NOT NULL)
+          AND EXISTS (SELECT 1 FROM claim_evidence ce WHERE ce.claim_id=e.claim_id AND ce.stance='supports')
+          AND NOT EXISTS (SELECT 1 FROM chef_location cl WHERE cl.employment_id=e.employment_id)""").fetchall():
+        claim = create_claim(conn, 'attribute', 'source_claim', 'migration:seed-location',
+                             claim_id=stable_id('clm', 'chef_location', row['employment_id']))
+        for evidence in conn.execute("SELECT evidence_id,stance FROM claim_evidence WHERE claim_id=?", (row['claim_id'],)):
+            link_evidence(conn, claim, evidence['evidence_id'], stance=evidence['stance'])
+        conn.execute("""INSERT OR IGNORE INTO chef_location(claim_id,chef_id,country_code,city,valid_from,valid_to,basis,employment_id)
+            VALUES (?,?,?,?,?,?,'current_employment',?)""",
+                     (claim, row['chef_id'], row['country_code'], row['city'], row['valid_from'], row['valid_to'], row['employment_id']))
+
+
+def link_resolved_chef(conn, target_id, now):
+    target = conn.execute("SELECT name_ko,name_en FROM target WHERE target_id=? AND kind='chef'", (target_id,)).fetchone()
+    if not target:
+        return target_id
+    mapped = conn.execute('SELECT chef_id FROM target_entity WHERE target_id=?', (target_id,)).fetchone()
+    if mapped:
+        return mapped['chef_id']
+    matches = conn.execute('SELECT chef_id FROM chef WHERE display_name=?', (target['name_ko'],)).fetchall()
+    if len(matches) > 1:
+        return target_id
+    if matches:
+        chef = matches[0][0]
+    else:
+        chef = stable_id('chf', target_id)
+        conn.execute('INSERT OR IGNORE INTO chef(chef_id,display_name,display_name_en,created_at) VALUES (?,?,?,?)',
+                     (chef, target['name_ko'] or target['name_en'], target['name_en'], now))
+    conn.execute('INSERT OR IGNORE INTO target_entity(target_id,chef_id) VALUES (?,?)', (target_id, chef))
+    return chef

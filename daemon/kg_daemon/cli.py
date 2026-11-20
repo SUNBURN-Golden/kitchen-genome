@@ -19,7 +19,6 @@ def main(argv=None) -> int:
     rn = sub.add_parser('run')
     rn.add_argument('--deepseek', action='store_true')
     rn.add_argument('--no-resume', action='store_true')
-    rn.add_argument('--cost-cap', type=float)
     rn.add_argument('--collect-db', help='live collector DB (kg_collect extraction table); default: --db itself')
     rn.add_argument('--today')
     sub.add_parser('status')
@@ -36,19 +35,18 @@ def main(argv=None) -> int:
     elif a.cmd == 'run':
         from .runner import Daemon
         from .stages import HANDLERS
-        cfg = {'cost_cap_units': max(0, min(20, a.cost_cap if a.cost_cap is not None else 20))}
         raw_dir = os.path.join(os.path.dirname(os.path.abspath(a.db)), 'raw')
         env = {'raw_dir': raw_dir, 'collect_db': a.collect_db or (a.db if a.db != ':memory:' else None)}
         env['deepseek'] = a.deepseek
         if a.today:
             env['today'] = a.today
-        rep = Daemon(conn, HANDLERS, cfg, env=env).run(resume=not a.no_resume)
+        rep = Daemon(conn, HANDLERS, env=env).run(resume=not a.no_resume)
         adapter = env.get('_deepseek')
         rep['ai'] = adapter.client.status if adapter else 'disabled'
-        rep['ai_reason'] = (adapter.client.stopped or ('none' if adapter.client.key else 'missing_key')) if adapter else 'none'
+        rep['ai_reason'] = (adapter.client.stopped or ('none' if adapter.client.configured else 'missing_key')) if adapter else 'none'
         rep['ai_stats'] = dict(adapter.stats) if adapter else {}
         print(json.dumps(rep, ensure_ascii=False))
-        return 0 if rep['status'] in ('succeeded', 'locked', 'paused_cost_cap', 'paused_source') else 1
+        return 0 if rep['status'] in ('succeeded', 'locked', 'paused_source') else 1
     elif a.cmd == 'status':
         rows = [dict(r) for r in conn.execute('SELECT run_id,status,failed_stage,cost_used_units,started_at FROM daemon_run ORDER BY started_at DESC LIMIT 5')]
         fq = conn.execute("SELECT COUNT(*) c FROM failure_queue WHERE state='open'").fetchone()['c']

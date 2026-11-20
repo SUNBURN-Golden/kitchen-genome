@@ -82,7 +82,7 @@ def rpage(r):
     g=[rest]
     if c:
         p={'@type':'Person','name':c,'jobTitle':'Chef'}
-        if 'kitchen' not in (r.get('career_checking') or []): p['worksFor']={'@id':rest['@id']}
+        if not {'chef', 'kitchen'}.intersection(r.get('career_checking') or []): p['worksFor']={'@id':rest['@id']}
         if not bad_chef(r): p['alternateName']=re.sub(r'\s*\(.*?\)','',r['chef']).strip()
         if k and 'kitchen' not in (r.get('career_checking') or []): p['alumniOf']={'@type':'Organization','name':kn(k),'url':f'{BASE}/en/k/{k["id"]}/'}
         g.append(p)

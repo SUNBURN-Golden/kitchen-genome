@@ -5,6 +5,7 @@ import re
 import unicodedata
 
 from kg_daemon.db import stable_id, utcnow
+from kg_daemon.ontology import seed_country, sync_seed_geography
 
 PLACEHOLDER = re.compile(r'이름 미기재|미확인|미기재')
 CHEF_SPLIT = re.compile(r'\s*(?:[·&+/]|\s및\s)\s*')
@@ -83,12 +84,12 @@ def load_seed_targets(conn, seed: dict, now=None) -> dict:
         _write_attrs(conn, t['target_id'], a)
     for k in seed.get('kitchens', []):
         upsert_target(conn, 'restaurant', k['name'], k.get('en') or k.get('name_en'), aliases=k.get('aliases', ()),
-                      attrs={'role': 'origin_kitchen', 'seed_id': k['id'], 'city': k.get('city')}, now=now)
+                      attrs={'role': 'origin_kitchen', 'seed_id': k['id'], 'city': k.get('city'), 'country_code': seed_country(k)}, now=now)
         n['restaurant'] += 1
     regions, cuisines = set(), set()
     for r in seed.get('restaurants', []):
         attrs = {'seed_id': r['id'], 'area': r.get('area'), 'cuisine': r.get('cuisine'), 'kitchen': r.get('kitchen'), 'opened': r.get('opened'), 'site': r.get('url'),
-                 'role': r.get('role'), 'chef': r.get('chef'), 'city': r.get('city'), 'address': r.get('address'), 'branch': r.get('branch')}
+                 'role': r.get('role'), 'chef': r.get('chef'), 'city': r.get('city'), 'address': r.get('address'), 'branch': r.get('branch'), 'country_code': seed_country(r)}
         aliases = r.get('prev_names') or ()
         marker = generated.get(r['id'])
         if marker:
@@ -117,6 +118,7 @@ def load_seed_targets(conn, seed: dict, now=None) -> dict:
         upsert_target(conn, 'region', reg, now=now)
     for c in sorted(cuisines):
         upsert_target(conn, 'cuisine', c, now=now)
+    sync_seed_geography(conn, seed)
     conn.commit()
     n['region'], n['cuisine'] = len(regions), len(cuisines)
     return n

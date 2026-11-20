@@ -36,7 +36,6 @@ from privacy_filter import sanitize_before_store  # noqa: E402
 REASON = 'entity_publication'
 SUBJECT = 'publication_bundle'
 TOMBSTONES = 'publication_rollbacks'
-CAP = 12
 KST = ZoneInfo('Asia/Seoul')
 EDGES = ('lineage', 'affiliation', 'location')
 UNTRUSTED = ('xportsnews', 'sports.khan', 'sports.donga', 'celebinfluencernews', 'wikitree',
@@ -203,6 +202,14 @@ class Corpus:
             self.snapshots[key] = (stored, _normalized(visible))
         return self.snapshots[key]
 
+    def attributed_reference(self, row, subject):
+        policy = self.policy_for(row, subject)
+        if not policy:
+            return None
+        return {'extraction_id': row.get('extraction_id'), 'fetch_id': row['fetch_id'], 'src': row['src'],
+                'host': row['fetch_host'], 'quote': '', 'published_at': row['fetch_published'],
+                'quote_span': None, 'content_hash': row['content_hash'] or '', **policy}
+
     def reference(self, row, subject, *, verify_span=True):
         policy = self.policy_for(row, subject)
         quote = row['quote']
@@ -216,7 +223,7 @@ class Corpus:
             return None
         if verify_span:
             start, end = row['span_start'], row['span_end']
-            if not 0 <= start < end <= len(stored):
+            if start is None or end is None or not 0 <= start < end <= len(stored):
                 return None
             offset = stored.find(quote, start, end)
             if offset < 0:
@@ -299,7 +306,7 @@ class Corpus:
                 row['role_text'] = match['role']
             elif not extract.confirmed_closure(row['quote'], venue_name):
                 continue
-            ref = self.reference(row, venue_id)
+            ref = self.reference(row, venue_id) or (self.attributed_reference(row, venue_id) if label != 'closure' else None)
             # A verified restaurant bio can state its own chef's earlier career.
             # Verify this association against a current affiliation during assembly.
             self.proofs.append((row, venue_id, ref))
@@ -308,10 +315,10 @@ class Corpus:
     def qualified_targets(self):
         by_target = {}
         for row, venue, ref in self.rows():
-            if ref and row['label'] != 'closure' and (row['label'] == 'career' or self.current(row, ref)):
+            if ref and ref['quote'] and row['label'] != 'closure' and (row['label'] == 'career' or self.current(row, ref)):
                 for target in (venue, row['resolved_chef_target']):
-                    by_target.setdefault(target, []).append(ref)
-        return {target for target, refs in by_target.items() if verified(refs)}
+                    by_target.setdefault((target, row['resolved_chef_target'], venue, row['label'] == 'career'), []).append(ref)
+        return {edge[0] for edge, refs in by_target.items() if verified(refs)}
 
     def current(self, row, ref):
         # Undated official profiles must actually assert a current lead position.
@@ -337,9 +344,7 @@ def _unique(refs):
 
 
 def verified(refs):
-    refs = _unique(refs)
-    if any(r['official'] for r in refs):
-        return True
+    refs = _unique(r for r in refs if r['quote'])
     parents = list(range(len(refs)))
 
     def root(i):
@@ -417,7 +422,7 @@ def _public_refs(refs):
 
 def _fingerprint(values, evidence, gate):
     proofs = sorted((edge, ref['src'], ref['quote'], ref['content_hash'])
-                    for edge, refs in evidence.items() for ref in refs)
+                    for edge, refs in evidence.items() for ref in _unique(refs))
     return digest([values, proofs, gate])
 
 
@@ -465,11 +470,13 @@ def _location_refs(corpus, restaurant, evidence_rows):
 
 
 def _opened(affiliation):
-    dates = set()
+    dates = {}
     for row, ref in affiliation:
         if row['label'] != 'opening':
             continue
         quote = ref['quote']
+        if not quote:
+            continue
         # Dates in another tenure clause cannot supply the opening date.
         quote = re.split(r'(?:셰프|쉐프)(?:가|는|이|은)\s+', quote)[-1]
         dates_in_quote = list(extract.ISO_DATE.finditer(quote)) + list(extract.DATE_RE.finditer(quote))
@@ -483,8 +490,8 @@ def _opened(affiliation):
             event_date = _date(iso + {4: '-01-01', 7: '-01'}.get(len(iso), ''))
             article_date = _date(ref['published_at'])
             if event_date and (not article_date or event_date <= article_date):
-                dates.add(iso)
-    return next(iter(dates)) if len(dates) == 1 else '미확인'
+                dates.setdefault(iso, []).append(ref)
+    return dates
 
 
 def bundles(corpus, seed):
@@ -536,7 +543,8 @@ def bundles(corpus, seed):
                     'location': where.get(city, [])}
         current_weak = not verified(evidence['affiliation'])
         primary_date = max((r['published_at'] or '' for _, r in aff), default='')
-        conflict = venue in closed or len(where) > 1 or any(
+        dates = _opened(aff)
+        conflict = len(dates) > 1 or venue in closed or len(where) > 1 or any(
             (other_venue == venue and other_chef != chef)
             or (other_chef == chef and other_venue != venue and any(
                 row['label'] == 'employment_claim' and (r['published_at'] or '') >= primary_date
@@ -554,21 +562,31 @@ def bundles(corpus, seed):
             gate = 'checking' if past_weak or current_weak else 'verified'
         role_refs = {}
         for row, ref in past:
-            if row['role_text']:
+            if row['role_text'] and ref['quote']:
                 role_refs.setdefault(row['role_text'], []).append(ref)
         role = '출신'
-        checking = ['kitchen'] if gate == 'checking' else []
+        checking = ['kitchen'] if past_weak else []
+        if current_weak:
+            checking.append('chef')
         if len(role_refs) == 1:
             title, refs = next(iter(role_refs.items()))
             if verified(refs):
                 role = title
-            elif gate == 'checking' and past_weak:
+            elif gate == 'checking':
                 role = title
                 checking.append('role')
+        opened = '미확인'
+        if len(dates) == 1:
+            date, refs = next(iter(dates.items()))
+            if verified(refs):
+                opened = date
+            elif gate == 'checking':
+                opened = date
+                checking.append('opened')
         name, person = corpus.targets[venue], corpus.targets[chef]
         values = {'chef_target_id': chef, 'restaurant_target_id': venue, 'chef': person['name_ko'] or person['name_en'],
                   'name': name['name_ko'] or name['name_en'], 'kitchen': kitchen, 'city': city, 'role': role,
-                  'opened': _opened(aff), 'career_checking': checking}
+                  'opened': opened, 'career_checking': checking}
         if city and city in CITY_PATTERNS:
             pattern = rf'(?:{CITY_PATTERNS[city].pattern})\s+([가-힣]{{1,8}}(?:구|동|읍|면))(?=\s|에서|에|[,.]|$)'
             areas = {m[1] for r in evidence['location'] for place in r['_places'] for m in re.finditer(pattern, place, re.I)}
@@ -631,15 +649,12 @@ def prepare(conn, seed, raw, now=None, *, seeds=None, corpus=None, enqueue=True)
         payload = {**bundle, 'evidence': {edge: _public_refs(refs) for edge, refs in bundle['evidence'].items()}}
         rid = claims.queue_review(conn, REASON, SUBJECT, bid, payload, dedupe_key=f"{bid}:{bundle['fingerprint']}", now=stamp)
         current[bid] = rid
-        if gate == 'verified':
+        if gate in ('verified', 'checking'):
             approval = {'fingerprint': bundle['fingerprint'], 'at': stamp, 'proofs': _proof_selection(payload), 'decision': 'approve'}
             conn.execute("""UPDATE review_queue SET state='resolved',resolved_at=?,payload_json=?
-                 WHERE review_id=? AND (state='open' OR json_extract(payload_json,'$.dismissal')='superseded')""",
+                 WHERE review_id=? AND (state='open' OR
+                  (json_extract(payload_json,'$.approval') IS NULL AND COALESCE(json_extract(payload_json,'$.dismissal'),'')<>'publication_rollback'))""",
                          (stamp, _json({**payload, 'approval': approval}, indent=None), rid))
-        elif gate == 'checking':
-            conn.execute("""UPDATE review_queue SET state='open',resolved_at=NULL,
-                 payload_json=json_remove(payload_json,'$.dismissal') WHERE review_id=?
-                 AND json_extract(payload_json,'$.dismissal')='superseded'""", (rid,))
     _close_superseded(conn, current, stamp)
     stats['identity_conflicts'] = 0
     for row, ref in corpus.identity_conflicts:
@@ -687,40 +702,6 @@ def _ready(bundle, reviews):
     if row['state'] == 'resolved' and approval.get('decision') == 'approve' and approval.get('fingerprint') == bundle['fingerprint']:
         return (bundle, row, approval)
     return None
-
-
-def open_bundle_reviews(conn, seed, raw, now=None):
-    corpus = Corpus(conn, raw, now=now)
-    current = {}
-    ready = []
-    reviews = _matching_reviews(conn)
-    for bundle in bundles(corpus, seed):
-        bid = bundle.get('bundle_id')
-        if not bid:
-            continue
-        pair = reviews.get(f"{bid}:{bundle['fingerprint']}")
-        if not pair:
-            continue
-        row, payload = pair
-        current[bid] = row['review_id']
-        if bundle['gate'] == 'checking' and row['state'] == 'open':
-            windows = {edge: [{'url': ref['src'], 'quote': ref['quote'], 'window': sanitize_before_store(ref['_window'])[0],
-                               'published_at': ref['published_at']} for ref in _unique(refs)]
-                       for edge, refs in bundle['evidence'].items()}
-            proposed = {k: bundle[k] for k in ('chef', 'name', 'kitchen', 'city', 'role', 'opened')}
-            proposed['kitchen'] = next(k['name'] for k in seed['kitchens'] if k['id'] == bundle['kitchen'])
-            model_input = {'id': bundle['fingerprint'], 'proposed': proposed, 'evidence': windows}
-            ready.append((bundle, dict(row), payload, model_input))
-    _close_superseded(conn, current, corpus.now.isoformat())
-    conn.commit()
-    counts = kitchen_counts(seed)
-    return sorted(ready, key=lambda x: (counts[x[0]['kitchen']] != 0, x[0]['city'] != '서울', x[1]['created_at'], x[0]['bundle_id']))
-
-
-def approve_bundle(conn, row, payload, now):
-    approval = {'fingerprint': payload['fingerprint'], 'at': now, 'proofs': _proof_selection(payload), 'decision': 'approve'}
-    conn.execute("""UPDATE review_queue SET payload_json=json_set(payload_json,'$.approval',json(?))
-                    WHERE review_id=? AND state='resolved'""", (_json(approval, indent=None), row['review_id']))
 
 
 def _json(value, indent=1):
@@ -811,7 +792,7 @@ def reconcile_events(seed, audit):
 
 def _row_fields(bundle):
     past = _unique(bundle['evidence']['lineage'])
-    evidence = [{'kind': edge, 'src': ref['src'], 'quote': ref['quote']}
+    evidence = [{'kind': edge, 'src': ref['src'], **({'quote': ref['quote']} if ref['quote'] else {})}
                 for edge in EDGES for ref in _unique(bundle['evidence'][edge])]
     fields = {k: bundle[k] for k in ('name', 'chef', 'kitchen', 'city', 'role', 'opened')}
     fields.update(type='alumni', lineage_src=past[0]['src'], lineage_evidence=evidence, price=None,
@@ -837,7 +818,7 @@ def reconcile_tombstones(conn, seed, now):
 def apply_ready(conn, seed, raw, now=None):
     """Revalidate prepared approvals and mutate the caller's locked seed snapshot."""
     now = instant(now)
-    stats = {'added': 0, 'upgraded': 0, 'deferred_cap': 0, 'edited': 0, 'ready': 0}
+    stats = {'added': 0, 'upgraded': 0, 'edited': 0, 'ready': 0}
     if not conn:
         return stats
     stamp = now.isoformat()
@@ -872,12 +853,11 @@ def apply_ready(conn, seed, raw, now=None):
             row.pop(field, None)
         row.update(_row_fields(bundle), checked=now.date().isoformat())
         marker['upgrade_review_id'] = review['review_id']
+        marker['verified_at'] = stamp
         marker['row_digest'] = row_digest(row)
         stats['upgraded'] += 1
 
     day = now.date().isoformat()
-    remaining = max(0, CAP - sum(
-        p.get('day_kst') == day for p in [*(r.get('publication') or {} for r in live), *seed.get(TOMBSTONES, [])]))
     represented = {norm(ko) for row in live for ko, _ in chef_names(row.get('chef'), row.get('chef_en'))}
     represented_ids = {r['target_id'] for row in live for ko, en in chef_names(row.get('chef'), row.get('chef_en'))
                        for name in (ko, en) if name for r in corpus.gaz.lookup(name) if r['kind'] == 'chef'}
@@ -897,16 +877,12 @@ def apply_ready(conn, seed, raw, now=None):
         aliases = corpus.aliases.get(venue, set())
         if any(_matches_destination(r, venue, aliases) for r in live):
             continue
-        if not remaining:
-            stats['deferred_cap'] += 1
-            continue
         row = {'id': _site_id(venue), **_row_fields(bundle), 'checked': day}
         row['publication'] = {'bundle_id': bundle['bundle_id'], 'chef_target_id': bundle['chef_target_id'],
                               'restaurant_target_id': venue, 'review_id': review['review_id'], 'published_at': stamp,
                               'day_kst': day, 'row_digest': row_digest(row), 'creation_name': row['name'],
                               'creation_gate': bundle['gate'], 'creation_sources': sorted({e['src'] for e in row['lineage_evidence']})}
         live.append(row)
-        remaining -= 1
         stats['added'] += 1
         covered.add(bundle['kitchen'])
         represented.add(norm(bundle['chef']))

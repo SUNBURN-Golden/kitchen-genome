@@ -19,7 +19,7 @@ import sys
 from . import registry as reg_mod
 from .claims import add_evidence, create_claim, link_evidence, queue_review
 from .db import ROOT, stable_id, utcnow
-from .ontology import add_employment, parse_iso_date
+from .ontology import add_employment, parse_iso_date, sync_seed_geography
 
 sys.path.insert(0, os.path.join(ROOT, 'crawler'))
 try:  # reuse the crawler's host classification
@@ -153,6 +153,11 @@ def migrate_seed(conn, seed: dict, now: str | None = None) -> dict:
         origin = r.get('kitchen')
         for name in names:
             chef_id = stable_id('chf', name, origin or '')
+            marker = r.get('publication')
+            if marker and conn.execute("SELECT 1 FROM sqlite_master WHERE name='target_entity'").fetchone():
+                mapped = conn.execute('SELECT chef_id FROM target_entity WHERE target_id=?', (marker['chef_target_id'],)).fetchone()
+                if mapped and mapped[0]:
+                    chef_id = mapped[0]
             conn.execute('INSERT OR IGNORE INTO chef(chef_id,display_name,display_name_en,disambiguator,created_at) VALUES (?,?,?,?,?)',
                          (chef_id, name, r.get('chef_en') if len(names) == 1 else None, origin, now))
             add_alias(conn, 'chef', chef_id, f'chef:{name}@{origin or ""}', 'legacy_id', now)
@@ -208,6 +213,7 @@ def migrate_seed(conn, seed: dict, now: str | None = None) -> dict:
     for t, key in (('restaurant', 'restaurants'), ('chef', 'chefs'), ('employment', 'employments'), ('restaurant_status_event', 'status_events'),
                    ('mentorship_assertion', 'mentorships'), ('alias', 'aliases'), ('review_queue', 'review_items')):
         stats[key] = conn.execute(f'SELECT COUNT(*) c FROM {t}').fetchone()['c'] - before[t]
+    sync_seed_geography(conn, seed)
     conn.commit()
     return stats
 

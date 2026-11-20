@@ -158,4 +158,4 @@ def feed_links(html: str, base: str) -> list[str]:
             h = re.search(r'href=["\']([^"\']+)', tag, re.I)
             if h:
                 out.append(urllib.parse.urljoin(base, h.group(1)))
-    return out[:3]
+    return out

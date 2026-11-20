@@ -1,5 +1,5 @@
 """Entity resolution: EXACT normalised alias only. Homonyms are never merged: they are resolved by restaurant context or left unresolved.
-New people/places become `candidate` targets (discovered), promoted only with >=2 independent hosts or an official source."""
+New people/places become `candidate` targets (discovered), promoted only with two independent sources on the same edge."""
 import json
 import re
 
@@ -108,6 +108,11 @@ def promote_candidates(conn, qualified) -> int:
         tid = t['target_id']
         if tid in qualified and not reject_reason(t['kind'], t['name_ko'] or t['name_en']):
             conn.execute("UPDATE target SET status='active' WHERE target_id=?", (tid,))
+            if t['kind'] == 'chef':
+                from kg_daemon.ontology import link_resolved_chef
+                from .scoreboard import record_first
+                now = utcnow()
+                record_first(conn, 'resolved_chef', link_resolved_chef(conn, tid, now), now)
             n += 1
     conn.commit()
     return n

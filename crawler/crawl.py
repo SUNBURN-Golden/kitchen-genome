@@ -9,7 +9,6 @@ H = os.path.dirname(os.path.abspath(__file__)); ROOT = os.path.dirname(H)
 C = json.load(open(os.path.join(H, 'config.json'), encoding='utf-8'))
 sys.path.insert(0, os.path.join(ROOT, 'daemon'))
 from kg_collect.net import PoliteNet, host_of as host, is_banned as banned
-from kg_collect.limits import DailyLimit
 from kg_daemon.db import connect, migrate
 
 _net = None
@@ -26,10 +25,7 @@ def network():
 
 
 def get(u, timeout=20):
-    try:
-        response = network().get(u, timeout=timeout)
-    except DailyLimit:
-        return None, 'daily_cap'
+    response = network().get(u, timeout=timeout)
     if response.status != 200 or response.error:
         return None, response.error or response.status
     return response.text(), response.status

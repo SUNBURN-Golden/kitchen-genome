@@ -17,7 +17,6 @@ from kg_collect import recheck, discover, scheduler, apply, gaps
 from kg_collect.pipeline import process_doc
 from kg_collect.targets import Gazetteer, load_seed_targets
 from kg_daemon import db
-from kg_daemon.runner import CostCapExceeded
 from test_deepseek_client import meter, response
 from test_deepseek_collect import world, doc, adapter
 from test_ai_review import env, client_for, rv, add
@@ -48,61 +47,35 @@ def test_additive_migration_and_staggered_idempotent_bootstrap(world):
 
 def test_daily_admission_persists_and_does_not_duplicate(world):
     budget,seeds=setup_due(world)
-    assert recheck.admit(world,seeds,budget,now=NOW)==1
-    assert recheck.admit(world,seeds,budget,now=NOW)==0
+    assert recheck.admit(world,seeds,now=NOW)==1
+    assert recheck.admit(world,seeds,now=NOW)==0
     assert world.execute('SELECT COUNT(*) FROM restaurant_recheck_attempt').fetchone()[0]==1
     row=world.execute('SELECT * FROM restaurant_recheck_attempt').fetchone()
     assert row['state']=='queued'
     assert world.execute('SELECT last_checked_at FROM restaurant_recheck WHERE active_attempt_id=?',(row['attempt_id'],)).fetchone()[0] is None
     path=world.execute('PRAGMA database_list').fetchone()['file']
     other=db.connect(path)
-    assert recheck.admit(other,seeds,Budget(meter(other),day=lambda:'2026-11-10'),now=NOW)==0
+    assert recheck.admit(other,seeds,now=NOW)==0
     other.close()
 
 
-def test_concurrent_admission_is_bounded(world):
+def test_concurrent_admission_queues_every_due_target_once(world):
     budget,seeds=setup_due(world)
     path=world.execute('PRAGMA database_list').fetchone()['file']
+    world.execute("UPDATE restaurant_recheck SET next_due_at='2026-01-01T00:00:00Z'")
+    world.commit()
     def work(i):
         conn=db.connect(path)
-        b=Budget(meter(conn),day=lambda:'2026-11-10')
-        try: return recheck.admit(conn,seeds,b,now=NOW)
+        try: return recheck.admit(conn,seeds,now=NOW)
         finally: conn.close()
     with concurrent.futures.ThreadPoolExecutor(2) as pool:
-        assert sum(pool.map(work,range(2)))==1
-
-
-def test_sublimit_and_review_holds_are_in_shared_cap(world):
-    budget,seeds=setup_due(world)
-    recheck.admit(world,seeds,budget,now=NOW)
-    aid=world.execute('SELECT attempt_id FROM restaurant_recheck_attempt').fetchone()[0]
-    budget.workload='recheck'
-    assert recheck.hold_review(world,aid,budget,6000)
-    assert budget.room_tokens()==10000
-    # Another run cannot consume room reserved for the actual review.
-    other=Budget(meter(world),day=lambda:'2026-11-10'); other.workload='recheck'
-    with pytest.raises(CostCapExceeded): other.reserve('over','extract','test',11000)
-    assert budget.reserve('extract','extract','test',8000)
-    assert world.execute("SELECT workload FROM ai_request WHERE request_key='extract'").fetchone()[0]=='recheck'
-    budget.hold_attempt=aid
-    assert budget.reserve('review','review','test',6000)
-    assert world.execute('SELECT state FROM ai_review_hold WHERE attempt_id=?',(aid,)).fetchone()[0]=='consumed'
-    with pytest.raises(CostCapExceeded): budget.reserve('retry','review','test',3000)
-    assert world.execute('SELECT SUM(units) FROM ai_request').fetchone()[0]==7
-
-
-def test_small_cap_defers_without_new_attempt(world):
-    _,seeds=setup_due(world)
-    small=Budget(meter(world,cap=1),daily_cap=1)
-    assert recheck.admit(world,seeds,small,now=NOW)==0
-    assert world.execute('SELECT COUNT(*) FROM restaurant_recheck_attempt').fetchone()[0]==0
-    assert world.execute('SELECT COUNT(*) FROM restaurant_recheck WHERE last_checked_at IS NOT NULL').fetchone()[0]==0
+        assert sum(pool.map(work,range(2)))==world.execute("SELECT COUNT(*) FROM restaurant_recheck").fetchone()[0]
 
 
 def test_backoff_and_monthly_completion(world):
     budget,seeds=setup_due(world)
     for expected in (1,3,7,7):
-        assert recheck.admit(world,seeds,budget,now=NOW)==1
+        assert recheck.admit(world,seeds,now=NOW)==1
         aid=world.execute("SELECT attempt_id FROM restaurant_recheck_attempt WHERE state='queued'").fetchone()[0]
         sid=world.execute('SELECT restaurant_id FROM restaurant_recheck_attempt WHERE attempt_id=?',(aid,)).fetchone()[0]
         recheck.finish(world,aid,'fetch_failed',now=NOW)
@@ -116,21 +89,21 @@ def test_backoff_and_monthly_completion(world):
         world.execute("UPDATE restaurant_recheck SET next_due_at='2099-01-01T00:00:00Z'")
         world.execute('UPDATE restaurant_recheck SET next_due_at=? WHERE restaurant_id=?',(recheck.iso(NOW-dt.timedelta(days=expected)),sid))
         world.commit()
-    assert recheck.admit(world,seeds,budget,now=NOW)==1
+    assert recheck.admit(world,seeds,now=NOW)==1
     aid=world.execute("SELECT attempt_id FROM restaurant_recheck_attempt WHERE state='queued'").fetchone()[0]
     recheck.finish(world,aid,'no_change_observed',now=NOW,completed=True)
     r=world.execute('SELECT * FROM restaurant_recheck WHERE restaurant_id=?',(sid,)).fetchone()
     assert r['last_checked_at']==recheck.iso(NOW) and r['next_due_at']==recheck.iso(NOW+dt.timedelta(days=30))
 
 
-def test_recheck_jobs_cannot_requeue_early_and_fetch_share_is_bounded(world):
-    budget,seeds=setup_due(world); recheck.admit(world,seeds,budget,now=NOW)
+def test_recheck_jobs_cannot_requeue_early(world):
+    budget,seeds=setup_due(world); recheck.admit(world,seeds,now=NOW)
     jid=world.execute('SELECT job_id FROM restaurant_recheck_job').fetchone()[0]
     for i in range(8):
         discover.enqueue(world,path='entity_followup',pool='discovery',url=f'https://fresh.test/{i}',relevance=.9)
-    plan=scheduler.plan(world,20,now=NOW)
+    plan=scheduler.plan(world,now=NOW)
     chosen=sum(plan['chosen'].values(),[])
-    assert sum(bool(recheck.active_for_job(world,j)) for j in chosen) <= len(chosen)//5
+    assert jid in chosen and len(chosen) == 9
     world.execute("UPDATE crawl_job SET state='done',finished_at='2026-01-01T00:00:00Z' WHERE job_id=?",(jid,));world.commit()
     scheduler.requeue_due(world,now=NOW)
     assert world.execute('SELECT state FROM crawl_job WHERE job_id=?',(jid,)).fetchone()[0]=='done'
@@ -145,7 +118,7 @@ def test_recheck_jobs_cannot_requeue_early_and_fetch_share_is_bounded(world):
 @pytest.mark.parametrize('decision', ['approve', 'reject'])
 def test_rule_changes_are_isolated_until_common_review(env, date_text, date_iso, decision):
     conn,seed_path,log,raw=env
-    budget,seeds=setup_due(conn); recheck.admit(conn,seeds,budget,now=NOW)
+    budget,seeds=setup_due(conn); recheck.admit(conn,seeds,now=NOW)
     link=conn.execute('SELECT * FROM restaurant_recheck_job').fetchone()
     conn.execute('UPDATE fetch_record SET job_id=? WHERE fetch_id=\'f\'',(link['job_id'],));conn.commit()
     original_seed=json.loads(seed_path.read_text())
@@ -195,7 +168,7 @@ def test_rule_changes_are_isolated_until_common_review(env, date_text, date_iso,
 
 
 def test_full_rules_inspection_without_changes_is_not_confirmed_open(world):
-    budget,seeds=setup_due(world); recheck.admit(world,seeds,budget,now=NOW)
+    budget,seeds=setup_due(world); recheck.admit(world,seeds,now=NOW)
     link=world.execute('SELECT * FROM restaurant_recheck_job').fetchone()
     world.execute("UPDATE fetch_record SET job_id=? WHERE fetch_id='f'",(link['job_id'],));world.commit()
     process_doc(world,doc('달빛정원 공식 소개 페이지입니다.'),Gazetteer(world),tier='official')
@@ -207,8 +180,8 @@ def test_full_rules_inspection_without_changes_is_not_confirmed_open(world):
     assert world.execute('SELECT COUNT(*) FROM ai_request').fetchone()[0]==0
 
 
-def test_deferred_older_recheck_does_not_stop_fresh_extraction(world, tmp_path):
-    budget,seeds=setup_due(world); recheck.admit(world,seeds,budget,now=NOW)
+def test_older_recheck_and_fresh_extraction_run_together(world, tmp_path):
+    budget,seeds=setup_due(world); recheck.admit(world,seeds,now=NOW)
     link=world.execute('SELECT * FROM restaurant_recheck_job').fetchone()
     older='한도윤 셰프 달빛정원 운영 소식입니다. '+'소개 문장입니다. '*180
     fresh='한도윤 셰프 달빛정원 운영 소식입니다.'
@@ -229,43 +202,11 @@ def test_deferred_older_recheck_does_not_stop_fresh_extraction(world, tmp_path):
     bot=cycle.Bot(world,data_dir=str(tmp_path/'data'),deepseek=True)
     bot.raw,bot.ai=raw,a
     # The real rules flag side-by-side chef/restaurant mentions as ambiguous.
-    # Chronological extraction must continue after the older recheck defers.
     cycle.stage_extract(SimpleNamespace(env={'bot':bot},cost=budget.meter))
-    assert len(calls)==1 and a.client.stopped is None
-    assert 'fresh' in calls[0]['messages'][1]['content']
-    assert world.execute("SELECT extracted_at FROM fetch_record WHERE fetch_id='f'").fetchone()[0] is None
-    assert world.execute("SELECT extracted_at FROM fetch_record WHERE fetch_id='fresh'").fetchone()[0]
+    assert len(calls) == 2 and a.client.stopped is None
+    assert [json.loads(call['messages'][2]['content'])['workload'] == 'recheck' for call in calls] == [True, False]
+    assert world.execute("SELECT COUNT(*) FROM fetch_record WHERE extracted_at IS NOT NULL").fetchone()[0] == 2
     assert not world.execute("SELECT 1 FROM ai_review_hold WHERE state='held'").fetchone()
-    assert world.execute("SELECT COALESCE(SUM(units),0) FROM ai_request WHERE workload='recheck'").fetchone()[0]<=8
-    assert world.execute('SELECT SUM(units) FROM ai_request').fetchone()[0]<=20
-
-
-def test_trimmed_recheck_without_known_names_stays_uninspected(world, tmp_path):
-    budget,seeds=setup_due(world); recheck.admit(world,seeds,budget,now=NOW)
-    link=world.execute('SELECT * FROM restaurant_recheck_job').fetchone()
-    # The real byte fitting keeps a prefix but removes the only known names.
-    text='Introduction. '+('a '*500)+' 한도윤 셰프 달빛정원 운영 소식입니다.'
-    raw=RawStore(str(tmp_path/'raw'))
-    ref=raw.put_text('official.test',text)
-    world.execute("UPDATE fetch_record SET job_id=?,text_ref=? WHERE fetch_id='f'",(link['job_id'],ref))
-    world.execute("UPDATE crawl_job SET state='done' WHERE job_id=?",(link['job_id'],));world.commit()
-    a=Adapters(Client(budget,key='dummy',transport=lambda *args:pytest.fail('trimmed unknown-only completion'),
-                      balance_transport=healthy_balance))
-    bot=cycle.Bot(world,data_dir=str(tmp_path/'data'),deepseek=True)
-    bot.raw,bot.ai=raw,a
-    cycle.stage_extract(SimpleNamespace(env={'bot':bot},cost=budget.meter))
-    assert a.window_partial and a.stats['skipped_no_targets']==1
-    assert a.defer_extract and a.client.stopped is None
-    assert world.execute("SELECT extracted_at FROM fetch_record WHERE fetch_id='f'").fetchone()[0] is None
-    assert not world.execute("SELECT 1 FROM restaurant_recheck_job WHERE fetch_id='f' AND extraction_id IS NULL").fetchone()
-    assert not world.execute('SELECT 1 FROM ai_request').fetchone()
-    assert not world.execute("SELECT 1 FROM ai_review_hold WHERE state='held'").fetchone()
-    # Finishing any deterministic findings still cannot certify the incomplete scan.
-    assert world.execute("SELECT 1 FROM review_queue WHERE state='open' AND reason='ai_inference'").fetchone()
-    world.execute("UPDATE review_queue SET state='dismissed' WHERE reason='ai_inference'");world.commit()
-    recheck.reconcile(world)
-    row=world.execute("SELECT * FROM restaurant_recheck WHERE restaurant_id='r_dal'").fetchone()
-    assert row['last_checked_at'] is None and row['active_attempt_id']==link['attempt_id']
 
 
 @pytest.mark.parametrize('text,completed', [
@@ -276,7 +217,7 @@ def test_trimmed_recheck_without_known_names_stays_uninspected(world, tmp_path):
     ('달빛정원 공식 소개 페이지입니다.', True),
 ])
 def test_completion_requires_due_restaurant_alias(world, text, completed):
-    budget,seeds=setup_due(world); recheck.admit(world,seeds,budget,now=NOW)
+    budget,seeds=setup_due(world); recheck.admit(world,seeds,now=NOW)
     link=world.execute('SELECT * FROM restaurant_recheck_job').fetchone()
     world.execute("UPDATE fetch_record SET job_id=? WHERE fetch_id='f'",(link['job_id'],));world.commit()
     process_doc(world,doc(text),Gazetteer(world),tier='official')
@@ -299,7 +240,7 @@ def test_coalesced_job_ignores_historical_fetches(world, historical_extracted):
                      VALUES ('historical',?,?,?,'official.test','html','ok','2026-10-01T00:00:00Z',?,'fixture','rules-new')""",
                   (jid,url,url,'2026-10-01T00:00:01Z' if historical_extracted else None))
     world.commit()
-    recheck.admit(world,seeds,budget,now=NOW)
+    recheck.admit(world,seeds,now=NOW)
     link=world.execute('SELECT * FROM restaurant_recheck_job').fetchone()
     assert link['job_id']==jid and link['dedicated_root']==0
     old=world.execute("SELECT * FROM fetch_record WHERE fetch_id='historical'").fetchone()
@@ -327,7 +268,7 @@ def test_coalesced_job_links_current_children_without_finished_history(world, hi
     jid=discover.job_id('official_chain',url)
     discover.enqueue(world,path='official_chain',pool='refresh',url=url+'/historical',parent=jid,
                      target_id=tid,state=historical_state,now='2026-10-01T00:00:00Z')
-    recheck.admit(world,seeds,budget,now=NOW)
+    recheck.admit(world,seeds,now=NOW)
     # An older queued child is still live work; a newly failed child is a real failure.
     discover.enqueue(world,path='official_chain',pool='refresh',url=url+'/current',parent=jid,
                      target_id=tid,state=current_state,
@@ -353,32 +294,6 @@ def test_coalesced_job_links_current_children_without_finished_history(world, hi
         assert row['last_checked_at'] and row['last_outcome']=='reviewed_or_no_change'
 
 
-@pytest.mark.parametrize('existing_hold', [False,True])
-@pytest.mark.parametrize('reservation_race', [False,True])
-def test_unused_extraction_hold_is_released_or_restored(world, monkeypatch, existing_hold, reservation_race):
-    budget,seeds=setup_due(world); recheck.admit(world,seeds,budget,now=NOW)
-    aid=world.execute('SELECT attempt_id FROM restaurant_recheck_attempt').fetchone()[0]
-    budget.workload='recheck'
-    if existing_hold:
-        assert recheck.hold_review(world,aid,budget,6000)
-    calls=[]
-    a=Adapters(Client(budget,key='dummy',transport=lambda *args: (calls.append(1) or response({'findings':[]})),
-                      balance_transport=healthy_balance))
-    if reservation_race:
-        def raced(*args):
-            raise CostCapExceeded('concurrent reservation consumed room')
-        monkeypatch.setattr(budget,'reserve',raced)
-    assert a.extract(doc('달빛정원 운영 소식입니다.'),[],Gazetteer(world),workload='recheck',attempt_id=aid)==[]
-    assert len(calls)==(0 if reservation_race else 1)
-    assert a.client.stopped is None and a.defer_extract==reservation_race
-    hold=world.execute('SELECT * FROM ai_review_hold WHERE attempt_id=?',(aid,)).fetchone()
-    if existing_hold:
-        assert (hold['state'],hold['units'])==('held',3)
-    else:
-        assert hold['state']=='released'
-    assert world.execute('SELECT COUNT(*) FROM ai_request').fetchone()[0]==len(calls)
-
-
 def test_date_migration_repairs_pending_rules_without_repairing_model_evidence(tmp_path):
     old_dir=tmp_path/'old_migrations';old_dir.mkdir()
     for path in Path(db.SCHEMA_DIR).glob('*.sql'):
@@ -395,7 +310,7 @@ def test_date_migration_repairs_pending_rules_without_repairing_model_evidence(t
         conn.execute("UPDATE review_queue SET payload_json=? WHERE subject_id=?",
                      (json.dumps({'finding':{'date_text':'2026년 10월 1일'}}),xid))
     conn.execute("UPDATE extraction SET extractor='rule:closure' WHERE extraction_id='legacy_rule'");conn.commit()
-    assert db.migrate(conn)==['0009_extraction_verbatim_dates.sql', '0010_fetch_priority.sql', '0011_collect_discovery_scope.sql', '0012_web_access_guard.sql']
+    assert db.migrate(conn)==['0009_extraction_verbatim_dates.sql', '0010_fetch_priority.sql', '0011_collect_discovery_scope.sql', '0012_web_access_guard.sql', '0013_global_ontology.sql']
     rule=conn.execute("SELECT * FROM extraction WHERE extraction_id='legacy_rule'").fetchone()
     assert (rule['date_text'],rule['date_iso'])==('2026년 10월 1일','2026-10-01')
     model=conn.execute("SELECT * FROM extraction WHERE extraction_id='legacy_model'").fetchone()

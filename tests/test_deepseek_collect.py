@@ -16,7 +16,7 @@ from kg_collect.rawstore import RawStore
 from kg_collect.pipeline import process_doc
 from kg_collect.targets import Gazetteer, load_seed_targets
 from kg_collect.net import PoliteNet, Response
-from kg_collect.limits import Limits, DailyLimit
+from kg_collect.limits import record_dispatch
 from kg_daemon import db, stages, collect_bridge
 from kg_daemon.runner import Daemon
 from test_deepseek_client import envelope, meter, response
@@ -173,7 +173,7 @@ def test_cycle_balance_epilogue_keeps_qwen_extract_and_recheck_enabled(world, tm
     a = Adapters(client)
     bot = cycle.Bot(world, data_dir=str(tmp_path / 'data'), deepseek=True)
     bot.ai = a
-    monkeypatch.setattr(recheck, 'admit', lambda *args: admitted.append(1) or 1)
+    monkeypatch.setattr(recheck, 'admit', lambda *args, **kwargs: admitted.append(1) or 1)
     result = cycle.stage_plan(SimpleNamespace(env={'bot': bot}, cost=client.budget.meter))
     assert result.output['new_jobs']['deepseek_gap'] == 1
     assert result.output['new_jobs']['monthly_rechecks'] == 1 and admitted == [1]
@@ -185,7 +185,7 @@ def test_cycle_balance_epilogue_keeps_qwen_extract_and_recheck_enabled(world, tm
 
 
 @pytest.mark.parametrize('lost_extract', [False, True])
-def test_monthly_extract_balance_gate_uses_qwen_and_preserves_review_hold(world, lost_extract):
+def test_monthly_extract_uses_qwen_after_balance_pause(world, lost_extract):
     from test_deepseek_balance import wallet
     from kg_collect import recheck
     text = '달빛정원의 운영에 대한 중요한 소식입니다.'
@@ -203,13 +203,12 @@ def test_monthly_extract_balance_gate_uses_qwen_and_preserves_review_hold(world,
     recheck.ensure_schedule(world, SEED)
     world.execute("UPDATE restaurant_recheck SET next_due_at=CASE restaurant_id WHEN 'r_dal' THEN '2026-01-01T00:00:00Z' ELSE '2099-01-01T00:00:00Z' END")
     world.commit()
-    assert recheck.admit(world, discover.load_seeds(), client.budget) == 1
+    assert recheck.admit(world, discover.load_seeds()) == 1
     aid = world.execute('SELECT attempt_id FROM restaurant_recheck_attempt').fetchone()[0]
     a = Adapters(client)
     rows = a.extract(doc(text), [], Gazetteer(world), workload='recheck', attempt_id=aid)
     if lost_extract:
         assert rows == [] and a.defer_extract and client.status == 'enabled'
-        assert world.execute('SELECT state FROM ai_review_hold WHERE attempt_id=?', (aid,)).fetchone()[0] == 'released'
         # A failed inspection stays deferred, while a different document can still use Qwen.
         rows = a.extract(doc(text, '2'), [], Gazetteer(world))
         assert len(rows) == 1 and len(calls) == 2 and not a.defer_extract
@@ -220,7 +219,6 @@ def test_monthly_extract_balance_gate_uses_qwen_and_preserves_review_hold(world,
     assert client.primary_paused == 'balance_low' and client.stopped is None and client.status == 'enabled'
     row = world.execute('SELECT model,workload,state FROM ai_request').fetchone()
     assert tuple(row) == (QWEN_MODEL, 'recheck', 'done')
-    assert world.execute('SELECT state FROM ai_review_hold WHERE attempt_id=?', (aid,)).fetchone()[0] == 'held'
 
 
 def _recheck_attempt(conn, budget):
@@ -228,11 +226,11 @@ def _recheck_attempt(conn, budget):
     recheck.ensure_schedule(conn, SEED)
     conn.execute("UPDATE restaurant_recheck SET next_due_at=CASE restaurant_id WHEN 'r_dal' THEN '2026-01-01T00:00:00Z' ELSE '2099-01-01T00:00:00Z' END")
     conn.commit()
-    assert recheck.admit(conn, discover.load_seeds(), budget) == 1
+    assert recheck.admit(conn, discover.load_seeds()) == 1
     return conn.execute('SELECT attempt_id FROM restaurant_recheck_attempt').fetchone()[0]
 
 
-def test_recheck_over_cap_rejects_and_restores_the_review_hold(world):
+def test_recheck_finding_contract_rejects_three_results(world):
     text = '달빛정원의 운영 소식입니다.'
     calls = []
     a = Adapters(Client(Budget(meter(world)), key='dummy',
@@ -247,12 +245,10 @@ def test_recheck_over_cap_rejects_and_restores_the_review_hold(world):
     rows = world.execute("SELECT state,error,result_json FROM ai_request WHERE task='web-extract-2'").fetchall()
     assert len(rows) == 2 and all(r['state'] == 'failed' and r['error'] == 'too_many_findings' and r['result_json'] is None for r in rows)
     assert world.execute('SELECT COUNT(*) FROM extraction').fetchone()[0] == 0
-    # The finally path releases the speculative hold because no reviewable rows survived.
-    assert world.execute('SELECT state FROM ai_review_hold WHERE attempt_id=?', (aid,)).fetchone()[0] == 'released'
 
 
 @pytest.mark.parametrize('valid,invalid', [(2, 1), (2, 2), (1, 2)])
-def test_recheck_partial_drops_keep_valid_rows_under_the_cap(world, valid, invalid):
+def test_recheck_partial_drops_keep_valid_rows(world, valid, invalid):
     text = '달빛정원의 운영 소식입니다.'
     good = [finding(text), finding('운영 소식', label='menu')][:valid]
     bad = [finding(text, quote='not on the page'), finding(text, date_text='2026-11-05')][:invalid]
@@ -270,8 +266,6 @@ def test_recheck_partial_drops_keep_valid_rows_under_the_cap(world, valid, inval
     assert all(r['pending_only'] for r in rows)
     assert a.stats['findings'] == valid and a.stats['findings_dropped'] == invalid
     assert a.client.stopped is None and a.client.status == 'enabled' and not a.defer_extract
-    # Reviewable rows survive, so the hold stays held for the review stage.
-    assert world.execute('SELECT state FROM ai_review_hold WHERE attempt_id=?', (aid,)).fetchone()[0] == 'held'
     for r in rows:
         meta = json.loads(r['model_meta_json'])
         assert meta['workload'] == 'recheck' and meta['dropped'] == expected_dropped
@@ -355,62 +349,31 @@ def test_quote_rejection_fails_one_document_and_next_document_is_extracted(world
 
 
 @pytest.mark.parametrize('provider', ['deepseek', 'qwen'])
-@pytest.mark.parametrize('retry_fits', [False, True])
-def test_invalid_json_skips_one_document_and_extracts_next(world, provider, retry_fits):
+def test_invalid_json_skips_one_document_and_extracts_next(world, provider):
     from test_deepseek_balance import wallet
     text = '달빛정원의 운영 소식입니다.'
     calls = []
     def transport(payload, key):
         calls.append(json.loads(payload))
-        if len(calls) <= (2 if retry_fits else 1):
-            # Like production, this fits the original byte reservation, but
-            # leaves too little of the 20-unit cap for a large correction.
-            usage = None if retry_fits else {'prompt_tokens': 7142, 'completion_tokens': 633, 'total_tokens': 7775}
-            return envelope('Result: {"findings": ', usage=usage)
+        if len(calls) <= 2:
+            return 200, json.dumps({'usage': {'prompt_tokens': 7000, 'completion_tokens': 633, 'total_tokens': 7633},
+                                    'choices': [{'finish_reason': 'stop', 'message': {'content': 'bad json'}}]}).encode()
         return response({'findings': [finding(text)]})
-    client = Client(Budget(meter(world), daily_cap=20), key='dummy',
+    client = Client(Budget(meter(world)), key='dummy',
                     transport=transport if provider == 'deepseek' else lambda *a: pytest.fail('primary called'),
                     balance_transport=healthy_balance if provider == 'deepseek' else lambda key: wallet(available=False),
                     fallback_key='fixture-backup',
                     fallback_transport=transport if provider == 'qwen' else lambda *a: pytest.fail('backup called'))
     a, gaz = Adapters(client), Gazetteer(world)
-    first_text = text if retry_fits else text + '가' * 10000
-    assert process_doc(world, doc(first_text), gaz, tier='official', model_adapter=a)['new'] == 0
-    assert len(calls) == (2 if retry_fits else 1)
-    assert client.stopped is None and client.status == 'enabled'
-    assert client._schema_rejections == 1 and a.stats['failed'] == 1 and not a.defer_extract
-    billed = client.budget.meter.used
-    if retry_fits:
-        # Identical billed requests are never replayed or counted again.
-        assert process_doc(world, doc(first_text), gaz, tier='official', model_adapter=a)['new'] == 0
-        assert client.budget.meter.used == billed and client._schema_rejections == 1
-    assert process_doc(world, doc(text, '2'), gaz, tier='official', model_adapter=a)['new'] == 1
-    assert len(calls) == (3 if retry_fits else 2)
-    assert client.stopped is None and not a.defer_extract
-    assert a.stats['findings'] == 1 and client.budget.meter.used < 20
+    assert process_doc(world, doc(text), Gazetteer(world), tier='official', model_adapter=a)['new'] == 0
+    assert len(calls) == 2 and client.stopped is None and client._schema_rejections == 1
+    other = doc(text, '2')
+    assert process_doc(world, other, Gazetteer(world), tier='official', model_adapter=a)['new'] == 1
+    assert len(calls) == 3 and not a.defer_extract and a.stats['findings'] == 1
     rows = world.execute('SELECT model,state,error,result_json FROM ai_request ORDER BY rowid').fetchall()
-    assert [r['state'] for r in rows] == (['failed', 'failed', 'done'] if retry_fits else ['failed', 'done'])
+    assert [r['state'] for r in rows] == ['failed', 'failed', 'done']
     assert all(r['error'].startswith('invalid_task_json len=') and r['result_json'] is None for r in rows[:-1])
     assert all(r['model'] == (QWEN_MODEL if provider == 'qwen' else 'deepseek-chat') for r in rows)
-
-
-@pytest.mark.parametrize('provider', ['deepseek', 'qwen'])
-def test_true_reservation_cap_still_pauses_collection(world, provider, monkeypatch):
-    from kg_daemon.runner import CostCapExceeded
-    from test_deepseek_balance import wallet
-    budget = Budget(meter(world))
-    def exhausted(*a):
-        raise CostCapExceeded('concurrent reservation consumed available room')
-    monkeypatch.setattr(budget, 'reserve', exhausted)
-    client = Client(budget, key='dummy', transport=lambda *a: pytest.fail('unreserved primary'),
-                    balance_transport=healthy_balance if provider == 'deepseek' else lambda key: wallet(available=False),
-                    fallback_key='fixture-backup', fallback_transport=lambda *a: pytest.fail('unreserved backup'))
-    a, gaz = Adapters(client), Gazetteer(world)
-    for suffix in ('1', '2'):
-        assert process_doc(world, doc('달빛정원의 운영 소식입니다.', suffix), gaz, tier='official', model_adapter=a)['new'] == 0
-        assert client.stopped == 'cost_cap' and client.status == 'paused' and a.defer_extract
-    assert client._schema_rejections == 0
-    assert world.execute('SELECT COUNT(*) FROM ai_request').fetchone()[0] == 0
 
 
 @pytest.mark.parametrize('failure', ['transport_unknown', 'balance_low'])
@@ -579,37 +542,6 @@ def test_cached_extraction_preserves_drop_reporting_without_another_paid_call(wo
     assert world.execute('SELECT SUM(units) FROM ai_request').fetchone()[0] == billed
 
 
-def test_category_is_kept_when_the_retry_cannot_be_reserved(world):
-    """Box run 749a8bdcf4fe billed one extract and could not reserve the retry."""
-    conn = world
-    _gap(conn)
-    m = meter(conn, cap=23)
-    conn.execute("INSERT INTO ai_request(request_key,run_id,day,task,model,state,units,reserved_tokens,created_at) VALUES (?,?,?,?,?,?,?,?,?)",
-                 ('spent-plan', m.run_id, '2026-11-07', 'gap-plan-1', 'deepseek-chat', 'done', 6, 12000, db.utcnow()))
-    conn.execute('UPDATE daemon_run SET cost_used_units=? WHERE run_id=?', (6, m.run_id))
-    conn.commit()
-    m.used = 6
-    calls = []
-
-    def transport(payload, key):
-        calls.append(payload)
-        reserved = reservation_tokens(payload, 4096)
-        total = reserved - 10
-        usage = {'prompt_tokens': total - 1182, 'completion_tokens': 1182, 'total_tokens': total, 'prompt_cache_hit_tokens': 0}
-        return response({'findings': [{'label': 'opening', 'quote': 'not on the page', 'date_text': '2021-05'}]}, usage=usage)
-
-    client = Client(Budget(m, daily_cap=20, day=lambda: '2026-11-07'), key='dummy', transport=transport, balance_transport=healthy_balance)
-    text = LEAD + ('가' * 12000)
-    a = Adapters(client)
-    assert a.extract(doc(text), [], Gazetteer(conn)) == []
-    assert len(calls) == 1 and a.client.stopped is None and a.stats['called'] == 1 and a.stats['failed'] == 1
-    assert client._schema_rejections == 1 and client.status == 'enabled'
-    row = conn.execute("SELECT state, error, result_json, completion_tokens FROM ai_request WHERE task='web-extract-2'").fetchone()
-    assert row['state'] == 'failed' and row['result_json'] is None and row['completion_tokens'] == 1182
-    assert row['error'].startswith('quote_not_exact ') and 'not on the page' not in row['error'] and '2021-05' not in row['error']
-    assert conn.execute('SELECT COUNT(*) FROM extraction').fetchone()[0] == 0
-
-
 def test_billed_blank_content_skips_document_and_publishes_nothing(world):
     c = world
     text = '달빛정원의 운영 소식입니다.'
@@ -650,28 +582,6 @@ def test_bridge_preserves_model_version_and_pending_provenance(world,tmp_path):
     assert rep['status']=='succeeded'
     rows=c.execute("SELECT * FROM candidate_fact WHERE asserted_by='ai_inference'").fetchall()
     assert rows and all(r['resolution']=='needs_review' and r['applied_claim_id'] is None for r in rows)
-
-
-def test_web_daily_limits_pause_and_delay_persist(world):
-    c=world; t=[100.]; calls=[]
-    def sleep(seconds): t[0]+=seconds
-    def transport(url,*args):
-        calls.append((url,t[0])); return Response(url, 200, {'content-type':'text/plain'}, b'User-agent: *\nAllow: /\nCrawl-delay: 9' if url.endswith('robots.txt') else b'page')
-    n=PoliteNet(transport=transport,clock=lambda:t[0],sleep=sleep,min_delay=0,conn=c)
-    n.get('https://hankyung.com/a')
-    n2=PoliteNet(transport=transport,clock=lambda:t[0],sleep=sleep,conn=c)
-    n2.get('https://hankyung.com/b')
-    assert all(b[1]-a[1]>=5 for a,b in zip(calls,calls[1:]))
-    assert calls[1][1]-calls[0][1]>=9
-    n3=PoliteNet(transport=lambda u,*a:Response(u,429,{},b''), clock=lambda:t[0],sleep=sleep,conn=c)
-    n3.get('https://blocked.test/a')
-    n4=PoliteNet(transport=lambda *a:pytest.fail('persistent blocked host dispatched'),clock=lambda:t[0],sleep=sleep,conn=c)
-    assert n4.get('https://blocked.test/b').error in ('domain_paused','robots')
-    limits=Limits(c,day=lambda:'2026-11-01',candidates=2,fetches=2)
-    assert limits.admit('a') and limits.admit('a') and limits.admit('b') and not limits.admit('c')
-    limits.dispatch(); limits.dispatch()
-    with pytest.raises(DailyLimit): Limits(c,day=lambda:'2026-11-01',fetches=2).dispatch()
-    assert not discover.enqueue(c,path='reverse_gap',pool='backfill',url='https://hankyung.com/deep',depth=3,caps={'max_depth':99})
 
 
 def test_kg_and_model_findings_cannot_corroborate_seed_changes(tmp_path, monkeypatch):
@@ -758,102 +668,17 @@ def _gap(conn):
     conn.commit()
 
 
-def test_smoke_cap_fits_another_model_call_after_the_billed_plan(world):
-    """Box run b47e3a2d16ce: plan settled at 2.1825, then the next full-document reservation paused the cycle."""
-    conn = world
-    _gap(conn)
-    m = meter(conn, cap=23)
-    budget = Budget(m, daily_cap=20, day=lambda: '2026-11-07')
-    planner = Client(budget, key='dummy', transport=lambda payload, key: response({'ok': True}, usage=SMOKE_PLAN_USAGE), balance_transport=healthy_balance)
-    assert planner.call('gap-plan-1', 'JSON', {'n': 1}, lambda o: o, max_tokens=4096) == {'ok': True}
-    assert m.used == pytest.approx(2.1825)
-    calls = []
-
-    def transport(payload, key):
-        calls.append(payload)
-        sent = json.loads(json.loads(payload)['messages'][1]['content'])['text']
-        assert LEAD in sent and reservation_tokens(payload, 4096) <= room
-        return response({'findings': [finding(LEAD.strip())]}, usage={'prompt_tokens': 1000, 'completion_tokens': 100, 'total_tokens': 1100, 'prompt_cache_hit_tokens': 0})
-
-    client = Client(budget, key='dummy', transport=transport, balance_transport=healthy_balance)
-    full = (LEAD + ('가' * 12000))[:12000]
-    oversized = client._payload(EXTRACT_INSTRUCTION, {'url': 'https://official.test/1', 'text': full}, 4096, None)[1]
-    room = client.budget.room_tokens()
-    assert reservation_tokens(oversized, 4096) > room
-    claims = conn.execute('SELECT COUNT(*) FROM claim').fetchone()[0]
-    adapter = Adapters(client)
-    rows = adapter.extract(doc(full), [], Gazetteer(conn))
-    assert len(calls) == 1 and rows and rows[0]['pending_only'] is True and rows[0]['asserted_by'] == 'ai_inference'
-    assert adapter.stats['called'] == 1 and adapter.stats['failed'] == 0 and adapter.client.stopped is None
-    assert m.used == pytest.approx(2.1825 + 0.55)
-    room = client.budget.room_tokens()
-    again = adapter.extract(doc(full, '2'), [], Gazetteer(conn))
-    assert len(calls) == 2 and again and adapter.client.stopped is None and m.used < 20
-    assert conn.execute('SELECT COUNT(*) FROM claim').fetchone()[0] == claims
-
-
-def test_exhausted_daily_budget_defers_extract_and_a_later_day_retries(world, tmp_path):
-    conn = world
-    _gap(conn)
-    m = meter(conn, cap=78)
-    conn.execute("INSERT INTO ai_request(request_key,run_id,day,task,model,state,units,reserved_tokens,created_at) VALUES (?,?,?,?,?,?,?,?,?)",
-                 ('spent', m.run_id, '2026-11-07', 'gap-plan-1', 'deepseek-chat', 'done', 20, 40000, db.utcnow()))
-    conn.commit()
-    calls = []
-
-    def transport(payload, key):
-        calls.append(payload)
-        return response({'findings': [finding(LEAD.strip())]})
-
-    client = Client(Budget(m, daily_cap=20, day=lambda: '2026-11-07'), key='dummy', transport=transport, balance_transport=healthy_balance)
-    text = LEAD + ('가' * 800)
-    adapter = Adapters(client)
-    assert adapter.extract(doc(text), [], Gazetteer(conn)) == []
-    assert calls == [] and adapter.defer_extract and adapter.client.stopped == 'cost_cap'
-    raw = RawStore(str(tmp_path/'raw'))
-    ref = raw.put_text('official.test', text)
-    conn.execute('UPDATE fetch_record SET text_ref=? WHERE fetch_id=?', (ref, 'f'))
-    conn.commit()
-    bot = cycle.Bot(conn, data_dir=str(tmp_path/'data'), deepseek=True)
-    bot.raw = raw
-    bot.ai = adapter
-    from kg_daemon.runner import CostMeter
-    ctx = SimpleNamespace(env={'bot': bot}, cost=CostMeter(conn, m.run_id, 78, cycle.UNIT_COSTS))
-    cycle.stage_extract(ctx)
-    assert conn.execute('SELECT extracted_at FROM fetch_record WHERE fetch_id=?', ('f',)).fetchone()[0] is None
-    assert conn.execute("SELECT COUNT(*) FROM extraction WHERE extractor='deepseek:web'").fetchone()[0] == 0
-    later = Adapters(Client(Budget(m, daily_cap=20, day=lambda: '2026-11-08'), key='dummy', transport=transport, balance_transport=healthy_balance))
-    bot.ai = later
-    cycle.stage_extract(ctx)
-    assert calls and conn.execute('SELECT extracted_at FROM fetch_record WHERE fetch_id=?', ('f',)).fetchone()[0]
-    row = conn.execute("SELECT pending_only, asserted_by, epistemic FROM extraction WHERE extractor='deepseek:web'").fetchone()
-    assert row['pending_only'] == 1 and row['asserted_by'] == 'ai_inference' and row['epistemic'] == 'inference'
-    assert conn.execute("SELECT COUNT(*) FROM claim WHERE created_by LIKE '%ai%' OR status='ai_inference'").fetchone()[0] == 0
-
-
 def test_queue_enumeration_does_not_spend_candidate_budget(world):
     c = world
     assert discover.enqueue(c, path='feed', pool='discovery', url='https://never-fetched.test/a', relevance=.9, caps={})
     assert c.execute('SELECT COUNT(*) FROM web_daily_url').fetchone()[0] == 0
-    assert Limits(c, day=lambda: '2026-11-05').admit('https://actually-fetched.test/a')
+    record_dispatch(c, 'https://actually-fetched.test/a', day='2026-11-05')
     assert c.execute('SELECT COUNT(*) FROM web_daily_url').fetchone()[0] == 1
-
-
-def test_robots_dispatches_use_a_separate_daily_counter(world):
-    c = world
-    day = '2026-11-05'
-    limits = Limits(c, day=lambda: day, fetches=1, robots=1)
-    limits.dispatch(robots=True)
-    limits.dispatch()                      # a robots lookup does not consume the content slot
-    with pytest.raises(DailyLimit):
-        limits.dispatch(robots=True)
-    with pytest.raises(DailyLimit):
-        limits.dispatch()
 
 
 def test_planner_history_lists_only_non_yielding_queries(world):
     c = world
-    gap = gaps.gap_jobs(c, limit=1)[0]
+    gap = gaps.gap_jobs(c)[0]
     c.execute('UPDATE gap SET attempts=-1 WHERE gap_id=?', (gap['gap_id'],))
     now = db.utcnow()
     c.execute("INSERT INTO crawl_job(job_id,path,pool,query,gap_id,state,last_error,created_at) VALUES ('jg','reverse_gap','backfill','good query',?,'done',NULL,?)", (gap['gap_id'], now))
@@ -869,14 +694,3 @@ def test_planner_history_lists_only_non_yielding_queries(world):
 
     assert Adapters(Client(Budget(meter(c)), key='dummy', transport=transport, balance_transport=healthy_balance)).plan(c) == []
     assert seen['failed_queries'] == ['bad query']
-
-
-def test_candidate_admission_is_atomic_between_process_connections(tmp_path):
-    import concurrent.futures
-    path=str(tmp_path/'state.db'); c=db.connect(path); db.migrate(c); c.close()
-    def admit(index):
-        c=db.connect(path)
-        try: return Limits(c,day=lambda:'2026-11-05',candidates=1).admit(str(index))
-        finally: c.close()
-    with concurrent.futures.ThreadPoolExecutor(2) as pool:
-        assert sorted(pool.map(admit,[1,2]))==[False,True]

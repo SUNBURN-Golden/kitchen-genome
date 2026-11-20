@@ -1,17 +1,19 @@
 """Staged, checkpointed, resumable daemon core.
 
-Guarantees (tested in tests/test_daemon_skeleton.py):
+Guarantees (tested in tests/test_daemon.py):
   * Single-flight: a run lock (lease) prevents concurrent runs; an expired lease can be taken over.
   * Each stage has a checkpoint row; 'done' stages are never re-run when a run is resumed.
   * Bounded retries per stage with capped backoff; on exhaustion the stage goes to failure_queue and the run
-    stops at that stage ('failed', failed_stage=...). Next run resumes FROM that stage.
-  * Cost cap per run (units); hitting it pauses the run (resumable), it never silently continues.
+    stops at that stage ('failed', failed_stage=...). Requeue the failed item after repair.
   * Stage handlers are idempotent by construction (INSERT OR IGNORE on deterministic keys); resume may re-enter a
     stage that crashed mid-way."""
 import dataclasses
 import json
+import re
 import time
 from typing import Callable
+
+from kg_collect.guard import Guard, fingerprint
 
 from .db import new_id, utcnow
 
@@ -22,17 +24,11 @@ DEFAULT_CONFIG = {
     'lock_name': 'kg-daemon',
     'daemon_name': 'kg-daemon',
     'lock_ttl_sec': 1800,
-    'max_attempts': 3,
     'backoff_base_sec': 2.0,
     'backoff_max_sec': 30.0,
-    'cost_cap_units': 20.0,
     'unit_costs': {'http_request': 1.0, 'llm_tokens_k': 0.5, 'db_write': 0.0},
     'stale_open_employment_days': 180,
 }
-
-
-class CostCapExceeded(Exception):
-    pass
 
 
 class NonRetryable(Exception):
@@ -46,12 +42,12 @@ class NoActiveSources(Exception):
 @dataclasses.dataclass
 class StageResult:
     output: dict = dataclasses.field(default_factory=dict)
-    cursor: dict | None = None      # only used when the handler stops early (cost cap) to resume mid-stage
+    cursor: dict | None = None      # optional continuation cursor for a runnable stage
 
 
 class CostMeter:
-    def __init__(self, conn, run_id, cap, unit_costs):
-        self.conn, self.run_id, self.cap, self.unit_costs = conn, run_id, cap, unit_costs
+    def __init__(self, conn, run_id, unit_costs):
+        self.conn, self.run_id, self.unit_costs = conn, run_id, unit_costs
         self.used = conn.execute('SELECT cost_used_units u FROM daemon_run WHERE run_id=?', (run_id,)).fetchone()['u']
         self.stage = None
 
@@ -59,13 +55,11 @@ class CostMeter:
         units = self.unit_costs.get(kind, 1.0) * count
         if units <= 0:
             return
-        self.used = self.conn.execute('SELECT cost_used_units FROM daemon_run WHERE run_id=?', (self.run_id,)).fetchone()[0]
-        if self.used + units > self.cap:
-            raise CostCapExceeded(f'{kind} x{count} would exceed cap {self.cap} (used {self.used})')
-        self.used += units
-        self.conn.execute('INSERT INTO cost_ledger(run_id,stage,kind,units,at) VALUES (?,?,?,?,?)', (self.run_id, self.stage or '?', kind, units, utcnow()))
-        self.conn.execute('UPDATE daemon_run SET cost_used_units=? WHERE run_id=?', (self.used, self.run_id))
-        self.conn.commit()
+        with self.conn:
+            self.conn.execute('INSERT INTO cost_ledger(run_id,stage,kind,units,at) VALUES (?,?,?,?,?)',
+                              (self.run_id, self.stage or '?', kind, units, utcnow()))
+            self.used = self.conn.execute('UPDATE daemon_run SET cost_used_units=cost_used_units+? WHERE run_id=? RETURNING cost_used_units',
+                                          (units, self.run_id)).fetchone()[0]
 
 
 @dataclasses.dataclass
@@ -92,8 +86,6 @@ class Daemon:
                  sleep=time.sleep, clock=utcnow, owner: str | None = None, stages=STAGES):
         self.conn, self.handlers, self.env, self.sleep, self.clock = conn, handlers, env or {}, sleep, clock
         self.config = {**DEFAULT_CONFIG, **(config or {})}
-        if self.config['daemon_name'] == 'kg-daemon':
-            self.config['cost_cap_units'] = max(0, min(20, self.config['cost_cap_units']))
         self.owner = owner or new_id('own')
         self.stages = stages
         missing = [s for s in stages if s not in handlers]
@@ -134,7 +126,7 @@ class Daemon:
         prev = self._resumable() if resume else None
         run_id = new_id('run')
         self.conn.execute('INSERT INTO daemon_run(run_id,daemon,status,trigger,cost_cap_units,resumed_from,started_at) VALUES (?,?,?,?,?,?,?)',
-                          (run_id, self.config['daemon_name'], 'running', trigger, self.config['cost_cap_units'], prev['run_id'] if prev else None, self.clock()))
+                          (run_id, self.config['daemon_name'], 'running', trigger, 0, prev['run_id'] if prev else None, self.clock()))
         # we hold the lock, so a resumed 'running' predecessor is dead: close it (failed/paused predecessors keep their own final status)
         self.close_superseded_runs()
         for i, st in enumerate(self.stages):
@@ -162,7 +154,7 @@ class Daemon:
             return {'status': 'locked', 'run_id': None}
         try:
             run_id = self._start_run(trigger, resume)
-            cost = CostMeter(self.conn, run_id, self.config['cost_cap_units'], self.config['unit_costs'])
+            cost = CostMeter(self.conn, run_id, self.config['unit_costs'])
             prev_out: dict = {}
             for st in self.stages:
                 cp = self.conn.execute('SELECT * FROM stage_checkpoint WHERE run_id=? AND stage=?', (run_id, st)).fetchone()
@@ -183,17 +175,44 @@ class Daemon:
         cp = self.conn.execute('SELECT * FROM stage_checkpoint WHERE run_id=? AND stage=?', (run_id, st)).fetchone()
         attempts = cp['attempts']
         cost.stage = st
+        root = self.conn.execute('''WITH RECURSIVE chain(id,parent) AS (
+            SELECT run_id,resumed_from FROM daemon_run WHERE run_id=?
+            UNION ALL SELECT r.run_id,r.resumed_from FROM daemon_run r JOIN chain c ON r.run_id=c.parent)
+            SELECT id FROM chain WHERE parent IS NULL''', (run_id,)).fetchone()[0]
+        guard = Guard(self.conn, root, cfg['daemon_name'] + ':' + st)
+        def failed(reason, key, count, *, new_failure=True):
+            self.conn.execute("""UPDATE stage_checkpoint SET status='failed',attempts=?,error=?,finished_at=?
+                WHERE run_id=? AND stage=?""", (count, reason, self.clock(), run_id, st))
+            if new_failure:
+                self.conn.execute("""INSERT INTO failure_queue(failure_id,run_id,stage,item_key,error,attempts,created_at)
+                    VALUES (?,?,?,?,?,?,?)""", (new_id('fail'), run_id, st, key, reason, count, self.clock()))
+            self._finish(run_id, 'failed', st)
+            return 'failed'
+
         while True:
-            self.conn.execute("UPDATE stage_checkpoint SET status='running', attempts=?, started_at=? WHERE run_id=? AND stage=?", (attempts, self.clock(), run_id, st))
+            cursor = json.loads(self.conn.execute('SELECT cursor_json FROM stage_checkpoint WHERE run_id=? AND stage=?',
+                                                  (run_id, st)).fetchone()['cursor_json'] or '{}')
+            key = fingerprint([root, cursor])
+            item = guard.item(key)
+            blocked = self.conn.execute("""SELECT failure_id,state,error,attempts FROM failure_queue
+                WHERE stage=? AND item_key=? AND state IN ('open','requeued')
+                ORDER BY rowid DESC LIMIT 1""", (st, key)).fetchone()
+            if blocked and blocked['state'] == 'requeued':
+                guard.complete(key)
+                guard.release()
+                self.conn.execute("UPDATE failure_queue SET state='dismissed',resolved_at=? WHERE failure_id=?",
+                                  (self.clock(), blocked['failure_id']))
+                self.conn.commit()
+            elif guard.reason or (item and item['reason']) or blocked:
+                reason = guard.reason or (item and item['reason']) or blocked['error']
+                return failed(reason, key, item['attempts'] if item else (blocked['attempts'] if blocked else attempts),
+                              new_failure=not blocked)
+            self.conn.execute("""UPDATE stage_checkpoint SET status='running',attempts=?,started_at=?
+                WHERE run_id=? AND stage=?""", (attempts, self.clock(), run_id, st))
             self.conn.commit()
-            cursor = json.loads(self.conn.execute('SELECT cursor_json FROM stage_checkpoint WHERE run_id=? AND stage=?', (run_id, st)).fetchone()['cursor_json'] or '{}')
             ctx = StageContext(self.conn, run_id, st, cfg, cost, dict(prev_out), cursor, self.env)
             try:
                 res = self.handlers[st](ctx)
-            except CostCapExceeded as e:
-                self.conn.execute("UPDATE stage_checkpoint SET status='pending', error=? WHERE run_id=? AND stage=?", (str(e)[:300], run_id, st))
-                self._finish(run_id, 'paused_cost_cap', st)
-                return 'paused'
             except NoActiveSources as e:
                 self.conn.execute("UPDATE stage_checkpoint SET status='pending', error=? WHERE run_id=? AND stage=?", (str(e)[:300], run_id, st))
                 self._finish(run_id, 'paused_source', st)
@@ -201,17 +220,29 @@ class Daemon:
             except Exception as e:  # noqa: BLE001 — every handler error is bounded-retry material
                 self.conn.rollback()
                 attempts += 1
-                err = f'{type(e).__name__}: {e}'[:500]
-                if isinstance(e, NonRetryable) or attempts >= cfg['max_attempts']:
-                    self.conn.execute("UPDATE stage_checkpoint SET status='failed', attempts=?, error=?, finished_at=? WHERE run_id=? AND stage=?", (attempts, err, self.clock(), run_id, st))
-                    self.conn.execute('INSERT INTO failure_queue(failure_id,run_id,stage,item_key,error,attempts,created_at) VALUES (?,?,?,?,?,?,?)',
-                                      (new_id('fail'), run_id, st, None, err, attempts, self.clock()))
-                    self._finish(run_id, 'failed', st)
-                    return 'failed'
+                err = type(e).__name__
+                if isinstance(e, NonRetryable) and re.fullmatch(r'[a-z0-9_]{1,80}', str(e)):
+                    err = str(e)
+                reason = guard.failure(err)
+                guard.attempt(key, maximum=cfg.get('max_attempts'))
+                item = guard.item(key)
+                # Save the failure even if the next invocation takes over the lease.
+                if isinstance(e, NonRetryable) or reason or item['reason']:
+                    return failed(reason or item['reason'] or err, key, item['attempts'])
                 self.conn.execute("UPDATE stage_checkpoint SET attempts=?, error=? WHERE run_id=? AND stage=?", (attempts, err, run_id, st))
                 self.conn.commit()
                 self.sleep(min(cfg['backoff_max_sec'], cfg['backoff_base_sec'] * (2 ** (attempts - 1))))
                 continue
+            if isinstance(res, StageResult) and res.cursor is not None:
+                if res.cursor != cursor:
+                    guard.progress(fingerprint(res.cursor))
+                ctx.save_cursor(res.cursor)
+                if guard.runnable(res.cursor):
+                    return failed(guard.reason, fingerprint([root, res.cursor]), attempts)
+                self.conn.commit()
+                continue
+            guard.progress(fingerprint(cursor))
+            guard.complete(fingerprint([root, cursor]))
             out = res.output if isinstance(res, StageResult) else (res or {})
             self.conn.execute("UPDATE stage_checkpoint SET status='done', attempts=?, output_json=?, error=NULL, finished_at=? WHERE run_id=? AND stage=?",
                               (attempts + 1, json.dumps(out, ensure_ascii=False, sort_keys=True), self.clock(), run_id, st))

@@ -131,15 +131,16 @@ class Fetcher:
 
     # ── main entry ──
     def fetch(self, url: str, job_id: str | None = None, allow_browser: bool | None = None, parent: str | None = None, page_no: int | None = None,
-              max_pages: int = 1) -> list[Doc]:
+              follow_next: bool = False, before_send=None) -> list[Doc]:
         docs = []
-        seen_hashes = set()
+        seen_hashes, seen_urls = set(), set()
         cur, n = url, 0
-        while cur and n < max(1, max_pages):
+        while cur and canonicalize_url(cur) not in seen_urls:
+            seen_urls.add(canonicalize_url(cur))
             n += 1
-            d = self._fetch_one(cur, job_id, allow_browser, parent, n if max_pages > 1 else page_no)
+            d = self._fetch_one(cur, job_id, allow_browser, parent, n if follow_next else page_no, before_send)
             docs.append(d)
-            if not d.ok or max_pages <= 1 or not d.next_url or d.content_hash in seen_hashes:
+            if not d.ok or not follow_next or not d.next_url or d.content_hash in seen_hashes:
                 break
             seen_hashes.add(d.content_hash)
             nxt = d.next_url
@@ -148,9 +149,11 @@ class Fetcher:
             cur, parent = nxt, parent or d.fetch_id
         return docs
 
-    def _fetch_one(self, url, job_id, allow_browser, parent, page_no) -> Doc:
-        self.charge('http', 1.0)
-        r = self.net.get(url)
+    def _fetch_one(self, url, job_id, allow_browser, parent, page_no, before_send) -> Doc:
+        before = self.net.request_count
+        r = self.net.get(url, before_send=before_send) if before_send else self.net.get(url)
+        if self.net.request_count > before:
+            self.charge('http', self.net.request_count - before)
         if r.blocked:
             kind = 'fail_login_page' if r.error == 'login_page' else 'fail_blocked'
             return self._fail(job_id, r.final_url, 'html', kind, r, error=r.error, parent=parent, page_no=page_no)

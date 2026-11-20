@@ -5,8 +5,7 @@ are serialized and access refusals stop the host for the run. Egress uses zecbot
 when healthy and falls back to the box on a confirmed local tunnel failure.
 
 Output: pages that mention a registered active chef/restaurant are handed to the 07:00 pipeline as ordinary fetch_record rows
-(raw store + fetch_priority score). The 07:00 extract stage reads the highest scores first, so the fixed DeepSeek budget (cap 20)
-goes to the most promising pages. This module never calls DeepSeek, never commits, merges or deploys."""
+(raw store + fetch_priority score). The 07:00 extract stage reads the highest scores first. This module never calls DeepSeek, never commits, merges or deploys."""
 import argparse
 import contextlib
 import concurrent.futures as cf
@@ -30,6 +29,8 @@ from . import EXTRACTOR_VERSION, FETCHER_VERSION, proxynet
 from .discover import FOOD_CUE, item_relevance
 from .fetch import MIN_TEXT_CHARS, canonicalize_url, parse_feed, unreadable_js_shell
 from .htmlx import parse_html
+from .guard import Guard, threshold
+from kg_daemon.claims import queue_review
 from .net import PoliteNet, Response, TRAP, host_of, is_banned, matches_domain, to_uri, valid_destination
 from .rawstore import RawStore
 from .targets import Gazetteer, eligibility
@@ -38,9 +39,6 @@ KST = ZoneInfo('Asia/Seoul')
 SOURCES_PATH = os.path.join(ROOT, 'sources', 'heavy_sources.yaml')
 HEAVY_FETCHER = FETCHER_VERSION + '+heavy1'
 REVISIT_KINDS = ('search', 'feed', 'guide')
-HARD = {'max_concurrency': 6, 'max_depth': 3}      # ceilings the yaml cannot loosen
-CEIL = {'daily_candidates': 5000, 'daily_content': 1500, 'daily_requests': 8000, 'daily_bytes': 500_000_000, 'monthly_bytes': 15_000_000_000}
-
 SCHEMA = """
 CREATE TABLE IF NOT EXISTS frontier(
   url TEXT PRIMARY KEY, host TEXT NOT NULL, kind TEXT NOT NULL, depth INTEGER NOT NULL DEFAULT 0, score REAL NOT NULL DEFAULT 0.5,
@@ -64,10 +62,7 @@ def kst_now(clock=time.time) -> dt.datetime:
 def load_cfg(path=SOURCES_PATH) -> dict:
     cfg = yaml.safe_load(open(path, encoding='utf-8'))
     caps = cfg['caps']
-    caps['max_concurrency'] = max(1, min(HARD['max_concurrency'], int(caps.get('max_concurrency', 6))))
-    caps['max_depth'] = min(HARD['max_depth'], int(caps.get('max_depth', 3)))
-    for k, v in CEIL.items():
-        caps[k] = min(v, int(caps.get(k, v)))
+    caps['max_concurrency'] = max(1, int(caps.get('max_concurrency', 6)))
     return cfg
 
 
@@ -103,6 +98,12 @@ class HeavyCrawler:
         self.q.row_factory = sqlite3.Row
         self.q.execute('PRAGMA journal_mode=WAL')     # status readers never wait on the running block
         self.q.executescript(SCHEMA)
+        with self.q:
+            if 'canonical_url' not in {r['name'] for r in self.q.execute('PRAGMA table_info(frontier)')}:
+                self.q.execute('ALTER TABLE frontier ADD COLUMN canonical_url TEXT')
+                self.q.executemany('UPDATE frontier SET canonical_url=? WHERE url=?',
+                                   ((canonicalize_url(r[0]), r[0]) for r in self.q.execute('SELECT url FROM frontier')))
+            self.q.execute('CREATE INDEX IF NOT EXISTS frontier_canonical ON frontier(canonical_url)')
         self.svc = service_conn
         self.clock, self.sleep = clock, sleep
         self.traffic = traffic or proxynet.Traffic()
@@ -143,29 +144,20 @@ class HeavyCrawler:
     def month_bytes(self) -> int:
         return self.q.execute("SELECT COALESCE(SUM(bytes_in+bytes_out),0) FROM daily WHERE substr(day,1,7)=?", (self.day()[:7],)).fetchone()[0]
 
-    def cap_reason(self) -> str | None:
-        d = self.daily()
-        if d['requests'] >= self.caps['daily_requests']:
-            return 'daily_request_cap'
-        if d['bytes_in'] + d['bytes_out'] >= self.caps['daily_bytes']:
-            return 'daily_bytes_cap'
-        if self.month_bytes() >= self.caps['monthly_bytes']:
-            return 'monthly_bytes_cap'
-        return None
-
     # ── frontier ──
     def add(self, url, kind, depth=0, score=0.5, query=None, target_id=None, parent=None, revisit_hours=None, count=True) -> bool:
         try:
             url = to_uri(url)
         except ValueError:
             return False
-        if not url.startswith(('http://', 'https://')) or excluded(url, self.cfg) or depth > self.caps['max_depth']:
+        if not url.startswith(('http://', 'https://')) or excluded(url, self.cfg):
             return False
-        if count and self.daily()['candidates'] >= self.caps['daily_candidates']:
+        canonical = canonicalize_url(url)
+        if self.q.execute('SELECT 1 FROM frontier WHERE canonical_url=?', (canonical,)).fetchone():
             return False
-        cur = self.q.execute("""INSERT OR IGNORE INTO frontier(url,host,kind,depth,score,query,target_id,parent,revisit_hours,next_due,added_day,added_at)
-                                VALUES (?,?,?,?,?,?,?,?,?,0,?,?)""", (url, host_of(url), kind, depth, round(score, 3), query, target_id, parent, revisit_hours,
-                                                                     self.day(), self.clock()))
+        cur = self.q.execute("""INSERT OR IGNORE INTO frontier(url,host,kind,depth,score,query,target_id,parent,revisit_hours,next_due,added_day,added_at,canonical_url)
+                                VALUES (?,?,?,?,?,?,?,?,?,0,?,?,?)""", (url, host_of(url), kind, depth, round(score, 3), query, target_id, parent, revisit_hours,
+                                                                     self.day(), self.clock(), canonical))
         if cur.rowcount and count:
             self.bump(candidates=1)
             self.stats['candidates_new'] += 1
@@ -180,7 +172,7 @@ class HeavyCrawler:
         for g in mods.get('general', []):
             out.append({'q': g, 'target_id': None, 'score': 0.6})
         out.sort(key=lambda x: -x['score'])
-        return out[:int(self.caps['max_queries'])]
+        return out
 
     def seed(self) -> dict:
         n = {'queries': 0, 'feeds': 0, 'guides': 0, 'official': 0}
@@ -205,12 +197,15 @@ class HeavyCrawler:
         return self.q.execute("SELECT COUNT(*) FROM frontier WHERE state='queued' AND next_due<=?", (self.clock(),)).fetchone()[0]
 
     def _net(self, conn, **options):
+        def record(route, traffic):
+            proxynet.record_traffic(conn, self.day(), route, traffic)
+
         def transport(url, headers, timeout):
-            send = self.transport or (lambda url, headers, timeout: self.route.request(url, headers, timeout=timeout, traffic=self.traffic))
+            send = self.transport or (lambda url, headers, timeout: self.route.request(url, headers, timeout=timeout, traffic=self.traffic, on_traffic=record))
             status, headers, body, error = send(url, headers, timeout)
             return Response(url, status, headers, body, error=error)
 
-        return PoliteNet(transport, self.sleep, self.clock, conn=conn, count_limits=False,
+        return PoliteNet(transport, self.sleep, self.clock, conn=conn,
                          extra_banned=self.cfg.get('exclude_hosts', ()),
                          korean_press_hosts=(host_of(f['url']) for f in self.cfg.get('feeds', ()) if f.get('country') == 'KR'),
                          **options)
@@ -223,8 +218,24 @@ class HeavyCrawler:
         if task['last_modified']:
             headers['If-Modified-Since'] = task['last_modified']
         with contextlib.closing(connect(self.service_db)) as conn:
+            guard = Guard(conn, self.access.run_id, 'heavy:attempt')
+            key = stable_id('url', task['canonical_url'] or task['url'])
+            dispatched = False
+
+            def before_send():
+                nonlocal dispatched
+                if not dispatched:
+                    dispatched = bool(guard.attempt(key, previous=task['attempts']))
+                    conn.commit()
+                return dispatched
+
             net = self._net(conn, run_id=self.access.run_id, deadline=self.stop_at)
-            r = net.get(task['url'], headers)
+            r = net.get(task['url'], headers, before_send=before_send)
+            if dispatched and (r.blocked or r.error in (
+                'block_end', 'robots', 'robots_unavailable', 'banned', 'unsafe_destination',
+            )):
+                guard.defer(key)
+                conn.commit()
         return task, r, net.request_count, net.robots_count
 
     # ── result handling (main thread, single DB writer) ──
@@ -263,14 +274,20 @@ class HeavyCrawler:
         if st == 304:
             self.stats['not_modified'] += 1
             self.bump(not_modified=1)
-            self._finish(url, t['kind'], t['revisit_hours'], state='done', status=304, error=None)
+            self._finish(url, t['kind'], t['revisit_hours'], state='done', status=304, error=None, attempts=0)
             return None
         if st != 200:
             self.stats['errors'] += 1
-            att = t['attempts'] + 1
-            gone = st in (404, 410) or att >= 3
+            key = stable_id('url', t['canonical_url'] or url)
+            item = Guard(self.svc, self.access.run_id, 'heavy:attempt').item(key)
+            att = item['attempts'] if item else t['attempts'] + 1
+            exhausted = err == 'attempts_exhausted' or att >= threshold('MAX_ATTEMPTS', 3)
+            gone = st in (404, 410) or exhausted
+            if exhausted and st not in (404, 410):
+                queue_review(self.svc, 'guard_attempts_exhausted', 'heavy_frontier', stable_id('url', url),
+                             {'stage': 'heavy_fetch', 'attempts': att}, dedupe_key=stable_id('guard-heavy', url))
             self._finish(url, 'article' if gone else t['kind'], t['revisit_hours'], state='failed' if gone else 'queued', attempts=att,
-                         next_due=self.clock() + 3600 * att, status=st, error=str(err or st))
+                         next_due=self.clock() + 3600 * att, status=st, error='attempts_exhausted' if exhausted else str(err or st))
             return None
         self.stats['ok_pages'] += 1
         etag, lm = hd.get('etag'), hd.get('last-modified')
@@ -278,7 +295,7 @@ class HeavyCrawler:
         h = RawStore.sha(body)
         if t['content_hash'] == h:
             self.stats['unchanged'] += 1
-            self._finish(url, t['kind'], t['revisit_hours'], state='done', status=200, etag=etag, last_modified=lm)
+            self._finish(url, t['kind'], t['revisit_hours'], state='done', status=200, attempts=0, etag=etag, last_modified=lm)
             return None
         if 'xml' in ctype or 'rss' in ctype or 'atom' in ctype or body.lstrip()[:5] in (b'<?xml', b'<rss ', b'<feed'):
             self.process_feed({**t, 'url': response.final_url}, body)
@@ -287,7 +304,7 @@ class HeavyCrawler:
                 self._finish(url, t['kind'], t['revisit_hours'], state='queued', next_due=self.clock() + 86400,
                              error='js_renderer_unavailable')
                 return
-        self._finish(url, t['kind'], t['revisit_hours'], state='done', status=200, etag=etag, last_modified=lm, content_hash=h, error=None)
+        self._finish(url, t['kind'], t['revisit_hours'], state='done', status=200, attempts=0, etag=etag, last_modified=lm, content_hash=h, error=None)
         return None
 
     def process_feed(self, t, body):
@@ -295,7 +312,7 @@ class HeavyCrawler:
         cutoff = (kst_now(self.clock).date() - dt.timedelta(days=int(self.caps['lookback_days']))).isoformat()
         self.stats['items_seen'] += len(items)
         self.bump(items=len(items))
-        for it in items[:40]:
+        for it in items:
             if it.get('date') and it['date'] < cutoff:
                 continue
             rel = item_relevance(self.gaz, it.get('title', ''), it.get('summary', ''), it['url'])
@@ -321,7 +338,7 @@ class HeavyCrawler:
             el = eligibility(self.gaz, f"{doc.get('title') or ''}\n{text}")
             if el['target_ids']:
                 self.handoff(t, html, doc, el)
-        if t['depth'] + 1 > self.caps['max_depth'] or not doc['links']:
+        if not doc['links']:
             return True
         cands = []
         for u, anchor, rel in doc['links']:
@@ -334,15 +351,13 @@ class HeavyCrawler:
                 s = 0.45 + (0.05 if host_of(u) == t['host'] else 0)
             if s >= self.caps['relevance_floor']:
                 cands.append((s, u))
-        for s, u in sorted(cands, reverse=True)[:int(self.caps['max_links_per_page'])]:
+        for s, u in sorted(cands, reverse=True):
             self.add(u, 'article', t['depth'] + 1, s, target_id=t['target_id'], parent=t['url'])
 
         return True
 
     def handoff(self, t, html, doc, el):
         """Ordinary fetch_record (+raw) for the 07:00 extract stage, with a priority score for the DeepSeek order."""
-        if self.daily()['content'] >= self.caps['daily_content']:
-            return
         url = t['url']
         canon = canonicalize_url(url)
         raw_ref, h = self.raw.put(host_of(url), html.encode('utf-8'), 'html')
@@ -367,31 +382,29 @@ class HeavyCrawler:
 
     # ── scheduling loop ──
     def pick(self, busy: set, limit: int) -> list[dict]:
-        rows = self.q.execute("""SELECT * FROM frontier WHERE state='queued' AND next_due<=? ORDER BY score DESC, depth ASC, added_at ASC LIMIT 400""", (self.clock(),)).fetchall()
+        rows = self.q.execute("""SELECT * FROM frontier WHERE state='queued' AND next_due<=?
+            ORDER BY score DESC, depth ASC, added_at ASC, url""", (self.clock(),))
         out, hosts = [], set(busy)
         for r in rows:
             if len(out) >= limit:
                 break
             h = host_of(r['url'])
-            if h in hosts or self.access.blocked_response(r['url']):
+            if h in hosts or h in self.stopped_hosts or self.access.blocked_response(r['url']):
                 continue
             task = {**r, 'host': h}
             hosts.add(h)
             out.append(task)
         return out
 
-    def run(self, deadline: float, block: str = 'manual', max_requests: int | None = None, optional: bool = False) -> dict:
+    def run(self, deadline: float, block: str = 'manual', optional: bool = False) -> dict:
         run_id = 'hv_' + uuid.uuid4().hex[:10]
         started = self.clock()
         self.started = started
         rep = {'run_id': run_id, 'block': block, 'started_kst': kst_now(self.clock).isoformat(timespec='seconds'), 'egress': None, 'egress_reason': 'no_dispatch'}
         if deadline <= started + 60:
             return self._end(rep, 'skipped', 'block_over')
-        cap = self.cap_reason()
-        if cap:
-            return self._end(rep, 'skipped', cap)
         rep['seeded'] = self.seed()
-        if optional and self.backlog() < int(self.caps.get('backlog_for_optional_block', 800)):
+        if optional and self.backlog() < int(self.caps.get('backlog_for_optional_block', 1)):
             return self._end(rep, 'skipped', 'backlog_small')
         stop_at = deadline - 25
         self.stop_at = deadline                       # leave room for the 20 s request timeout before the hard stop
@@ -399,6 +412,7 @@ class HeavyCrawler:
         self.access = self._net(self.svc, deadline=deadline)
         self.access.start_run(run_id=run_id, expires_at=deadline)
         halt, inflight = None, {}
+        self.stopped_hosts = set()
         try:
             if self.egress:
                 _, rep['egress_reason'] = self.egress()
@@ -411,10 +425,6 @@ class HeavyCrawler:
                     if halt is None:
                         if now >= stop_at:
                             halt = 'deadline'
-                        elif max_requests is not None and self.stats['requests'] >= max_requests:
-                            halt = 'max_requests'
-                        elif (c := self.cap_reason()):
-                            halt = c
                     if halt is None:
                         free = self.caps['max_concurrency'] - len(inflight)
                         if free > 0:
@@ -432,8 +442,37 @@ class HeavyCrawler:
                     self.q.commit()                         # never hold the write lock while waiting on the network
                     done, _ = cf.wait(list(inflight), timeout=1, return_when=cf.FIRST_COMPLETED)
                     for f in done:
-                        inflight.pop(f)
-                        self.handle(f.result())
+                        task = inflight.pop(f)
+                        lane = Guard(self.svc, run_id, 'heavy:' + task['host'])
+                        try:
+                            result = f.result()
+                            self.handle(result)
+                            current = self.q.execute('SELECT * FROM frontier WHERE url=?', (task['url'],)).fetchone()
+                        except Exception as exc:
+                            # A faulty worker yields its current item so other hosts can proceed.
+                            lane.failure(type(exc).__name__)
+                            self._finish(task['url'], task['kind'], task['revisit_hours'], state='queued',
+                                         next_due=self.clock() + 3600, error=type(exc).__name__)
+                            self.stats['errors'] += 1
+                        else:
+                            response = result[1]
+                            key = stable_id('url', task['canonical_url'] or task['url'])
+                            fields = ('state', 'next_due', 'status', 'attempts', 'error', 'content_hash')
+                            before, after = ([row[k] for k in fields] for row in (task, current))
+                            if before == after and not response.blocked and response.error not in (
+                                'block_end', 'robots_unavailable',
+                            ):
+                                lane.runnable([key, after])
+                            elif response.status in (200, 304) and not response.error:
+                                lane.progress(key)
+                                Guard(self.svc, run_id, 'heavy:attempt').complete(key)
+                            elif not response.blocked and response.error not in (
+                                'block_end', 'robots', 'robots_unavailable', 'banned',
+                            ):
+                                lane.failure(response.error or response.status)
+                        if lane.reason:
+                            self.stopped_hosts.add(task['host'])
+                        self.svc.commit()
                     self.q.commit()
         except Exception as e:  # noqa: BLE001
             halt = f'crash:{type(e).__name__}'
@@ -441,10 +480,12 @@ class HeavyCrawler:
             self.access.finish_run()
             if self.route.name:
                 rep.update(egress=self.route.name, egress_reason=self.route.reason)
+        rep['guard_stops'] = {r['lane']: r['reason'] for r in self.svc.execute(
+            'SELECT lane,reason FROM guard_lane WHERE scope=? AND reason IS NOT NULL', (run_id,))}
         reason = halt or 'idle'
         if halt and halt.startswith('crash:'):
             return self._end(rep, 'halted', halt)
-        return self._end(rep, 'stopped' if reason in ('deadline', 'queue_empty', 'nothing_ready', 'max_requests', 'idle') else 'halted', reason)
+        return self._end(rep, 'stopped' if reason in ('deadline', 'queue_empty', 'nothing_ready', 'idle') else 'halted', reason)
 
     def _end(self, rep, outcome, reason) -> dict:
         self.flush_traffic()
@@ -458,7 +499,7 @@ class HeavyCrawler:
         self.q.execute('INSERT OR REPLACE INTO run(run_id,started,ended,block,outcome,stats) VALUES (?,?,?,?,?,?)',
                        (rep['run_id'], getattr(self, 'started', None), self.clock(), rep['block'], f'{outcome}:{reason}', json.dumps(rep, ensure_ascii=False)))
         self.q.commit()
-        line = {k: rep.get(k) for k in ('run_id', 'block', 'started_kst', 'ended_kst', 'outcome', 'reason', 'egress', 'egress_reason', 'traffic', 'stats', 'day_totals', 'month_bytes', 'max_rss_mb')}
+        line = {k: rep.get(k) for k in ('run_id', 'block', 'started_kst', 'ended_kst', 'outcome', 'reason', 'egress', 'egress_reason', 'traffic', 'stats', 'day_totals', 'month_bytes', 'guard_stops', 'max_rss_mb')}
         line['day'] = self.day()
         os.makedirs(os.path.dirname(os.path.abspath(self.log_path)), exist_ok=True)
         with open(self.log_path, 'a', encoding='utf-8') as f:
@@ -474,8 +515,7 @@ def main(argv=None) -> int:
     r = sub.add_parser('run')
     r.add_argument('--until', required=True, help='KST HH:MM hard stop (end of the block)')
     r.add_argument('--block', default='manual')
-    r.add_argument('--optional', action='store_true', help='run only when the backlog is large (22:00 block)')
-    r.add_argument('--max-requests', type=int)
+    r.add_argument('--optional', action='store_true', help='run when work is due (22:00 block)')
     sub.add_parser('egress')
     sub.add_parser('status')
     a = ap.parse_args(argv)
@@ -502,7 +542,7 @@ def main(argv=None) -> int:
     def _term(*_):
         raise Terminated()
     signal.signal(signal.SIGTERM, _term)
-    rep = hc.run(deadline_for(a.until), block=a.block, max_requests=a.max_requests, optional=a.optional)
+    rep = hc.run(deadline_for(a.until), block=a.block, optional=a.optional)
     s, tr = rep.get('stats') or {}, rep.get('traffic') or {}
     print(f"HEAVY={rep['outcome']} reason={rep['reason']} block={a.block} egress={rep.get('egress')} egress_reason={rep['egress_reason']} requests={s.get('requests', 0)} items={s.get('items_seen', 0)} "
           f"candidates={s.get('candidates_new', 0)} content={s.get('content_handoff', 0)} bytes_in={tr.get('bytes_in', 0)} bytes_out={tr.get('bytes_out', 0)} rss_mb={rep.get('max_rss_mb')}")
