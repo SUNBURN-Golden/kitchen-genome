@@ -147,6 +147,36 @@ def test_ip_advisory_neither_skips_nor_halts(world, reason):
     assert max(web.times) > started + 900
 
 
+@pytest.mark.parametrize('bodies,expected', [
+    ((b'{"ip":"49.50.131.207"}',), '49.50.131.207'),
+    ((b'<html>not json</html>', b'{"ip":"203.0.113.7"}'), '203.0.113.7'),
+    ((b'{"ip":"999.999.1.1"}', b'{"ip":42}', b' 203.0.113.9 \n'), '203.0.113.9'),
+    ((b'{"ip":"not-an-ip"}', b'', b''), None),
+    ((), None),
+])
+def test_exit_ip_validation_and_fallback_order(bodies, expected):
+    pending, seen = list(bodies), []
+
+    def probe(url, timeout):
+        seen.append(url)
+        assert timeout == 15
+        if not pending:
+            return net.Response(url, 503, {}, b'')
+        return net.Response(url, 200, {'Content-Type': 'application/json'}, pending.pop(0))
+
+    assert proxynet.exit_ip(probe) == expected
+    assert seen == list(proxynet.IP_ECHO_URLS[:len(seen)])
+
+
+def test_exit_ip_blocked_probe_returns_none():
+    def probe(url, timeout):
+        r = net.Response(url, 0, {}, b'', error='retry_after')
+        r.blocked = True
+        return r
+
+    assert proxynet.exit_ip(probe) is None
+
+
 @pytest.mark.parametrize('outage_at_start', [True, False])
 def test_heavy_uses_box_for_confirmed_outage(world, monkeypatch, outage_at_start):
     conn, tmp, clock, sleep, _ = world

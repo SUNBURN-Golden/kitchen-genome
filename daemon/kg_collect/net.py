@@ -153,11 +153,14 @@ def _press_hosts():
     hosts.update(h for h, meta in discovery['publication']['press_hosts'].items() if meta.get('country') == 'KR')
     feeds = [*discovery['feeds'], *discovery['sitemaps'], *load('heavy_sources.yaml')['feeds']]
     hosts.update(host_of(entry['url']) for entry in feeds if entry.get('country') == 'KR')
-    return frozenset(host_of('https://' + h) for h in hosts)
+    exclude = registry['access'].get('korean_press_exclude', [])
+    return frozenset(h for h in (host_of('https://' + x) for x in hosts) if not matches_domain(h, exclude))
 
 
 KOREAN_PRESS = _press_hosts()
 NEWS_LABELS = {'news', 'newsroom', 'press', 'media', 'daily', 'newspaper', 'journal'}
+NEWS_TOKENS = ('news', 'press', 'ilbo', 'sinmun', 'times', 'daily', 'herald', 'tv', 'media', 'journal')
+RETRY_AFTER_CAP = 7 * 86400
 REDIRECTS = (301, 302, 303, 307, 308)
 ROBOTS_TTL = 86400
 RUN_TTL = 3600
@@ -199,9 +202,13 @@ class PoliteNet:
             return True
         if not host.endswith('.kr'):
             return False
+        labels = host.split('.')
+        # A news-like first label ( incl. the publisher's own name, e.g. yonhapnews.co.kr) is press.
+        if any(token in labels[0] for token in NEWS_TOKENS):
+            return True
         # Labels to the left of the registered domain may indicate a news desk.
         domain_labels = 3 if host.endswith(('.co.kr', '.or.kr', '.ne.kr', '.re.kr', '.go.kr', '.ac.kr')) else 2
-        if NEWS_LABELS.intersection(host.split('.')[:-domain_labels]):
+        if NEWS_LABELS.intersection(labels[:-domain_labels]):
             return True
         return self.conn is not None and self.conn.execute(
             "SELECT 1 FROM domain_profile WHERE host=? AND tier_guess='press'", (host,)).fetchone() is not None
@@ -476,14 +483,15 @@ def _parse_robots(status, body):
 
 
 def retry_after(value, now):
+    """Honor a valid Retry-After, clamped to a 7-day ceiling so one hostile header cannot retire a host forever."""
     if not value:
         return None
     try:
         if re.fullmatch(r'[0-9]+', value.strip()):
             delay = float(value)
-            return now + delay if math.isfinite(delay) else None
+            return now + min(delay, RETRY_AFTER_CAP) if math.isfinite(delay) else None
         date = email.utils.parsedate_to_datetime(value)
-        return date.replace(tzinfo=date.tzinfo or dt.timezone.utc).timestamp()
+        return min(date.replace(tzinfo=date.tzinfo or dt.timezone.utc).timestamp(), now + RETRY_AFTER_CAP)
     except (ValueError, OverflowError, AttributeError):
         return None
 

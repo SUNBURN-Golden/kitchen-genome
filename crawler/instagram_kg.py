@@ -72,7 +72,8 @@ def block_code(text):
         (r'checkpoint', 'checkpoint'),
         (r'two[\s_-]*factor|\b2fa\b', 'two_factor'),
         (r'challenge|captcha|feedback_required|suspicious_login|email_code', 'challenge'),
-        (r'login[_ ]required|loginexception|loginfailed|badcredentials', 'login_failed'),
+        (r'login[_ ]?required|loginexception|loginfailed|badcredentials', 'login_failed'),
+        (r'has blocked you|blocked you', 'access_denied'),
         (r'\b(401|403)\b', 'access_denied'),
     ):
         if re.search(pattern, text):

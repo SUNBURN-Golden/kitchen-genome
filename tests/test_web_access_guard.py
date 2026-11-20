@@ -38,7 +38,8 @@ def test_robots_and_spacing_apply_only_to_korean_press(db_path):
 
     conn = connect(db_path)
     client = net.PoliteNet(send, sleep, lambda: now[0], conn=conn)
-    for domain in ('hotelrestaurant.co.kr', 'sub.hankyung.com', 'foodnews.news', 'news.fixture.co.kr'):
+    for domain in ('hotelrestaurant.co.kr', 'sub.hankyung.com', 'foodnews.news', 'news.fixture.co.kr',
+                   'donga.com', 'yonhapnews.co.kr', 'news.hankooki.com', 'www.chosun.com'):
         assert client.get(f'https://{domain}/denied').error == 'robots'
         for path in ('a', 'b'):
             assert client.get(f'https://{domain}/{path}', {'user-agent': 'wrong'}).status == 200
@@ -47,7 +48,7 @@ def test_robots_and_spacing_apply_only_to_korean_press(db_path):
     assert client.korean_press('publisher.kr')
     earlier = len(calls)
     for domain in ('restaurant.co.kr', 'guide.michelin.com', 'ko.wikipedia.org', 'hankyung.com.example.org', 'fakehankyung.com',
-                   'daily.co.kr', 'naver.com.example.org'):
+                   'booking.co.kr', 'naver.com.example.org', 'cjnews.cj.net'):
         for path in ('denied', 'kr/ko'):
             assert client.get(f'https://{domain}/{path}').status == 200
         assert client.site_maps(f'https://{domain}/') == []
@@ -55,7 +56,28 @@ def test_robots_and_spacing_apply_only_to_korean_press(db_path):
     assert net.host_of('https://WWW.식당.kr.:8443/x') == net.host_of('https://m.xn--ok1b941a.kr/x')
     assert {r[0] for r in conn.execute('SELECT host FROM web_host_guard WHERE last_dispatch IS NOT NULL')} == {
         'hotelrestaurant.co.kr', 'sub.hankyung.com', 'foodnews.news', 'news.fixture.co.kr',
+        'donga.com', 'yonhapnews.co.kr', 'news.hankooki.com', 'chosun.com',
     }
+
+
+@pytest.mark.parametrize('host', [
+    'donga.com', 'www.donga.com', 'm.donga.com', 'yonhapnews.co.kr', 'www.yonhapnews.co.kr',
+    'yna.co.kr', 'news.hankooki.com', 'daily.hankooki.com', 'www.chosun.com', 'sports.chosun.com',
+    'news1.kr', 'newspim.com', 'ohmynews.com', 'mbn.co.kr', 'asiatoday.co.kr', 'pressian.com',
+    'mediatoday.co.kr', 'yonhapnewstv.co.kr', 'imnews.imbc.com', 'news.tvchosun.com', 'news.jkn.co.kr',
+    'daily.co.kr', 'tv.fixture.kr', 'sinmun.fixture.co.kr', 'herald.fixture.co.kr', 'times.fixture.kr',
+    'sports.news.fixture.co.kr',
+])
+def test_korean_press_classification_covers_owner_named_hosts(host):
+    assert net.PoliteNet().korean_press(net.host_of(f'https://{host}/article'))
+
+
+@pytest.mark.parametrize('host', [
+    'guide.michelin.com', 'en.wikipedia.org', 'restaurant.co.kr', 'www.bistro.co.kr', 'booking.co.kr',
+    'cj.net', 'cjnews.cj.net', 'naver.com', 'hankyung.com.example.org', 'fakedonga.com',
+])
+def test_non_press_hosts_stay_outside_robots_and_spacing(host):
+    assert not net.PoliteNet().korean_press(net.host_of(f'https://{host}/page'))
 
 
 def test_redirect_login_block_propagates_and_retry_after_crosses_scopes(db_path, tmp_path):
@@ -196,10 +218,28 @@ def test_migration_requeues_only_stale_michelin_policy_skips(tmp_path):
     assert migrate(conn) == []
 
 
-def test_retry_after_http_date():
+def test_retry_after_http_date_and_seven_day_ceiling():
     stamp = dt.datetime(2026, 11, 20, 7, tzinfo=dt.timezone.utc).timestamp()
-    assert net.retry_after('Fri, 20 Nov 2026 07:00:00 GMT', 0) == stamp
+    now = stamp - 3600
+    ceiling = now + 7 * 86400
+    assert net.retry_after('Fri, 20 Nov 2026 07:00:00 GMT', now) == stamp
+    assert net.retry_after('60', now) == now + 60
     assert net.retry_after('invalid', 0) is None
+    assert net.retry_after('99999999999', now) == ceiling
+    assert net.retry_after('Sat, 20 Nov 2027 07:00:00 GMT', now) == ceiling
+
+
+def test_hostile_retry_after_cannot_retire_host_beyond_ceiling(db_path):
+    now = [1000.0]
+
+    def send(url, *args):
+        return net.Response(url, 429, {'Retry-After': '99999999999'}, b'')
+
+    client = net.PoliteNet(send, clock=lambda: now[0], conn=connect(db_path))
+    assert client.get('https://newsis.com/a').error == 'http_429'
+    assert client.conn.execute('SELECT retry_after_at FROM web_host_guard').fetchone()[0] == now[0] + 7 * 86400
+    now[0] += 7 * 86400 + 1
+    assert client.blocked_response('https://newsis.com/b') is None
 
 
 def test_daily_adapters_join_existing_scope_between_processes(db_path):

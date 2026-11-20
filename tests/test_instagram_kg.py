@@ -22,6 +22,14 @@ class Clock:
         return self.time
 
 
+class LoginRequiredException(Exception):
+    """Name mirrors instaloader's exception; the class-name signal must classify without a separator."""
+
+
+class ProfileNotExistsException(Exception):
+    """instaloader raises this with 'Profile X has blocked you' for an explicit per-profile block."""
+
+
 class Backend:
     def __init__(self, guard, calls, *, failure=None, private=False, posts=None):
         self.guard, self.calls, self.failure, self.private = guard, calls, failure, private
@@ -96,6 +104,8 @@ def test_saved_session_outside_old_window_no_quotas_private_output(world):
     (('post:6', SimpleNamespace(status_code=200, text='{"two_factor_required":true}')), 'two_factor'),
     (('post:6', SimpleNamespace(status_code=200, text='{"message":"challenge_required"}')), 'challenge'),
     (('post:6', SimpleNamespace(status_code=401, text='synthetic-sensitive')), 'access_denied'),
+    (('profile:brand0', LoginRequiredException('profile brand0 requires login')), 'login_failed'),
+    (('profile:brand0', ProfileNotExistsException('Profile brand0 has blocked you')), 'access_denied'),
 ])
 def test_provider_block_stops_and_records_first_signal(world, failure, reason):
     conn, clock, calls, opts = world

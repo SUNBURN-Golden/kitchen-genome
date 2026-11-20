@@ -11,31 +11,80 @@ defaults:
   block_evasion: forbidden    # impersonation, account switching, proxies, captcha solving: not implemented, not planned
 
 access:
+  # Parent domains: every subdomain (www., m., news., sports., ...) matches.
+  # Korean publishers only; corporate domains such as cj.net (cjnews.cj.net) are NOT press.
   korean_press_hosts:
     - ajunews.com
+    - asiae.co.kr
+    - asiatoday.co.kr
     - bakerynews.co.kr
+    - bizwatch.co.kr
+    - bntnews.co.kr
+    - celebinfluencernews.com
     - chosun.com
     - cooknchefnews.com
+    - dafanew.com
     - dailian.co.kr
+    - donga.com
     - edaily.co.kr
+    - enewstoday.co.kr
     - esquirekorea.co.kr
+    - etnews.com
     - fnnews.com
     - foodbank.co.kr
     - foodnews.news
     - hani.co.kr
+    - hankooki.com
     - hankyung.com
-    - heypop.kr
     - heraldcorp.com
+    - heypop.kr
     - hotelrestaurant.co.kr
+    - ichannela.com
+    - imbc.com
+    - insight.co.kr
+    - isplus.com
+    - jkn.co.kr
+    - joins.com
     - joongang.co.kr
+    - jtbc.co.kr
+    - kbs.co.kr
     - khan.co.kr
+    - kmib.co.kr
     - maisonkorea.com
+    - mbn.co.kr
+    - mediatoday.co.kr
     - mk.co.kr
+    - mt.co.kr
+    - munhwa.com
     - news.naver.com
+    - news1.kr
     - newsis.com
+    - newspim.com
+    - nocutnews.co.kr
+    - ohmynews.com
+    - osen.co.kr
+    - pressian.com
+    - sbs.co.kr
     - sedaily.com
+    - segye.com
     - seoul.co.kr
+    - sportschosun.com
+    - sportsseoul.com
+    - starnewskorea.com
+    - thinkfood.co.kr
+    - tvchosun.com
+    - wikitree.co.kr
+    - xportsnews.com
     - yna.co.kr
+    - yonhapnews.co.kr
+    - yonhapnewstv.co.kr
+    - youthdaily.co.kr
+    - ytn.co.kr
+    - zdnet.co.kr
+  # Corporate domains that appear in discovery press_hosts for publication scope but are NOT news outlets:
+  # no robots/spacing press treatment (cjnews.cj.net is CJ's corporate newsroom, verified_cj_program_only).
+  korean_press_exclude:
+    - cj.net
 
 sources:
   seed_legacy:
