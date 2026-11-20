@@ -6,7 +6,7 @@ import os
 import sys
 import time
 
-from kg_daemon.db import DEFAULT_DB, connect, migrate
+from kg_daemon.db import DEFAULT_DB, connect, migrate, utcnow
 
 from . import cycle, michelin
 
@@ -26,6 +26,14 @@ def main(argv=None) -> int:
     daily.add_argument('--heldout')
     daily.add_argument('--seed')
     sub.add_parser('review')
+    merge = sub.add_parser('lineage-merge', help='record a reviewed entity redirect')
+    merge.add_argument('kind', choices=('chef', 'branch'))
+    merge.add_argument('from_id')
+    merge.add_argument('to_id')
+    merge.add_argument('--evidence-id', required=True)
+    merge.add_argument('--reason', required=True)
+    undo = sub.add_parser('lineage-unmerge', help='reverse a recorded entity redirect')
+    undo.add_argument('redirect_id')
     g = sub.add_parser('gold')
     g.add_argument('file')
     g.add_argument('--registry', action='store_true', help='score with the production registry in --db (not the gold file targets)')
@@ -69,6 +77,21 @@ def main(argv=None) -> int:
     elif a.cmd == 'review':
         from .review import review_candidates
         print(json.dumps(review_candidates(conn), ensure_ascii=False, indent=1))
+    elif a.cmd in ('lineage-merge', 'lineage-unmerge'):
+        from . import global_queue, lineage_identity
+
+        try:
+            with global_queue.write(conn):
+                if a.cmd == 'lineage-merge':
+                    if not a.reason.strip():
+                        raise ValueError('a review reason is required')
+                    result = lineage_identity.merge(conn, a.kind, a.from_id, a.to_id, a.evidence_id, a.reason, utcnow())
+                    print(json.dumps({'redirect_id': result}))
+                else:
+                    result = lineage_identity.reverse(conn, a.redirect_id, utcnow())
+                    print(json.dumps({'reversed': bool(result)}))
+        except ValueError as exc:
+            ap.error(str(exc))
     elif a.cmd == 'gold':
         from .gold import run_file
         print(json.dumps(run_file(a.file, gaz_db=a.db if a.registry else None, docs_db=a.db if a.doc_context else None), ensure_ascii=False, indent=1))

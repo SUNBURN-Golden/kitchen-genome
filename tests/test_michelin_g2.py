@@ -179,7 +179,7 @@ def test_worldwide_resumes_mid_page_pass_and_retains_observations(world):
     assert len({r['name'] for r in rows if r['source_kind'] == 'michelin'}) == 6
     assert conn.execute("SELECT COUNT(*) FROM review_queue WHERE reason='guide_list_discrepancy'").fetchone()[0] >= 1
     assert conn.execute("SELECT COUNT(*) FROM review_queue WHERE reason='guide_edition_unknown'").fetchone()[0] >= 1
-    assert conn.execute("SELECT COUNT(*) FROM global_work WHERE kind='extract' AND reason='awaiting_g3_extractor'").fetchone()[0] > 0
+    assert conn.execute("SELECT COUNT(*) FROM global_work WHERE kind='extract' AND reason='extractor_unavailable'").fetchone()[0] > 0
     assert conn.execute('SELECT COUNT(*) FROM employment').fetchone()[0] == 0
     assert conn.execute("SELECT COUNT(*) FROM fetch_record WHERE fetcher_version=? AND extracted_at IS NOT NULL", (michelin.VERSION,)).fetchone()[0] == 0
 
@@ -329,7 +329,7 @@ def test_weekly_304_and_new_year_leave_previous_awards_intact(world):
     snapshot = conn.execute('SELECT fetch_id FROM global_page WHERE url=?', (FRANCE,)).fetchone()[0]
     clock[0] += 86_400
     with conn:
-        conn.execute("UPDATE global_work SET available_at=? WHERE state='pending'", (now() + 700_000,))
+        conn.execute("UPDATE global_work SET available_at=? WHERE state IN ('pending','deferred')", (now() + 700_000,))
         conn.execute("UPDATE global_work SET available_at=? WHERE tier=3 AND target=?", (now(), FRANCE))
     job = queue.claim(conn, now(), daily=True)
     assert roster.work(job) == 'not_modified'
@@ -403,7 +403,7 @@ def test_existing_heavy_windows_and_daily_incremental(world, tmp_path):
 
     set_time(22)
     with conn:
-        conn.execute("UPDATE global_work SET available_at=? WHERE state='pending'", (now() + 700_000,))
+        conn.execute("UPDATE global_work SET available_at=? WHERE state IN ('pending','deferred')", (now() + 700_000,))
         conn.execute('UPDATE global_work SET available_at=? WHERE target=?', (now(), cfg['directory']))
     crawler = make()
     report = crawler.run(heavy.deadline_for('23:59', now), 'evening', optional=True)
@@ -420,7 +420,7 @@ def test_concurrent_schema_upgrade_applies_each_migration_once(tmp_path):
     with ThreadPoolExecutor(max_workers=2) as workers:
         results = list(workers.map(start, range(2)))
     versions = [version for result in results for version in result]
-    assert len(versions) == len(set(versions)) == 14
+    assert len(versions) == len(set(versions)) == 15
     with closing(connect(path)) as conn:
         assert conn.execute('PRAGMA integrity_check').fetchone()[0] == 'ok'
 
@@ -441,14 +441,22 @@ def test_heavy_extracts_eligible_korean_snapshot_via_shared_adapter(world, tmp_p
     def adapter(meter):
         assert meter.stage == 'extract'
         assert meter.run_id.startswith('hv_')
-        client = SimpleNamespace(status='enabled', use_task=lambda task: seen.append(task))
+        client = SimpleNamespace(status='enabled', use_task=lambda task: None,
+                                 budget=SimpleNamespace(), last_meta={})
         stats = dict(failed=0, called=0, findings=0)
 
         def extract(doc, *args, **kwargs):
-            seen.append(doc.url)
+            from kg_collect.targets import eligibility
+
+            if eligibility(args[1], doc.text)['target_ids']:
+                seen.append(('rules', doc.url))
             return []
 
-        return SimpleNamespace(client=client, stats=stats, extract=extract)
+        def extract_lineage(doc, *args):
+            seen.append(('lineage', doc.url))
+            return []
+
+        return SimpleNamespace(client=client, stats=stats, extract=extract, extract_lineage=extract_lineage)
 
     def wire(url, headers, timeout):
         if '/restaurant/ga-sikdang' in url:
@@ -464,8 +472,8 @@ def test_heavy_extracts_eligible_korean_snapshot_via_shared_adapter(world, tmp_p
     report = crawler.run(now() + 1800)
     assert report['michelin']['tier'] == 0
     url = HOST + '/kr/en/seoul/restaurant/ga-sikdang'
-    assert seen == ['web-extract-2', url]
+    assert ('rules', url) in seen and ('lineage', url) in seen
     processed = conn.execute('SELECT url FROM fetch_record WHERE fetcher_version=? AND extracted_at IS NOT NULL',
                              (michelin.VERSION,)).fetchall()
-    assert [row[0] for row in processed] == [url]
+    assert url in [row[0] for row in processed]
     assert not conn.execute("SELECT 1 FROM target WHERE name_ko='Le Cèdre'").fetchone()

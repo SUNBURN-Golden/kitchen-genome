@@ -826,6 +826,10 @@ def apply_ready(conn, seed, raw, now=None):
     conn.commit()
     reviews = _matching_reviews(conn)
     if not reviews:
+        from .site_projection import materialize
+
+        if materialize(conn, seed):
+            stats['projection_changed'] = True
         return stats
     corpus = Corpus(conn, raw, now=now)
     live = seed['restaurants']
@@ -888,6 +892,10 @@ def apply_ready(conn, seed, raw, now=None):
         represented.add(norm(bundle['chef']))
         represented_ids.add(bundle['chef_target_id'])
     conn.commit()
+    from .site_projection import materialize
+
+    if materialize(conn, seed):
+        stats['projection_changed'] = True
     return stats
 
 

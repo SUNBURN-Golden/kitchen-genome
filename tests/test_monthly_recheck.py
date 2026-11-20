@@ -197,14 +197,17 @@ def test_older_recheck_and_fresh_extraction_run_together(world, tmp_path):
     def transport(payload,key):
         calls.append(json.loads(payload))
         assert not world.execute("SELECT 1 FROM ai_review_hold WHERE state='held'").fetchone()
+        if 'Extract explicit chef careers.' in calls[-1]['messages'][0]['content']:
+            return response({'assertions': []})
         return response({'findings':[]})
     a=Adapters(Client(budget,key='dummy',transport=transport,balance_transport=healthy_balance))
     bot=cycle.Bot(world,data_dir=str(tmp_path/'data'),deepseek=True)
     bot.raw,bot.ai=raw,a
     # The real rules flag side-by-side chef/restaurant mentions as ambiguous.
     cycle.stage_extract(SimpleNamespace(env={'bot':bot},cost=budget.meter))
-    assert len(calls) == 2 and a.client.stopped is None
-    assert [json.loads(call['messages'][2]['content'])['workload'] == 'recheck' for call in calls] == [True, False]
+    assert len(calls) == 3 and a.client.stopped is None
+    assert [json.loads(call['messages'][2]['content'])['workload'] for call in calls[:2]] == ['recheck', 'fresh']
+    assert 'Extract explicit chef careers.' in calls[2]['messages'][0]['content']
     assert world.execute("SELECT COUNT(*) FROM fetch_record WHERE extracted_at IS NOT NULL").fetchone()[0] == 2
     assert not world.execute("SELECT 1 FROM ai_review_hold WHERE state='held'").fetchone()
 
@@ -310,7 +313,7 @@ def test_date_migration_repairs_pending_rules_without_repairing_model_evidence(t
         conn.execute("UPDATE review_queue SET payload_json=? WHERE subject_id=?",
                      (json.dumps({'finding':{'date_text':'2026년 10월 1일'}}),xid))
     conn.execute("UPDATE extraction SET extractor='rule:closure' WHERE extraction_id='legacy_rule'");conn.commit()
-    assert db.migrate(conn)==['0009_extraction_verbatim_dates.sql', '0010_fetch_priority.sql', '0011_collect_discovery_scope.sql', '0012_web_access_guard.sql', '0013_global_ontology.sql', '0014_global_queue.sql']
+    assert db.migrate(conn)==['0009_extraction_verbatim_dates.sql', '0010_fetch_priority.sql', '0011_collect_discovery_scope.sql', '0012_web_access_guard.sql', '0013_global_ontology.sql', '0014_global_queue.sql', '0015_lineage_evidence.sql']
     rule=conn.execute("SELECT * FROM extraction WHERE extraction_id='legacy_rule'").fetchone()
     assert (rule['date_text'],rule['date_iso'])==('2026년 10월 1일','2026-10-01')
     model=conn.execute("SELECT * FROM extraction WHERE extraction_id='legacy_model'").fetchone()

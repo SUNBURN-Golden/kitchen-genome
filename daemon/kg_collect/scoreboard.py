@@ -71,6 +71,28 @@ def record_first(conn, kind, entity_id, at):
         (kind, entity_id, at))
 
 
+def record_career_outcomes(conn, fetch_id, version, stamp):
+    from .lineage_identity import canonical, redirects
+    from .site_projection import _career_rows, _stint_groups, _verified
+
+    chef_redirects = redirects(conn, 'chef')
+    jobs = {}
+    for row in conn.execute("""SELECT DISTINCT chef_id,branch_id FROM career_assertion
+        WHERE fetch_id=? AND extractor_version=? AND state='source_claim'""", (fetch_id, version)):
+        chef = canonical(chef_redirects, row['chef_id'])
+        record_first(conn, 'resolved_chef', chef, stamp)
+        jobs.setdefault(row['branch_id'], set()).add(chef)
+    for branch, chefs in jobs.items():
+        candidates = {chef: [] for chef in chefs}
+        for row in _career_rows(conn, branch):
+            chef = canonical(chef_redirects, row['chef_id'])
+            if chef in candidates:
+                candidates[chef].append(row)
+        for chef, rows in candidates.items():
+            if any(_verified(stint) for stint in _stint_groups(rows)):
+                record_first(conn, 'verified_link', chef + ':' + branch, stamp)
+
+
 def record_publication(conn, seed):
     """Recover immutable first transitions from the committed seed."""
     from kg_daemon.ontology import link_resolved_chef, sync_seed_geography

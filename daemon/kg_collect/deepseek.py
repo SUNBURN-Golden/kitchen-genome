@@ -266,6 +266,11 @@ class Adapters:
             offset += size
         return results
 
+    def extract_lineage(self, doc, window, snapshot):
+        from .lineage import _call
+
+        return _call(self, doc, window, snapshot)
+
     def extract(self, doc, recs, gaz, context=None, workload='fresh', attempt_id=None):
         full = unicodedata.normalize('NFC', sanitize_before_store(doc.text)[0] or '')
         if len(full) <= 12000:

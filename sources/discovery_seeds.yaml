@@ -17,6 +17,17 @@ publication:
     ajunews.com: {group: ajunews, country: KR, scope: original_food_reporting}
     seoul.co.kr: {group: seoul, country: KR, scope: original_food_reporting}
     news.jkn.co.kr: {group: jkn, country: KR, scope: original_food_reporting}
+    eater.com: {group: eater, country: US, scope: original_food_reporting}
+    bonappetit.com: {group: bonappetit, country: US, scope: original_food_reporting}
+    theworlds50best.com: {group: worlds50best, country: GB, scope: restaurant_reporting}
+    bighospitality.co.uk: {group: restaurantonline, country: GB, scope: original_food_reporting}
+    restaurantonline.co.uk: {group: restaurantonline, country: GB, scope: original_food_reporting}
+    lechef.com: {group: lechef, country: FR, scope: restaurant_reporting}
+    foodandwine.com: {group: foodandwine, country: US, scope: original_food_reporting}
+    gourmetpress.net: {group: gourmetpress, country: JP, scope: restaurant_reporting}
+    sietecanibales.com: {group: sietecanibales, country: ES, scope: restaurant_reporting}
+    identitagolose.it: {group: identitagolose, country: IT, scope: restaurant_reporting}
+    restaurant-ranglisten.de: {group: restaurant-ranglisten, country: DE, scope: restaurant_reporting}
     cjnews.cj.net: {group: cj, country: KR, scope: verified_cj_program_only}
 
 keyword_search:

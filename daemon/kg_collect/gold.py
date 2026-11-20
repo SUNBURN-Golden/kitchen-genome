@@ -143,6 +143,8 @@ def score_saved_articles(conn, gold):
 
     groups = defaultdict(lambda: [0] * 7)
     for article in gold['articles']:
+        if 'expect' not in article:
+            continue
         language = article['language']
         rows = conn.execute("""SELECT e.* FROM extraction e
             WHERE e.asserted_by='ai_inference' AND e.extractor LIKE 'deepseek:%' AND (fetch_id=? OR EXISTS (
@@ -164,6 +166,41 @@ def score_saved_articles(conn, gold):
         for key in (language, 'overall'):
             groups[key] = [a + b for a, b in zip(groups[key], scores)]
     return {k: _scores(*v) for k, v in groups.items()}
+
+
+def score_saved_careers(conn, gold):
+    """Score G3 only on held-out articles with explicit career labels."""
+    from collections import defaultdict
+    import unicodedata
+
+    from .lineage_identity import canonical, redirects
+    from .targets import name_key
+
+    metrics = defaultdict(lambda: [0] * 8)
+    mapping = redirects(conn, 'chef')
+    for article in gold['articles']:
+        if 'career_expect' not in article:
+            continue
+        sample = conn.execute("""SELECT version,disposition FROM model_document_sample
+            WHERE fetch_id=? AND version LIKE 'career-span-%' ORDER BY rowid DESC LIMIT 1""",
+                              (article['fetch_id'],)).fetchone()
+        if not sample:
+            continue
+        expected = {(r['relation'], name_key(r['chef']), name_key(r['venue'])): r for r in article['career_expect']}
+        rows = conn.execute("""SELECT * FROM career_assertion
+            WHERE fetch_id=? AND extractor_version=? AND state='source_claim'""",
+                            (article['fetch_id'], sample['version']))
+        got = {(r['relation'], name_key(r['chef_text']), name_key(r['venue_text'])): r for r in rows}
+        shared = expected.keys() & got.keys()
+        text = unicodedata.normalize('NFC', article['text'])
+        exact = sum(text[r['span_start']:r['span_end']] == r['quote'] for r in got.values())
+        merges = sum(bool(expected[k].get('chef_id') and expected[k]['chef_id'] !=
+                          canonical(mapping, got[k]['chef_id'])) for k in shared)
+        counts = (len(shared), len(got.keys() - expected.keys()), len(expected.keys() - got.keys()),
+                  exact, len(got), merges, 1, int(bool(expected) and sample['disposition'] == 'prefilter_miss'))
+        for key in (article['language'], 'overall'):
+            metrics[key] = [a + b for a, b in zip(metrics[key], counts)]
+    return {key: dict(_scores(*values[:-1]), prefilter_misses=values[-1]) for key, values in metrics.items()}
 
 
 def daily_accuracy(conn, rule_path, heldout_path=None):
@@ -188,4 +225,6 @@ def daily_accuracy(conn, rule_path, heldout_path=None):
         scored = score_saved_articles(conn, gold)
         report['saved_model'] = {'version': version, 'labelled_samples': len(gold['articles']),
                                  **(scored or {'overall': 'n/a'})}
+        if any('career_expect' in article for article in gold['articles']):
+            report['career_model'] = {'version': version, **(score_saved_careers(conn, gold) or {'overall': 'n/a'})}
     return report

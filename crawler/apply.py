@@ -75,7 +75,7 @@ def _apply(conn, raw):
         rec['applied_at'] = today; applied.append(rec)
     now = site_publish.instant()
     publication = site_publish.apply_ready(conn, seed, raw, now)
-    if applied or publication['added'] or publication['upgraded']:
+    if applied or publication['added'] or publication['upgraded'] or publication.get('projection_changed'):
         site_publish.atomic_json(SEED, seed)
     if conn:
         from kg_collect.scoreboard import record_publication
@@ -95,7 +95,7 @@ def _apply(conn, raw):
     publication.update(site_publish.publication_metrics(conn, seed, now))
     publication['new_alumni_verified'] = sum(a['gate'] == 'verified' for a in additions)
     publication['new_alumni_checking'] = sum(a['gate'] == 'checking' for a in additions)
-    s = dict(day=today, changed=bool(applied or publication['upgraded']), applied=applied,
+    s = dict(day=today, changed=bool(applied or publication['upgraded'] or publication.get('projection_changed')), applied=applied,
              pending_count=len(pend), publication=publication)
     site_publish.atomic_json(os.path.join(H, 'out', 'last_summary.json'), s)
     print(json.dumps(dict(changed=s['changed'], applied=[(a['id'], a['kind'], a.get('new_name') or a.get('field')) for a in applied],

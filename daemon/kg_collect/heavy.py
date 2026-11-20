@@ -5,7 +5,7 @@ are serialized and access refusals stop the host for the run. Egress uses zecbot
 when healthy and falls back to the box on a confirmed local tunnel failure.
 
 The Michelin frontier shares the service DB with the 07:00 collector. Eligible
-Korean article snapshots use the existing extractor and Qwen-first guarded model
+multilingual article snapshots use the shared extractor and Qwen-first guarded model
 chain. The block writes private collection state for subsequent integration."""
 import argparse
 import contextlib
@@ -205,7 +205,7 @@ class HeavyCrawler:
             net = self._net(conn, run_id=self.access.run_id, deadline=self.stop_at)
             roster = michelin.Roster(conn, net, self.raw, self.roster_config, self.roster_seeds)
 
-            def extract(fetch, gaz):
+            def extract(fetch, gaz, focus):
                 from .deepseek import Adapters
 
                 meter = CostMeter(conn, self.access.run_id, UNIT_COSTS)
@@ -214,7 +214,7 @@ class HeavyCrawler:
                 deadline = time.monotonic() + max(0, min(global_queue.LEASE_SECONDS - 20,
                                                           task['lease_expires_at'] - self.clock() - 10,
                                                           self.stop_at - self.clock() - 5))
-                return extract_roster(conn, self.raw, fetch, gaz, adapter, deadline)
+                return extract_roster(conn, self.raw, fetch, gaz, adapter, deadline, focus)
 
             state = roster.work(task, extractor=extract)
             return state, net.request_count, net.robots_count
