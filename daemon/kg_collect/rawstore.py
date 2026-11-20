@@ -1,6 +1,7 @@
 """RAW layer: content-addressed files OUTSIDE git (data_store/raw/<host>/<aa>/<sha256>.<ext>). Rows only keep the reference + hash."""
 import hashlib
 import os
+import tempfile
 
 
 class RawStore:
@@ -17,9 +18,17 @@ class RawStore:
         rel = os.path.join(host or '_', h[:2], f'{h}.{ext}')
         path = os.path.join(self.root, rel)
         if not os.path.exists(path):
-            os.makedirs(os.path.dirname(path), exist_ok=True)
-            with open(path, 'wb') as f:
-                f.write(data)
+            directory = os.path.dirname(path)
+            os.makedirs(directory, exist_ok=True)
+            with tempfile.NamedTemporaryFile(dir=directory, delete=False) as f:
+                pending = f.name
+                try:
+                    f.write(data)
+                    f.close()
+                    os.replace(pending, path)
+                finally:
+                    if os.path.exists(pending):
+                        os.unlink(pending)
         return rel, h
 
     def read(self, rel: str) -> bytes:

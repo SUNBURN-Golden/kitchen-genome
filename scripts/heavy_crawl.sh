@@ -1,8 +1,8 @@
 #!/usr/bin/env bash
-# Heavy web collection block (plain script, no LLM). Usage: heavy_crawl.sh <until KST HH:MM> <block-name> [--optional]
-# cron (box): 00:00-03:00 and 11:00-14:00 KST, optional 22:00-24:00 (runs only when the backlog is large). flock + timeout in cron.
+# Resumable private web collection and eligible article extraction. Usage: heavy_crawl.sh <until KST HH:MM> <block-name> [--optional]
+# cron (box): 00:00-03:00 and 11:00-14:00 KST, optional 22:00-24:00 (runs when work is due). flock + timeout in cron.
 # Public web prefers the zecbot tunnel. Confirmed local tunnel failure selects box egress.
-# Never touches DeepSeek, git, deploy or Instagram.
+# Extraction shares the daily Qwen-first provider chain and request ledger. KG_IG=0.
 set -uo pipefail
 KG_HOME="${KG_HOME:-/workspace/kitchen-genome}"
 cd "$KG_HOME" || exit 1
