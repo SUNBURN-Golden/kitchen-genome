@@ -236,7 +236,10 @@ def sync_seed_geography(conn, seed):
 
     if not conn.execute("SELECT 1 FROM sqlite_master WHERE name='target_entity'").fetchone():
         return
+    promoted = seed.get('ai_promotion', {}).get('holders', {})
     for row in (*seed.get('kitchens', []), *seed.get('restaurants', [])):
+        if row['id'] in promoted:
+            continue
         marker = row.get('publication') or {}
         target = marker.get('restaurant_target_id') or tid('restaurant', row['name'])
         branches = conn.execute("""SELECT b.branch_id,b.restaurant_id,b.city FROM branch b

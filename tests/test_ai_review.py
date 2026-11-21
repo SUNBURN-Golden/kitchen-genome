@@ -198,5 +198,7 @@ def test_main_summary_without_bundle_stats(monkeypatch, tmp_path, capsys):
     monkeypatch.setattr(rv, 'migrate', lambda c: None)
     monkeypatch.setattr(rv, 'review', lambda *a, **k: {'approved': 0, 'rejected': 0, 'published': 0, 'prechecked_rejects': 0,
                                                      'calls': 0, 'stopped': None, 'skipped_no_targets': 0, 'skipped_balance': 0})
-    assert rv.main(['--db', str(tmp_path / 'x.db')]) == 0
-    assert capsys.readouterr().out.startswith('AI_REVIEW ')
+    assert rv.main(['--db', str(tmp_path / 'x.db'), '--seed', str(tmp_path / 'seed.json')]) == 0
+    summary = capsys.readouterr().out
+    assert summary.startswith('AI_REVIEW ')
+    assert 'promoted=0 unlinked_remaining=0' in summary

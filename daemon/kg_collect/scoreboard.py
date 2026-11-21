@@ -121,6 +121,15 @@ def record_publication(conn, seed):
             branch = conn.execute('SELECT branch_id FROM target_entity WHERE target_id=?', (target,)).fetchone()
             employer = branch[0] if branch and branch[0] else row['kitchen']
             record_first(conn, 'verified_link', chef + ':' + employer, verified)
+    for link in seed.get('ai_promotion', {}).get('links', {}).values():
+        day = link.get('created') or link.get('upgraded')
+        if not day:
+            continue
+        stamp = day + 'T00:00:00+09:00'
+        record_first(conn, 'resolved_chef', link['chef'], stamp)
+        if link['gate'] == 'verified':
+            verified = (link.get('upgraded') or day) + 'T00:00:00+09:00'
+            record_first(conn, 'verified_link', link['chef'] + ':' + link['branch'], verified)
     conn.commit()
 
 

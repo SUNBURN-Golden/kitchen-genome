@@ -77,7 +77,9 @@ def rpage(r):
     if not bad(r.get('cuisine')): rest['servesCuisine']=r['cuisine']
     loc=[v for v in (r.get('area'),r.get('city')) if not bad(v)]
     if loc or r.get('country'):
-        rest['address']={'@type':'PostalAddress','addressCountry':r.get('country') or ('KR' if r.get('city')=='서울' else None)}
+        promoted = r['id'] in d.get('ai_promotion', {}).get('holders', {})
+        country = r.get('country') or ('KR' if not promoted and r.get('city') == '서울' else None)
+        rest['address']={'@type':'PostalAddress','addressCountry':country}
         if loc: rest['address']['addressLocality']=' '.join(loc)
     if rest.get('address') and rest['address']['addressCountry'] is None: del rest['address']['addressCountry']
     if r.get('url'): rest['sameAs']=[r['url']]
@@ -99,7 +101,7 @@ def kpage(k):
     lis=''.join(f'<li><a href="/r/{r["id"]}/">{e(r["name"])}</a>{" <span class=tag>폐업</span>" if r.get("closed_at") else ""} · {e(kitchen_crews(r,k["id"]) or "셰프 미확인")}{kitchen_badge(r, k["id"])} · {e(" ".join(v for v in (r.get("area"),r.get("cuisine")) if not bad(v)))}</li>' for r in al)
     body=f'''<article class="card"><p class="muted">출신 주방</p><h1>{e(k['name'])} <small class="muted">{e(k.get('en',''))}</small></h1>
 <p class="lead">{e(desc)}</p><dl><dt>미쉐린</dt><dd>{e(k.get('michelin') or '미확인')}{(' · '+link(k['michelin_src'],'출처')) if k.get('michelin_src') else ''}</dd><dt>자료 확인일</dt><dd>{e(k.get('checked') or d['generated'])}</dd></dl>
-<h2>출신 셰프가 열거나 이끄는 식당</h2><ul>{lis or '<li>아직 수집된 기록이 없어요</li>'}</ul>{aisec(k)}
+<h2>출신 셰프가 열거나 이끄는 식당</h2><ul>{lis or '<li>아직 수집된 기록이 없어요</li>'}</ul>{career_html(k,K)}{aisec(k)}
 <p class="cta"><a class="btn p" href="/#/k/{e(k['id'])}">셰프 DNA 계보도 보기</a> <a class="btn g" href="/directory/">전체 식당 목록</a></p></article>'''
     ld={'@context':'https://schema.org','@type':'Restaurant','@id':BASE+path+'#kitchen','name':k['name'],'alternateName':k.get('en'),'url':BASE+path,
         'subjectOf':{'@type':'ItemList','numberOfItems':len(al),'itemListElement':[{'@type':'ListItem','position':i+1,'url':f'{BASE}/r/{r["id"]}/','name':r['name']} for i,r in enumerate(al)]}}

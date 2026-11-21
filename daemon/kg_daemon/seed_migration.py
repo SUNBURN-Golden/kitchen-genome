@@ -121,11 +121,16 @@ def migrate_seed(conn, seed: dict, now: str | None = None) -> dict:
         add_alias(conn, 'restaurant', rid, seed_id, 'legacy_id', now)
         return rid, bid
 
+    promoted = seed.get('ai_promotion', {}).get('holders', {})
     for k in seed.get('kitchens', []):
+        if k['id'] in promoted:
+            continue
         ids = ensure_restaurant(k['id'], k['name'], k.get('name_en') or k.get('en'))
         rest_of_seed[k['id']] = ids
         by_name[k['name']] = ids
     for r in seed.get('restaurants', []):
+        if r['id'] in promoted:
+            continue
         if r.get('type') == 'established' and r['name'] in by_name:
             rid, bid = by_name[r['name']]
             rest_of_seed[r['id']] = (rid, bid)
@@ -141,6 +146,8 @@ def migrate_seed(conn, seed: dict, now: str | None = None) -> dict:
 
     # ── per restaurant row: chef, employments, status events, mentorship
     for r in seed.get('restaurants', []):
+        if r['id'] in promoted:
+            continue
         rid, bid = rest_of_seed[r['id']]
         status = claim_status_for(r)
         closed_at = r.get('closed_at')

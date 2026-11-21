@@ -442,7 +442,7 @@ def test_concurrent_schema_upgrade_applies_each_migration_once(tmp_path):
     with ThreadPoolExecutor(max_workers=2) as workers:
         results = list(workers.map(start, range(2)))
     versions = [version for result in results for version in result]
-    assert len(versions) == len(set(versions)) == 15
+    assert len(versions) == len(set(versions)) == 16
     with closing(connect(path)) as conn:
         assert conn.execute('PRAGMA integrity_check').fetchone()[0] == 'ok'
 

@@ -175,7 +175,7 @@ def test_global_migration_preserves_pr_a_ids_and_guide_observations(tmp_path):
         conn.execute("INSERT INTO restaurant(restaurant_id,name,created_at) VALUES ('r','Fixture venue','t')")
         conn.execute("INSERT INTO branch(branch_id,restaurant_id,city,created_at) VALUES ('b','r','서울','t'),('u','r','Unknown','t')")
         conn.commit()
-        assert db.migrate(conn) == ['0012_web_access_guard.sql', '0013_global_ontology.sql', '0014_global_queue.sql', '0015_lineage_evidence.sql']
+        assert db.migrate(conn) == ['0012_web_access_guard.sql', '0013_global_ontology.sql', '0014_global_queue.sql', '0015_lineage_evidence.sql', '0016_ai_promotion.sql']
         assert dict(conn.execute('SELECT branch_id,country_code FROM branch')) == {'b': 'KR', 'u': None}
         conn.execute("INSERT INTO guide_selection VALUES ('s','fixture','KR','live',NULL,'2026-11-19')")
         listing = "INSERT OR IGNORE INTO guide_listing VALUES ('s','b',?,'publisher','https://guide.test/kr',NULL,'list:row',?,?)"

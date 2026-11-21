@@ -40,7 +40,7 @@ def emp(conn, chef, branch, status='source_claim', **kw):
 
 def test_migrations_apply_once_and_are_checksum_pinned(tmp_path):
     c = kgdb.connect(':memory:')
-    assert kgdb.migrate(c) == ['0001_core_ontology.sql', '0002_daemon_runtime.sql', '0003_collection_bot.sql', '0004_profile_facts.sql', '0005_candidate_fact_types.sql', '0006_deepseek_collection.sql', '0007_aux_robots_counter.sql', '0008_deepseek_efficiency.sql', '0009_extraction_verbatim_dates.sql', '0010_fetch_priority.sql', '0011_collect_discovery_scope.sql', '0012_web_access_guard.sql', '0013_global_ontology.sql', '0014_global_queue.sql', '0015_lineage_evidence.sql']
+    assert kgdb.migrate(c) == ['0001_core_ontology.sql', '0002_daemon_runtime.sql', '0003_collection_bot.sql', '0004_profile_facts.sql', '0005_candidate_fact_types.sql', '0006_deepseek_collection.sql', '0007_aux_robots_counter.sql', '0008_deepseek_efficiency.sql', '0009_extraction_verbatim_dates.sql', '0010_fetch_priority.sql', '0011_collect_discovery_scope.sql', '0012_web_access_guard.sql', '0013_global_ontology.sql', '0014_global_queue.sql', '0015_lineage_evidence.sql', '0016_ai_promotion.sql']
     assert kgdb.migrate(c) == []
     d = tmp_path / 'm'
     d.mkdir()

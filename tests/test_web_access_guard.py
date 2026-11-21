@@ -210,7 +210,7 @@ def test_migration_requeues_only_stale_michelin_policy_skips(tmp_path):
                         VALUES (?, 'https://' || ?, ?, ?, 'directory', 'discovery', 'fixture')""", rows)
     conn.execute("INSERT INTO web_host_guard(host,paused) VALUES ('blocked.test','blocked:403')")
     conn.commit()
-    assert migrate(conn) == ['0012_web_access_guard.sql', '0013_global_ontology.sql', '0014_global_queue.sql', '0015_lineage_evidence.sql']
+    assert migrate(conn) == ['0012_web_access_guard.sql', '0013_global_ontology.sql', '0014_global_queue.sql', '0015_lineage_evidence.sql', '0016_ai_promotion.sql']
     assert {r['job_id']: r['state'] for r in conn.execute('SELECT * FROM crawl_job')} == {
         'manual': 'queued', 'robots': 'queued', 'http': 'blocked', 'unrelated': 'skipped',
     }
