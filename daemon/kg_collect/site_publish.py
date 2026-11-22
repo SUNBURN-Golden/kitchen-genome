@@ -395,6 +395,10 @@ def kitchen_counts(seed):
     for row in seed.get('restaurants', []):
         if row.get('type') == 'alumni' and row.get('kitchen') in counts:
             counts[row['kitchen']].add(row['id'])
+    for row in seed.get('career_projection', {}).get('restaurants', ()):
+        for edge in row.get('origins', ()):
+            if edge['kitchen_id'] in counts:
+                counts[edge['kitchen_id']].add(row['id'])
     return {k: len(ids) for k, ids in counts.items()}
 
 
@@ -677,9 +681,45 @@ def publication_metrics(conn, seed, now):
         for ko, en in chef_names(row.get('chef'), row.get('chef_en')):
             matches = {r['target_id'] for name in (ko, en) if gaz and name for r in gaz.lookup(name) if r['kind'] == 'chef'}
             named.add(marker.get('chef_target_id') or (next(iter(matches)) if len(matches) == 1 else tid('chef', ko)))
-    metrics = {'named_chefs': len(named), 'alumni_by_kitchen': kitchen_counts(seed),
-               'verified_total': sum(r.get('type') == 'alumni' and r.get('lineage_status') == 'verified' for r in rows),
-               'checking_total': sum(r.get('type') == 'alumni' and bool(r.get('career_checking')) for r in rows)}
+    from .lineage_identity import candidate_keys
+    from .site_projection import KEY
+
+    projection = seed.get(KEY, {})
+    locations = {}
+    for kind, branches in seed.get('ai_promotion', {}).get('snapshot', {}).get('site', {}).items():
+        locations.update({sid: branch for branch, ids in branches.items() for sid in ids})
+    by_key = {}
+    projected_chefs = {}
+    projected_names = {}
+    for kind in ('restaurants', 'kitchens'):
+        for node in projection.get(kind, ()):
+            for edge in (*node.get('origins', ()), *node.get('career_affiliations', ())):
+                chef = edge['chef_id']
+                names = set().union(*(candidate_keys(name) for name in (edge.get('chef_name'), edge.get('chef_name_en')) if name))
+                projected_chefs.setdefault(chef, set()).update(names)
+                employer = edge.get('kitchen_id', node['id'])
+                branch = locations.get(employer, employer)
+                key = (chef, branch, edge['relation'], edge.get('role'), edge.get('period'))
+                verified = edge.get('lineage_status') == 'verified'
+                by_key[key] = by_key.get(key, False) or verified
+                if edge['relation'] in ('former', 'training'):
+                    projected_names.setdefault(branch, set()).update(names)
+    legacy_verified = legacy_checking = 0
+    for row in rows:
+        if row.get('type') != 'alumni':
+            continue
+        employer = locations.get(row.get('kitchen'), row.get('kitchen'))
+        aliases = set().union(*(candidate_keys(n) for pair in chef_names(row.get('chef'), row.get('chef_en')) for n in pair if n))
+        if aliases & projected_names.get(employer, set()):
+            continue
+        legacy_verified += row.get('lineage_status') == 'verified'
+        legacy_checking += bool(row.get('career_checking'))
+    named_spellings = set().union(*(candidate_keys(n) for r in rows
+                                    for pair in chef_names(r.get('chef'), r.get('chef_en')) for n in pair if n))
+    metrics = {'named_chefs': len(named) + sum(not (names & named_spellings) for names in projected_chefs.values()),
+               'alumni_by_kitchen': kitchen_counts(seed),
+               'verified_total': legacy_verified + sum(by_key.values()),
+               'checking_total': legacy_checking + sum(not verified for verified in by_key.values())}
     if conn:
         queue = list(conn.execute("""SELECT state,payload_json,created_at FROM review_queue WHERE reason=?""", (REASON,)))
         dates = [instant(r['created_at']) for r in queue if r['state'] == 'open']
@@ -745,6 +785,21 @@ def daily_lock(repo):
     with open(path, 'a', encoding='utf-8') as lock:
         fcntl.flock(lock, fcntl.LOCK_EX)
         yield
+
+
+@contextlib.contextmanager
+def seed_lock(seed_path):
+    """Use the daily lock for a checkout and a local lock for standalone seeds."""
+    directory = Path(seed_path).resolve().parent
+    git = subprocess.run(['git', 'rev-parse', '--is-inside-work-tree'], cwd=directory,
+                         capture_output=True, text=True)
+    if git.returncode == 0 and git.stdout.strip() == 'true':
+        with daily_lock(directory):
+            yield
+    else:
+        with open(directory / ('.' + Path(seed_path).name + '.lock'), 'a', encoding='utf-8') as lock:
+            fcntl.flock(lock, fcntl.LOCK_EX)
+            yield
 
 
 @contextlib.contextmanager

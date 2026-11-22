@@ -8,6 +8,7 @@ import json, os, glob, sys, datetime as dt
 H = os.path.dirname(os.path.abspath(__file__)); ROOT = os.path.dirname(H)
 sys.path.insert(0, os.path.join(ROOT, 'daemon'))
 from kg_collect import site_publish  # noqa: E402
+from kg_ai import promotion  # noqa: E402
 
 C = json.load(open(os.path.join(H, 'config.json'), encoding='utf-8'))
 SEED = os.path.join(ROOT, 'data', 'seed.json')
@@ -89,8 +90,13 @@ def _apply(conn, raw):
     log_path = os.path.join(H, 'applied.json')
     log = load(log_path, [])
     additions = site_publish.reconcile_events(seed, log)
-    site_publish.atomic_json(log_path, log + applied + additions)
-    applied += additions
+    reviewed = promotion.events(seed, log)
+    additions += [event for event in reviewed if event['kind'] == 'new_alumni']
+    upgrades = [event for event in reviewed if event['kind'] == 'upgrade_alumni']
+    publication['added'] += sum(event['kind'] == 'new_alumni' for event in reviewed)
+    publication['ready'] += sum(event['kind'] == 'new_alumni' for event in reviewed)
+    publication['upgraded'] += len(upgrades)
+    applied += additions + upgrades
     os.makedirs(os.path.join(H, 'out'), exist_ok=True)
     publication.update(site_publish.publication_metrics(conn, seed, now))
     publication['new_alumni_verified'] = sum(a['gate'] == 'verified' for a in additions)
@@ -98,6 +104,7 @@ def _apply(conn, raw):
     s = dict(day=today, changed=bool(applied or publication['upgraded'] or publication.get('projection_changed')), applied=applied,
              pending_count=len(pend), publication=publication)
     site_publish.atomic_json(os.path.join(H, 'out', 'last_summary.json'), s)
+    site_publish.atomic_json(log_path, log + applied)
     print(json.dumps(dict(changed=s['changed'], applied=[(a['id'], a['kind'], a.get('new_name') or a.get('field')) for a in applied],
                           pending=len(pend), publication=publication), ensure_ascii=False))
 

@@ -545,6 +545,25 @@ def _store_alias(conn, row, kind, entity_id, spelling, now):
                  (stable_id('alias', kind, entity_id, spelling), kind, entity_id, spelling, lang, claim, now))
 
 
+def conflicting_stints(left, right):
+    if {left['relation'], right['relation']} - {'current', 'former'}:
+        return False
+    # Different roles, unrelated tenures and retrospective reports can coexist.
+    if not (left.get('role_id') and left['role_id'] == right['role_id'] and any(
+            left.get(k) and left[k] == right[k] for k in ('valid_from', 'valid_to'))):
+        return False
+    for field in ('valid_from', 'valid_to'):
+        a, b = left.get(field), right[field]
+        if a and b:
+            first, second = sorted((ontology.date_range(a), ontology.date_range(b)))
+            if first[1] < second[0]:
+                return True
+    current, former = (left, right) if left['relation'] == 'current' else (right, left)
+    return bool(current['relation'] == 'current' and former['relation'] == 'former'
+                and former['valid_to'] and current['published_at']
+                and ontology.date_range(former['valid_to'])[1] < current['published_at'][:10])
+
+
 def _check_conflicts(conn, row, now):
     if row['relation'] not in ('current', 'former'):
         return
@@ -555,23 +574,7 @@ def _check_conflicts(conn, row, now):
         others = conn.execute("""SELECT * FROM career_assertion WHERE chef_id=? AND branch_id=?
             AND state='source_claim' AND relation IN ('current','former')""", (chef, row['branch_id']))
         for old in others:
-            # Different jobs/roles and retrospective reporting can coexist.
-            # A shared start and role is a concrete assertion about the same stint.
-            if not (row.get('role_id') and row['role_id'] == old['role_id'] and (
-                    row.get('valid_from') and row['valid_from'] == old['valid_from']
-                    or row.get('valid_to') and row['valid_to'] == old['valid_to'])):
-                continue
-            precision_conflict = False
-            for field in ('valid_from', 'valid_to'):
-                a, b = row.get(field), old[field]
-                if a and b:
-                    first, second = sorted((ontology.date_range(a), ontology.date_range(b)))
-                    precision_conflict |= first[1] < second[0]
-            current, former = (row, old) if row['relation'] == 'current' else (old, row)
-            ended_while_current = (current['relation'] == 'current' and former['relation'] == 'former'
-                                   and former['valid_to'] and current['published_at']
-                                   and ontology.date_range(former['valid_to'])[1] < current['published_at'][:10])
-            if precision_conflict or ended_while_current:
+            if conflicting_stints(row, old):
                 claims.open_conflict(conn, 'employment', row['employment_id'], 'period', old['claim_id'], row['claim_id'], now)
                 _review(conn, row, 'career_conflict', now, other_assertion=old['assertion_id'])
 

@@ -8,10 +8,10 @@ top-level `ai_reviewed_unlinked` list) with the source URL and an 'AI 검토' ba
 decision is appended to data/ai_review_log.jsonl; scripts/ai_review_rollback.py undoes it.
 Rejected findings are closed (review_queue.state='dismissed') with the reason.
 
-Only the verbatim quote is ever published; model text is never published. Core seed fields
-(chef, kitchen, closed_at, ...) are never modified.
+Approved career quotes also supply evidence to the G3 career projection.
 """
 import argparse
+from copy import deepcopy
 import datetime as dt
 import json
 import os
@@ -19,11 +19,14 @@ import re
 import sys
 import unicodedata
 
+from kg_ai import promotion
 from kg_ai.article import article_key, source, digest
 from kg_ai.balance import PAUSES
-from kg_collect.targets import Gazetteer, eligibility, load_seed_targets
 from kg_ai.budget import Budget
 from kg_ai.deepseek import RETRYABLE, Client, DeepSeekError, MAX_INPUT_BYTES
+from kg_collect.global_queue import write
+from kg_collect.site_publish import atomic_json, seed_lock
+from kg_collect.targets import Gazetteer, eligibility, load_seed_targets
 from kg_daemon.db import ROOT, connect, migrate, new_id, utcnow
 from kg_daemon.runner import CostMeter
 
@@ -203,10 +206,12 @@ def open_items(conn):
     return sorted(items, key=lambda f:(f['workload'] != 'fresh',f['q_created'],f['extraction_id']))
 
 
-def _close(conn, review_id, decision, reason, meta, now):
+def _close(conn, review_id, decision, reason, meta, now, *, delivery=None):
     row = conn.execute('SELECT payload_json FROM review_queue WHERE review_id=?', (review_id,)).fetchone()
     p = json.loads(row['payload_json'] or '{}')
     p['ai_review'] = {'decision': decision, 'reason': reason, 'at': now, **({'model_meta': meta} if meta else {})}
+    if delivery:
+        p['ai_review']['delivery'] = delivery
     conn.execute('UPDATE review_queue SET state=?, resolved_at=?, payload_json=? WHERE review_id=? AND state=\'open\'',
                  ('resolved' if decision == 'approve' else 'dismissed', now, json.dumps(p, ensure_ascii=False, sort_keys=True), review_id))
 
@@ -231,27 +236,71 @@ def close_linked_candidates(conn, now):
     return n
 
 
-def publish(seed, site, f, review_id, now):
-    """Add the verbatim quote under the matched restaurant/kitchen (or the unlinked list). Idempotent."""
-    m = site.match(f)
-    entry = {'label': f['label'], 'label_ko': LABEL_KO.get(f['label'], f['label']), 'quote': f['quote'], 'src': f['canonical_url'],
-             'date': f['published_at'], 'chef': f['chef_text'], 'restaurant': f['restaurant_text'] or f['org_text'],
-             'provenance': 'ai_reviewed', 'badge': BADGE, 'extraction_id': f['extraction_id'], 'review_id': review_id, 'reviewed_at': now}
+def annotation(f, review_id, now):
+    return {'label': f['label'], 'label_ko': LABEL_KO.get(f['label'], f['label']), 'quote': f['quote'], 'src': f['canonical_url'],
+            'date': f['published_at'], 'chef': f['chef_text'], 'restaurant': f['restaurant_text'] or f['org_text'],
+            'provenance': 'ai_reviewed', 'badge': BADGE, 'extraction_id': f['extraction_id'], 'review_id': review_id, 'reviewed_at': now}
+
+
+def publish(seed, site, entry):
+    """Append the reviewed quote once per review, preserving independent proofs."""
+    for kind, holder, item in promotion.annotations(seed):
+        if item.get('review_id') == entry['review_id']:
+            return f'{kind[:-1]}:{holder["id"]}' if kind else 'unlinked', False
+    m = site.match({'restaurant_text': entry['restaurant'], 'chef_text': entry['chef']})
     if m:
-        lst = m[1].setdefault('ai_reviewed', [])
         target = f'{m[0]}:{m[1]["id"]}'
+        lst = m[1].setdefault('ai_reviewed', [])
     else:
-        lst = seed.setdefault('ai_reviewed_unlinked', [])
         target = 'unlinked'
-    if any(x['extraction_id'] == f['extraction_id'] or (x['quote'] == f['quote'] and x['label'] == f['label']) for x in lst):
-        return target, False
+        lst = seed.setdefault('ai_reviewed_unlinked', [])
     lst.append(entry)
     return target, True
+
+
+def _finish_delivery(conn, seed, seed_path, log_path, raw_dir, stats, now):
+    prior = deepcopy(seed)
+    audit = {(row.get('action'), row.get('review_id')): row for row in promotion.audit_rows(log_path)}
+    denied = {rid for action, rid in audit if action == 'rollback'}
+    denied.update(seed.get(promotion.KEY, {}).get('withdrawn', ()))
+    pending = []
+    site = Site(seed)
+    for row in conn.execute("""SELECT review_id,payload_json FROM review_queue
+                              WHERE reason='ai_inference' AND json_type(payload_json,'$.ai_review.delivery')='object'
+                              ORDER BY rowid"""):
+        delivery = json.loads(row['payload_json'])['ai_review']['delivery']
+        review_id = row['review_id']
+        rec = delivery['audit']
+        entry = delivery.get('entry')
+        if entry and review_id not in denied:
+            rec['target'], added = publish(seed, site, entry)
+            rec['published'] = added or (rec['action'], review_id) not in audit
+            stats['published'] += int(added)
+        pending.append((rec, review_id))
+    if any(True for _ in promotion.annotations(seed)) or seed.get(promotion.KEY):
+        with write(conn):
+            stats['promoted'] += promotion.backfill(conn, seed, raw_dir, log_path, now)
+    stats['unlinked_remaining'] = len(seed.get('ai_reviewed_unlinked', ()))
+    if seed != prior:
+        atomic_json(seed_path, seed)
+    if pending:
+        targets = {entry.get('review_id'): f'{kind[:-1]}:{holder["id"]}' if kind else 'unlinked'
+                   for kind, holder, entry in promotion.annotations(seed)}
+    for rec, review_id in pending:
+        if (rec['action'], review_id) not in audit and review_id not in denied:
+            if rec['action'] == 'approve' and review_id in targets:
+                rec['target'] = targets[review_id]
+            append_log(log_path, rec)
+        conn.execute("UPDATE review_queue SET payload_json=json_remove(payload_json,'$.ai_review.delivery') WHERE review_id=?",
+                     (review_id,))
+    conn.commit()
 
 
 def append_log(path, rec):
     with open(path, 'a', encoding='utf-8') as fh:
         fh.write(json.dumps(rec, ensure_ascii=False, sort_keys=True) + '\n')
+        fh.flush()
+        os.fsync(fh.fileno())
 
 
 def _start_run(conn):
@@ -265,16 +314,19 @@ def _start_run(conn):
 def review(conn, seed_path, log_path, raw_dir, *, client=None, limit=None):
     now = utcnow()
     stats = {'approved': 0, 'rejected': 0, 'published': 0, 'prechecked_rejects': 0, 'calls': 0, 'stopped': None, 'candidates_closed': 0, 'skipped_no_targets': 0, 'skipped_balance': 0, 'considered': 0, 'eligible': 0}
+    stats.update(promoted=0, unlinked_remaining=0)
+    with open(seed_path, encoding='utf-8') as stream:
+        seed = json.load(stream)
     stats['candidates_closed'] += close_linked_candidates(conn, now)
     items = open_items(conn)
     if limit:
         items = items[:limit]
+    _finish_delivery(conn, seed, seed_path, log_path, raw_dir, stats, now)
     if not items:
         stats['remaining'] = conn.execute("SELECT COUNT(*) FROM review_queue WHERE reason='ai_inference' AND state='open'").fetchone()[0]
         stats['unreviewed_candidate_findings'] = conn.execute("SELECT COUNT(*) FROM review_queue WHERE reason='ai_inference' AND subject_type='candidate_fact' AND state='open'").fetchone()[0]
         stats['reason'] = 'none'
         return stats
-    seed = json.load(open(seed_path, encoding='utf-8'))
     site = Site(seed)
     load_seed_targets(conn, seed)
     gaz = Gazetteer(conn)
@@ -285,24 +337,18 @@ def review(conn, seed_path, log_path, raw_dir, *, client=None, limit=None):
         client = Client(Budget(meter))
     else:
         client.budget.meter, client.budget.conn = meter, conn
-    seed_changed = False
 
     def decide(f, decision, reason, meta):
-        nonlocal seed_changed
         ts = utcnow()
         rec = {'at': ts, 'at_kst': kst_now(), 'action': decision, 'review_id': f['review_id'], 'extraction_id': f['extraction_id'],
                'label': f['label'], 'quote': sanitize_before_store(f['quote'] or '')[0], 'src': f['canonical_url'], 'reason': reason, 'model_meta': meta}
+        delivery = {'audit': rec}
         if decision == 'approve':
-            target, added = publish(seed, site, f, f['review_id'], ts)
-            rec['target'] = target
-            rec['published'] = added
-            seed_changed |= added
+            delivery['entry'] = annotation(f, f['review_id'], ts)
             stats['approved'] += 1
-            stats['published'] += int(added)
         else:
             stats['rejected'] += 1
-        append_log(log_path, rec)
-        _close(conn, f['review_id'], decision, reason, meta, ts)
+        _close(conn, f['review_id'], decision, reason, meta, ts, delivery=delivery)
         if f.get('candidate_id'):
             conn.execute('UPDATE candidate_fact SET resolution=? WHERE candidate_id=?', ('needs_review' if decision == 'approve' else 'rejected', f['candidate_id']))
         conn.commit()
@@ -448,8 +494,7 @@ def review(conn, seed_path, log_path, raw_dir, *, client=None, limit=None):
         for f in batch:
             r = res[f['extraction_id']]
             decide(f, r['decision'], ('model: ' + r['reason']), meta)
-    if seed_changed:
-        json.dump(seed, open(seed_path, 'w', encoding='utf-8'), ensure_ascii=False, indent=1)
+    _finish_delivery(conn, seed, seed_path, log_path, raw_dir, stats, now)
     stats['candidates_closed'] += close_linked_candidates(conn, utcnow())
     from kg_collect.recheck import reconcile
     reconcile(conn)
@@ -475,10 +520,11 @@ def main(argv=None):
     conn = connect(a.db)
     migrate(conn)
     raw_dir = a.raw_dir or os.path.join(os.path.dirname(os.path.abspath(a.db)), 'raw')
-    s = review(conn, a.seed, a.log, raw_dir, limit=a.limit)
-    print('AI_REVIEW approved=%s rejected=%s published=%s prechecked=%s calls=%s remaining=%s stopped=%s cost=%s reason=%s skipped_no_targets=%s skipped_balance=%s unreviewed_candidate_findings=%s bundle_approved=%s bundle_rejected=%s bundle_remaining=%s' % (
+    with seed_lock(a.seed):
+        s = review(conn, a.seed, a.log, raw_dir, limit=a.limit)
+    print('AI_REVIEW approved=%s rejected=%s published=%s prechecked=%s calls=%s remaining=%s stopped=%s cost=%s reason=%s skipped_no_targets=%s skipped_balance=%s unreviewed_candidate_findings=%s bundle_approved=%s bundle_rejected=%s bundle_remaining=%s promoted=%s unlinked_remaining=%s' % (
         s['approved'], s['rejected'], s['published'], s['prechecked_rejects'], s['calls'], s.get('remaining'), s['stopped'] or 'none', s.get('cost_used', 0), s.get('reason','none'), s['skipped_no_targets'], s['skipped_balance'], s.get('unreviewed_candidate_findings',0),
-        s.get('bundle_approved', 0), s.get('bundle_rejected', 0), s.get('bundle_remaining', 0)))
+        s.get('bundle_approved', 0), s.get('bundle_rejected', 0), s.get('bundle_remaining', 0), s.get('promoted', 0), s.get('unlinked_remaining', 0)))
     return 0
 
 

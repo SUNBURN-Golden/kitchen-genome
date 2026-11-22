@@ -183,7 +183,7 @@ def _same_stint(conn, ids, branch, row, meta):
     return matches
 
 
-def resolve_chef(conn, row, branch, gaz, meta, evidence_id, now):
+def resolve_chef(conn, row, branch, gaz, meta, evidence_id, now, *, allow_redirect=True):
     name, bilingual = row['chef_text'], row.get('bilingual_name')
     names = [name, bilingual] if bilingual else [name]
     ids = chef_candidates(conn, names, gaz)
@@ -204,7 +204,7 @@ def resolve_chef(conn, row, branch, gaz, meta, evidence_id, now):
         if conn.execute('''SELECT 1 FROM employment WHERE chef_id=? AND branch_id=? AND state<>'rejected' LIMIT 1''',
                         (chef, branch)).fetchone():
             local.add(resolved)
-    if len(canonical_ids) > 1 and bilingual:
+    if allow_redirect and len(canonical_ids) > 1 and bilingual:
         left, right = ({canonical(mapping, chef) for chef in chef_candidates(conn, [n], gaz)} for n in names)
         if len(left | right) == 2 and len(local | matched) == 1:
             chosen = next(iter(local | matched))
@@ -221,6 +221,8 @@ def resolve_chef(conn, row, branch, gaz, meta, evidence_id, now):
         chef = next(iter(local or matched or exact))
         if name_key(name) not in {name_key(r) for r in conn.execute(
                 'SELECT display_name, display_name_en FROM chef WHERE chef_id=?', (chef,)).fetchone() if r}:
+            if not allow_redirect:
+                return chef, canonical_ids
             # Keep the sourced spelling on its own ID, so reversing the link also separates its evidence.
             if name_key(name) in {name_key(r[0]) for r in conn.execute(
                     "SELECT alias FROM alias WHERE entity_id=? AND entity_type='chef' AND claim_id IS NOT NULL", (chef,))}:

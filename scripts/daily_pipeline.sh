@@ -159,7 +159,7 @@ assert_branch
 git add -A data crawler web scripts .gitignore
 if git diff --cached --quiet; then to_main; git branch -D "$BR" -q; echo "$IG_OUT"; FINAL=1; echo "RESULT=NO_CHANGE reason=$AI_REASON"; exit 0; fi
 WEB_CHANGED=0; git diff --cached --quiet -- web || WEB_CHANGED=1
-SUM=$(python3 -c "import json;s=json.load(open('crawler/out/last_summary.json'));p=s.get('publication',{});v=p.get('new_alumni_verified',0);c=p.get('new_alumni_checking',0);u=p.get('upgraded',0);a=[f\"{r['name']}: {r['kind']} {r.get('new_name') or r.get('field') or ''}\" for r in s['applied'] if r['kind']!='new_alumni'];a+=([f'new_alumni {v} verified, {c} checking'] if v+c else [])+([f'{u} alumni upgraded'] if u else []);print('; '.join(a) or 'pending queue only','| pending',s['pending_count'])")
+SUM=$(python3 -c "import json;s=json.load(open('crawler/out/last_summary.json'));p=s.get('publication',{});v=p.get('new_alumni_verified',0);c=p.get('new_alumni_checking',0);u=p.get('upgraded',0);a=[f\"{r['name']}: {r['kind']} {r.get('new_name') or r.get('field') or ''}\" for r in s['applied'] if r['kind'] not in ('new_alumni','upgrade_alumni')];a+=([f'new_alumni {v} verified, {c} checking'] if v+c else [])+([f'{u} alumni upgraded'] if u else []);print('; '.join(a) or 'pending queue only','| pending',s['pending_count'])")
 git commit -q -m "crawl $DAY: $SUM"
 assert_branch
 [ "$(git rev-list --count "$BASE_SHA"..HEAD)" = 1 ] || { FINAL=1; echo "RESULT=FAILED stage=pr reason=unexpected_commits expected=$BR ai_reason=$AI_REASON"; exit 4; }

@@ -5,7 +5,7 @@ import unicodedata
 from urllib.parse import urlsplit
 
 
-def evidence_html(row, heading, labels, source_label):
+def evidence_html(row, heading, labels, source_label, english=False):
     items = []
     for ref in row.get('lineage_evidence', []):
         url, quote = ref.get('src'), ref.get('quote')
@@ -18,7 +18,9 @@ def evidence_html(row, heading, labels, source_label):
         except ValueError:
             continue
         label = labels.get(ref.get('kind'), source_label)
-        items.append(f'<li>{escape(label)} · “{escape(quote)}” '
+        badge = (' <span class="tag ai">' + ('AI-reviewed' if english else 'AI 검토') + '</span>'
+                 if ref.get('badge') == 'AI 검토' else '')
+        items.append(f'<li>{escape(label)}{badge} · “{escape(quote)}” '
                      f'(<a href="{escape(url)}" rel="nofollow noopener" target="_blank">{escape(source_label)}</a>)</li>')
     return f'<h2>{escape(heading)}</h2><ul>{"".join(items)}</ul>' if items else ''
 
@@ -109,10 +111,13 @@ def kitchen_badge(row, kitchen_id, english=False):
     return ''.join(f' <span class="tag">{escape(label)}</span>' for label in values)
 
 
-def career_html(row, kitchens, english=False):
+def career_html(row, kitchens, english=False, *, role_labels=None):
     base = '/en' if english else ''
+    role_labels = role_labels or {}
     items = []
-    for edge in (*row['origins'], *row.get('career_affiliations', [])):
+    relations = ({'former': 'Former chef', 'current': 'Current chef', 'training': 'Training', 'opening': 'Opened'}
+                 if english else {'former': '이전 근무', 'current': '재직', 'training': '수련', 'opening': '개업'})
+    for edge in (*row.get('origins', ()), *row.get('career_affiliations', ())):
         if 'relation' not in edge:
             continue
         kid = edge.get('kitchen_id')
@@ -122,16 +127,22 @@ def career_html(row, kitchens, english=False):
         if kitchen:
             kname = (kitchen.get('name_en') or kitchen.get('en')) if english else None
             bits.append(f'<a href="{base}/k/{escape(kid)}/">{escape(kname or kitchen["name"])}</a>')
+        if relation := relations.get(edge['relation']):
+            bits.append(relation)
+        if edge.get('mentor_name'):
+            name = (edge.get('mentor_name_en') if english else None) or edge['mentor_name']
+            bits.append(('Mentor ' if english else '스승 ') + escape(name))
         label = status(edge, english)
         checking = 'Checking' if english else '확인 중'
         for key in ('role', 'period'):
             if edge.get(key):
-                bits.append(escape(edge[key]) + (f' <span class="tag">{checking}</span>'
+                value = role_labels.get(edge[key], edge[key]) if key == 'role' else edge[key]
+                bits.append(escape(value) + (f' <span class="tag">{checking}</span>'
                                                  if key in edge.get('career_checking', []) else ''))
         if label:
             bits.append(f'<span class="tag">{escape(label)}</span>')
         heading = 'Evidence' if english else '출처'
-        evidence = evidence_html({'lineage_evidence': edge['evidence']}, heading, {}, heading)
+        evidence = evidence_html({'lineage_evidence': edge['evidence']}, heading, {}, heading, english)
         items.append(f'<li>{" · ".join(bits)}{evidence}</li>')
     heading = 'Career history' if english else '셰프 근무 이력'
     return f'<h2>{heading}</h2><ul>{"".join(items)}</ul>' if items else ''
@@ -159,6 +170,29 @@ def people_jsonld(row, kitchens, base, restaurant_id, english=False):
                 alumni.append(org)
         elif edge.get('relation') == 'current' and not row.get('closed_at'):
             person['worksFor'] = {'@id': restaurant_id}
+    # Preserve the structured fields supported by a curated scalar when a
+    # separate reviewed career is added to the same restaurant page.
+    curated = row.get('chef')
+    checks = row.get('career_checking') or []
+    has_reviewed = any(ref.get('badge') == 'AI 검토'
+                       for edge in (*row['origins'], *row.get('career_affiliations', ()))
+                       for ref in edge.get('evidence', ()))
+    if curated and has_reviewed and not re.search('미확인|미기재|출신|팀', curated):
+        # Match the first loop's keying: a reviewed edge may live only in origins.
+        key = next((edge.get('chef_id') or edge.get('chef_name')
+                    for edge in (*row.get('career_affiliations', ()), *row['origins'])
+                    if _same_chef(edge, row)), curated)
+        name = (row.get('chef_en') if english else None) or curated
+        person = people.setdefault(key, {'@type': 'Person', 'name': name, 'jobTitle': 'Chef' if english else '셰프'})
+        if not {'chef', 'kitchen'}.intersection(checks) and not row.get('closed_at'):
+            person['worksFor'] = {'@id': restaurant_id}
+        kid = row.get('kitchen')
+        if kid in kitchens and row.get('lineage_status') == 'verified' and 'kitchen' not in checks:
+            kitchen = kitchens[kid]
+            org = {'@type': 'Organization', 'name': (kitchen.get('name_en') or kitchen.get('en') or kitchen['name'])
+                   if english else kitchen['name'], 'url': f'{base}/k/{kid}/'}
+            if org not in person.setdefault('alumniOf', []):
+                person['alumniOf'].append(org)
     return list(people.values())
 
 

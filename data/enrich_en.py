@@ -74,13 +74,13 @@ for r in d['restaurants']:
         else: r.update(chef_en=None,chef_en_src=None,chef_en_official=None,chef_en_type=None)
 for k in d['kitchens']:
     r=byid.get(k['id']+'_r') or next((x for x in d['restaurants'] if x.get('michelin_src') and x['michelin_src']==k.get('michelin_src')),None)
-    k.setdefault('name_en', k.get('en')); k['name_en_src']=(k.get('michelin_src') or '').replace('/kr/ko/','/kr/en/') if 'michelin' in (k.get('michelin_src') or '') else 'existing data (not verified on an official page)'
+    k.setdefault('name_en', k.get('en') or place(k['name'])); k['name_en_src']=(k.get('michelin_src') or '').replace('/kr/ko/','/kr/en/') if 'michelin' in (k.get('michelin_src') or '') else 'existing data (not verified on an official page)'
     k['name_en_official']='michelin' in (k.get('michelin_src') or '')
 if '--public-only' not in sys.argv[1:]:
     json.dump(d,open(P,'w',encoding='utf-8'),ensure_ascii=False,indent=1)
 d = public_seed(d)
 private = {'publication', 'model', 'model_meta', 'request_id', 'fetch_id', 'assertion_id', 'evidence_id',
-           'claim_id', 'content_hash', 'publisher_group', 'origin_group', 'verification_note'}
+           'claim_id', 'content_hash', 'body_fingerprint', 'publisher_group', 'origin_group', 'verification_note'}
 def public(value):
     if isinstance(value, list):
         return [public(item) for item in value]

@@ -32,15 +32,16 @@ function edgeBadge(edge){
   (checking.some(f=>f==='role'||f==='period')&&!checking.includes('chef')&&!checking.includes('kitchen')?'<span class="tag">확인 중</span>':'');
 }
 function careerEdges(r){
+ const relation={former:'이전 근무',current:'재직',training:'수련',opening:'개업'};
  return [...origins(r),...(r.career_affiliations||[])].filter(o=>o.relation).map(o=>{
   const k=K[o.kitchen_id];
-  return `<li>${k?`<a href="#/k/${k.id}">${esc(k.name)}</a> · `:''}${esc(o.chef_name)}${prole(o.role)}${o.period?' · '+esc(o.period):''} ${edgeBadge(o)}${lineageEvidence({lineage_evidence:o.evidence})}</li>`;
+  return `<li>${k?`<a href="#/k/${k.id}">${esc(k.name)}</a> · `:''}${esc(o.chef_name)} · ${relation[o.relation]||''}${prole(o.role)}${o.period?' · '+esc(o.period):''} ${edgeBadge(o)}${lineageEvidence({lineage_evidence:o.evidence})}</li>`;
  }).join('');
 }
 function lineageEvidence(r){
  const labels={lineage:'출신 주방',affiliation:'개업·재직',location:'지역'};
  const items=(r.lineage_evidence||[]).filter(x=>x.quote&&sourceUrl(x.src));
- return items.length?`<ul>${items.map(x=>`<li>${labels[x.kind]||'근거'} · “${esc(x.quote)}” (${link(x.src)})</li>`).join('')}</ul>`:'';
+ return items.length?`<ul>${items.map(x=>`<li>${labels[x.kind]||'근거'}${x.badge==='AI 검토'?' <span class="tag ai">AI 검토</span>':''} · “${esc(x.quote)}” (${link(x.src)})</li>`).join('')}</ul>`:'';
 }
 const news=()=>!SHOW_NEWSLETTER?"":`<section class="card" id="news"><h2 style="margin-top:0">뉴스레터</h2><p class="muted">새로 문 연 계보 식당과 셰프 이동 소식을 한 주에 한 번 보내 드려요. 지금은 준비 중이에요.</p><div class="news"><input type="email" placeholder="이메일 주소" aria-label="이메일 주소" disabled><button class="btn p" disabled>구독하기</button></div></section>`;
 const cut=(t,n)=>{t=(t??'').toString();return t.length>n?t.slice(0,n-1)+'…':t};
@@ -66,7 +67,9 @@ function tree(kid){const k=K[kid];const all=alumni.filter(a=>member(a,kid));
  const nodes=chefs(rows);
  nodes.forEach(n=>{n.items=[...new Map(n.items.map(a=>[a.id,a])).values()]});
  const nr=new Set(rows.map(a=>a.id)).size;
+ const careers=careerEdges(k);
  const s=`<div class="tree"><div class="torg"><b>${esc(k.name)}</b><span>셰프 ${nodes.length}명 · 식당 ${nr}곳</span></div>`;
+ if(!nodes.length&&careers)return s+`<ul>${careers}</ul></div>`;
  if(!nodes.length)return s+`<p class="muted tempty">${all.length?'이 판정에 해당하는 식당이 없어요.':'아직 수집된 출신 셰프 기록이 없어요. 제보를 받고 있어요.'}</p></div>`;
  return s+'<ul class="tnodes">'+nodes.map(n=>`<li class="tnode${n.items.some(ver)?' v':''}"><div class="tchef">${esc(n.chef)}${srole(n.role)}${n.items.length>1?`<span class="tc">식당 ${n.items.length}</span>`:''}</div><ul class="titems">${n.items.map(a=>`<li class="${ver(a)?'':'u'}${a.closed_at?' x':''}"><button type="button" class="tn${ver(a)?'':' u'}${a.closed_at?' x':''}" data-id="${a.id}" aria-haspopup="dialog" aria-label="${esc(a.name)}${a.closed_at?' (폐업)':''} 근거 열기"><b>${esc(a.name)}${a.closed_at?' <span class="cl">폐업</span>':''}</b>${tmeta(a)}${a.origin.relation?edgeBadge(a.origin):a.career_checking?.length?badge(a):''}${vbadge(a)}</button></li>`).join('')}</ul></li>`).join('')+'</ul></div>'}
 const vbadge=a=>{if(!SHOW_VERDICTS)return '';const v=vd(a);return `<span class="vb ${v.k}">${v.t}${v.k!=='wait'?' '+(v.g.g>0?'+':'')+v.g.g:''}</span>`};
