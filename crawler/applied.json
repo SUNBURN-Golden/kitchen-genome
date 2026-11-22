@@ -157,5 +157,166 @@
   ],
   "note": null,
   "applied_at": "2026-10-23"
+ },
+ {
+  "id": "onjium_r",
+  "name": "온지음",
+  "kind": "new_alumni",
+  "applied_at": "2026-11-23",
+  "day_kst": "2026-11-23",
+  "event_id": "ai-link_0fb9f1f067b7:create",
+  "gate": "checking",
+  "sources": [
+   "https://celebinfluencernews.com/news/articleView.html?idxno=1644"
+  ]
+ },
+ {
+  "id": "kg-dcfd54c218b3",
+  "name": "7th Door",
+  "kind": "new_alumni",
+  "applied_at": "2026-11-23",
+  "day_kst": "2026-11-23",
+  "event_id": "ai-link_192ed380a371:create",
+  "gate": "checking",
+  "sources": [
+   "https://sidae.com/article/2026031815153011619"
+  ]
+ },
+ {
+  "id": "kg-87c8ba2adfb7",
+  "name": "베누",
+  "kind": "new_alumni",
+  "applied_at": "2026-11-23",
+  "day_kst": "2026-11-23",
+  "event_id": "ai-link_1d281a578139:create",
+  "gate": "checking",
+  "sources": [
+   "https://koreadaily.com/article/20260602153634939"
+  ]
+ },
+ {
+  "id": "kg-280137058f93",
+  "name": "하누",
+  "kind": "new_alumni",
+  "applied_at": "2026-11-23",
+  "day_kst": "2026-11-23",
+  "event_id": "ai-link_4765a8954578:create",
+  "gate": "checking",
+  "sources": [
+   "https://celebinfluencernews.com/news/articleList.html?sc_sub_section_code=S2N4&view_type=sm"
+  ]
+ },
+ {
+  "id": "kg-2de3435132b7",
+  "name": "소재(SOJAE)",
+  "kind": "new_alumni",
+  "applied_at": "2026-11-23",
+  "day_kst": "2026-11-23",
+  "event_id": "ai-link_a1d62bb0147d:create",
+  "gate": "checking",
+  "sources": [
+   "https://biz.chosun.com/distribution/food/2025/11/18/GQMTLK2EMRFDNKTRAD2REKHC3Y"
+  ]
+ },
+ {
+  "id": "kg-ca9db01914f0",
+  "name": "르도헤",
+  "kind": "new_alumni",
+  "applied_at": "2026-11-23",
+  "day_kst": "2026-11-23",
+  "event_id": "ai-link_b06165fcd734:create",
+  "gate": "checking",
+  "sources": [
+   "https://celebinfluencernews.com/news/articleList.html?sc_sub_section_code=S2N4&view_type=sm"
+  ]
+ },
+ {
+  "id": "kg-5e7ad4c15361",
+  "name": "페스타 바이 충후",
+  "kind": "new_alumni",
+  "applied_at": "2026-11-23",
+  "day_kst": "2026-11-23",
+  "event_id": "ai-link_e233278fb5ab:create",
+  "gate": "checking",
+  "sources": [
+   "https://newsis.com/view/NISX20260307_0003538758"
+  ]
+ },
+ {
+  "id": "lamant",
+  "name": "라망 시크레",
+  "kind": "new_alumni",
+  "applied_at": "2026-11-23",
+  "day_kst": "2026-11-23",
+  "event_id": "ai-link_ed66f606be10:create",
+  "gate": "checking",
+  "sources": [
+   "https://segye.com/newsView/20261105508035"
+  ]
+ },
+ {
+  "id": "mingles_r",
+  "name": "밍글스",
+  "kind": "new_alumni",
+  "applied_at": "2026-11-23",
+  "day_kst": "2026-11-23",
+  "event_id": "ai-link_ef377a334f67:create",
+  "gate": "checking",
+  "sources": [
+   "https://nextdaily.co.kr/news/articleView.html?idxno=254582"
+  ]
+ },
+ {
+  "id": "eatanic",
+  "name": "이타닉 가든",
+  "kind": "upgrade_alumni",
+  "applied_at": "2026-11-23",
+  "day_kst": "2026-11-23",
+  "event_id": "ai-link_51f8cf77856c:verify:2026-11-23",
+  "gate": "verified",
+  "sources": [
+   "https://ajunews.com/view/20261023165121710",
+   "https://biz.chosun.com/distribution/channel/2026/03/06/WIZKKBS3FZGIVLLLMF5NKNPXIE",
+   "https://celebinfluencernews.com/news/articleView.html?idxno=1644",
+   "https://hankyung.com/article/202601238486g",
+   "https://newsis.com/view/NISX20260307_0003538758",
+   "https://wikitree.co.kr/articles/1108192"
+  ]
+ },
+ {
+  "id": "mingles_r",
+  "name": "밍글스",
+  "kind": "upgrade_alumni",
+  "applied_at": "2026-11-23",
+  "day_kst": "2026-11-23",
+  "event_id": "ai-link_58a40e7d64ea:verify:2026-11-23",
+  "gate": "verified",
+  "sources": [
+   "https://celebinfluencernews.com/news/articleView.html?idxno=1644",
+   "https://hankyung.com/article/2026101546211",
+   "https://inews24.com/view/1945874",
+   "https://newsis.com/view/NISX20260306_0003537893",
+   "https://newsis.com/view/NISX20260307_0003538758",
+   "https://wkorea.com/2026/10/20/%ED%95%9C%EC%8B%9D%EC%9D%98-%EB%AF%B8%ED%95%99%EA%B3%BC-%ED%8C%8C%EB%A6%AC%EC%9D%98-%EB%AF%B8%EC%8B%9D-%EC%85%B0%ED%94%84-%EA%B0%95%EB%AF%BC%EA%B5%AC%EC%9D%98-seok"
+  ]
+ },
+ {
+  "id": "lamant",
+  "name": "라망 시크레",
+  "kind": "upgrade_alumni",
+  "applied_at": "2026-11-23",
+  "day_kst": "2026-11-23",
+  "event_id": "ai-link_df7f6c0140e3:verify:2026-11-23",
+  "gate": "verified",
+  "sources": [
+   "https://ajunews.com/view/20261023165121710",
+   "https://biz.chosun.com/distribution/channel/2026/03/06/WIZKKBS3FZGIVLLLMF5NKNPXIE",
+   "https://fnnews.com/news/202610231343319658",
+   "https://hankyung.com/article/202601238486g",
+   "https://hankyung.com/article/202603063538P",
+   "https://inews24.com/view/1945874",
+   "https://newsis.com/view/NISX20260307_0003538758",
+   "https://sidae.com/article/2026031815153011619"
+  ]
  }
 ]
