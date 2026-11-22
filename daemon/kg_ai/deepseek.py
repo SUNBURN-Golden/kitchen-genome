@@ -122,8 +122,12 @@ def _correction_suffix(code):
     return ' Previous output was rejected (' + code + '). Return one JSON object and nothing else.'
 
 
-def parse_json_content(content):
-    """Task JSON lives in message.content. reasoning_content is never the result."""
+def parse_json_content(content, list_key=None):
+    """Task JSON lives in message.content. reasoning_content is never the result.
+
+    Some models answer a {"<list_key>": [...]} task with the bare list. When the caller
+    names its envelope key, a top-level JSON array is wrapped as {list_key: array} and
+    still goes through the task validator. Without list_key, non-objects are rejected."""
     if not isinstance(content, str) or not content.strip():
         raise DeepSeekError('json_blank')
     text = content.strip()
@@ -161,6 +165,8 @@ def parse_json_content(content):
             value = json.loads(value)
     except json.JSONDecodeError as exc:
         raise reject(exc.pos, exc.msg) from None
+    if list_key and isinstance(value, list):
+        value = {list_key: value}
     if not isinstance(value, dict):
         raise reject(0, 'expected_object')
     return value
@@ -272,30 +278,30 @@ class Client:
                 self._schema_rejections = 0
             self._task = task
 
-    def call(self, task, instruction, data, validate, *, max_tokens=2048):
+    def call(self, task, instruction, data, validate, *, max_tokens=2048, list_key=None):
         if type(max_tokens) is not int or not 0 < max_tokens <= MAX_OUTPUT_TOKENS:
             raise DeepSeekError('input_limit')
         self.use_task(task)
         provider = 'qwen' if (self.primary_paused or not self.key) and self.fallback_available else 'deepseek'
         if self.stopped:
             if not (self.fallback_available and self._fallback_stop):
-                return self._call(task, instruction, data, validate, max_tokens=max_tokens, provider=provider)
+                return self._call(task, instruction, data, validate, max_tokens=max_tokens, provider=provider, list_key=list_key)
             self.primary_paused = self.primary_paused or self.stopped
             self.stopped = None
             provider = 'qwen'
         if provider == 'qwen':
-            return self._call(task, instruction, data, validate, max_tokens=max_tokens, provider=provider)
+            return self._call(task, instruction, data, validate, max_tokens=max_tokens, provider=provider, list_key=list_key)
         try:
-            return self._call(task, instruction, data, validate, max_tokens=max_tokens, provider='deepseek')
+            return self._call(task, instruction, data, validate, max_tokens=max_tokens, provider='deepseek', list_key=list_key)
         except DeepSeekError as exc:
             code = failure_code(stored_error(exc))
             if self._should_fallback(code, task, instruction, data, max_tokens):
                 self.primary_paused = self.primary_paused or code
                 self.stopped = None
-                return self._call(task, instruction, data, validate, max_tokens=max_tokens, provider='qwen')
+                return self._call(task, instruction, data, validate, max_tokens=max_tokens, provider='qwen', list_key=list_key)
             raise
 
-    def _call(self, task, instruction, data, validate, *, max_tokens, provider):
+    def _call(self, task, instruction, data, validate, *, max_tokens, provider, list_key=None):
         if provider == 'deepseek' and not self.key:
             raise DeepSeekError('missing_key')
         if provider == 'qwen' and not (self.fallback_key and self.fallback_transport):
@@ -322,7 +328,7 @@ class Client:
         correction = None
         for attempt in range(MAX_TASK_ATTEMPTS):
             try:
-                return self._once(task, instruction, data, validate, max_tokens=max_tokens, correction=correction, provider=provider)
+                return self._once(task, instruction, data, validate, max_tokens=max_tokens, correction=correction, provider=provider, list_key=list_key)
             except DeepSeekError as exc:
                 code = failure_code(stored_error(exc))
                 if code in RETRYABLE and attempt + 1 < MAX_TASK_ATTEMPTS:
@@ -344,7 +350,7 @@ class Client:
         self._schema_rejections += 1
         self.stopped = 'schema_reject_limit' if self._schema_rejections >= SCHEMA_REJECT_LIMIT else None
 
-    def _once(self, task, instruction, data, validate, *, max_tokens, correction, provider='deepseek'):
+    def _once(self, task, instruction, data, validate, *, max_tokens, correction, provider='deepseek', list_key=None):
         messages, payload = self._payload(instruction, data, max_tokens, correction, provider=provider)
         if len(payload) > MAX_INPUT_BYTES:
             raise DeepSeekError('input_limit')
@@ -429,7 +435,7 @@ class Client:
             if reason != 'stop':
                 raise DeepSeekError('incomplete_output')
             # reasoning_content is chain-of-thought, not evidence and not the task object.
-            result = validate(parse_json_content((choice.get('message') or {}).get('content')))
+            result = validate(parse_json_content((choice.get('message') or {}).get('content'), list_key=list_key))
         except DeepSeekError as exc:
             self.stopped = failure_code(stored_error(exc))
             self.budget.settle(key, usage, error=stored_error(exc))

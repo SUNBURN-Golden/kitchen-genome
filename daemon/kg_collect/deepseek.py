@@ -257,7 +257,7 @@ class Adapters:
             batch = data[offset:offset + size]
             allowed = {row['gap_id']: next(j for j in jobs if j['gap_id'] == row['gap_id']) for row in batch}
             try:
-                results.extend(self.client.call('gap-plan-2', PLAN_INSTRUCTION, batch, validate, max_tokens=4096))
+                results.extend(self.client.call('gap-plan-2', PLAN_INSTRUCTION, batch, validate, max_tokens=4096, list_key='queries'))
             except DeepSeekError as exc:
                 if str(exc) == 'deadline':
                     break
@@ -378,7 +378,7 @@ class Adapters:
         rows = []
         try:
             if cached is None:
-                extraction = self.client.call('web-extract-2', EXTRACT_INSTRUCTION, article_data(body, text), validate, max_tokens=max_output)
+                extraction = self.client.call('web-extract-2', EXTRACT_INSTRUCTION, article_data(body, text), validate, max_tokens=max_output, list_key='findings')
                 # Results cached before drop reporting contain only the row list.
                 if isinstance(extraction, list):
                     extraction = {'findings': extraction, 'dropped': []}
