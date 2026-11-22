@@ -449,7 +449,7 @@ def _call(adapter, doc, window, snapshot):
 
     data = article_data({'url': doc.canonical_url or doc.url, 'published_at': doc.published_at,
                          'snapshot_key': snapshot, 'source_start': window.start, 'language': window.language}, window.text)
-    return adapter.client.call(VERSION, INSTRUCTION, data, validate, max_tokens=4096)
+    return adapter.client.call(VERSION, INSTRUCTION, data, validate, max_tokens=4096, list_key='assertions')
 
 
 def _review(conn, row, reason, now, **details):
