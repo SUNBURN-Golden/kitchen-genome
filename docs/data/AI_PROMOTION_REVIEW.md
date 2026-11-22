@@ -199,6 +199,69 @@ promotes nothing.
   subprocess (same open file description), and standalone seeds take a local
   lock.
 
+## Final re-review (2026-11-22, stage RE-REVIEW)
+
+Reviewed the full diff vs `origin/main` after the build and review-fix stages.
+`origin/main` had advanced by two commits (crawl `e2a06c1`, bare-array AI fix
+`3777dc8` #127); the branch itself never touched the #127 files, but the
+divergence would have shown a phantom revert of `list_key` in the PR diff.
+Merged `origin/main` into the branch (clean auto-merge; verified
+`list_key='reviews'` / `list_key='assertions'` and the envelope tests survived).
+The diff vs `origin/main` is now exactly the branch's 28 files, +2100/−154,
+with no `data/seed.json`, `crawler/pending.json` or `data/ai_review_log.jsonl`
+change of our own (the merge carries main's already-committed crawl data).
+
+Re-read the whole promotion path (`promotion.py`, `review._finish_delivery`,
+`site_projection._snapshot/graph/compose`, `site_publish.publication_metrics`,
+`crawler/apply`, rollback, migration 0016, both page builders, `app.js`).
+Verified: `publication_metrics` returns no `added`/`ready`/`upgraded` keys so
+the apply-stage increments survive; summary-before-ledger write order is
+retry-safe (a crashed ledger write re-emits into a fresh summary, never
+double-counts persistently); `_snapshot`'s `needed` filter covers every node
+branch because `_traverse` origins are themselves career rows; `_site_links`
+is defaultdict-backed (no orphan KeyError); `people_jsonld` fallback keys
+match the first loop; `seed_lock` re-uses the inherited `KG_DAILY_LOCK_FD`;
+`SHOW_VERDICTS`/`SHOW_NEWSLETTER` stay false and no builder emits `noindex`.
+No blockers found.
+
+Full suite on the merged tree (`TZ=UTC`): **773 passed, 1 skipped, 285 subtests
+passed** (766 branch + 7 from #127's envelope tests).
+
+Re-ran the independent dry run (`/tmp/kg-promote-verify/dryrun.py`, live DB
+opened `mode=ro` into memory, no network/provider calls) against the **merged
+current seed**, which now carries the 20261122 crawl's new reviews
+(73 unlinked + 101 attached, up from 41 + 50):
+
+| Measure | Pass 1 | Pass 2 |
+| --- | ---: | ---: |
+| `promoted` | 9 | 0 |
+| `unlinked_remaining` | 62 | 62 |
+| Supports / distinct links | 42 / 21 | unchanged |
+| New restaurant holders | 6 (소재, 페스타 바이 충후, 르도헤, 하누, 7th Door, 베누) | 0 |
+| New checking links / upgrades | 9 / 3 (라망 시크레, 밍글스, 이타닉 가든) | 0 / 0 |
+| Seed bytes | — | identical |
+| Audit log bytes | unchanged | unchanged |
+
+Events against an empty ledger: 9 `new_alumni` (checking) + 3 `upgrade_alumni`
+(verified). Sandbox build passed every guard: KO/EN directory sets equal the
+curated seed IDs, zero `noindex`/private leaks, flags false, all six new venue
+pages render 확인 중/Checking + AI 검토/AI-reviewed with no `worksFor`/`alumniOf`.
+Spot-checked the two new venues' quotes: 7th Door/김대천 binds via the
+possessive "'7th Door'의 김대천 셰프", 베누/코리 리 via "베누의 코리 리 셰프";
+no geography invented (both city/country unknown).
+
+### Additional residual notes (non-blocking)
+
+- `_location` requires the city to sit adjacent to the venue (one optional
+  outlet word between). "샌프란시스코의 미쉐린 3스타 레스토랑 베누" states the
+  city but the intervening Michelin descriptor defeats the adjacency rule, so
+  베누 publishes with unknown city. Conservative under-extraction, never a
+  false fact; widening the rule needs its own binding tests.
+- `record_links` allocates a fresh link key when more than one prior link is
+  compatible and none shares the group's review IDs; and `events()` can emit
+  an upgrade whose create event was skipped (holder absent at creation time).
+  Both are narrow counter-only edge cases; publication itself stays correct.
+
 ## Residual notes
 
 - `publish()` now dedupes by `review_id` alone (design: preserve independent
