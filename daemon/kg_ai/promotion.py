@@ -119,7 +119,8 @@ def _original(conn, entry, raw_dir):
         return None
     if text is None:
         metadata['independent_eligible'] = 0
-    metadata['body_fingerprint'] = site_projection.retained_fingerprint(evaluate.shingles(text[:3000])) if text else '[]'
+    metadata['body_fingerprint'] = site_projection.retained_fingerprint(
+        digest(shingle)[:12] for shingle in evaluate.shingles(text[:3000].casefold())) if text else '[]'
     metadata['quote_key'] = digest(name_key(entry['quote']))
     metadata['snapshot_checked'] = text is not None
     chef = entry.get('chef')

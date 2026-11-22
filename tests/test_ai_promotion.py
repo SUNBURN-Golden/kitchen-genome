@@ -295,6 +295,50 @@ def test_rollback_preserves_a_later_manual_edit(world):
     assert jobs(read(world)) == []
 
 
+def test_fingerprint_recipe_matches_native_career_document():
+    from kg_ai.article import digest
+    from kg_collect import evaluate
+    from kg_collect.site_projection import retained_fingerprint, _shingle_set
+
+    text = FIRST + '\n' + SECOND + '\n' + '이 기사는 식당 주방의 근무 경력을 설명합니다. ' * 3
+    # lineage._finish stores digest(shingle)[:12] over casefolded shingles as JSON;
+    # _snapshot packs that stored list, and promotion must supply the same hashes.
+    hashes = sorted(digest(s)[:12] for s in evaluate.shingles(text[:3000].casefold()))
+    native = retained_fingerprint(json.loads(json.dumps(hashes)))
+    assert _shingle_set(native) == {bytes.fromhex(h) for h in hashes}
+
+
+def test_native_near_repost_does_not_verify_reviewed_link(world, monkeypatch):
+    from test_lineage_g3 import fake_adapter, fetch, ingest, item
+
+    w = world
+    native = (w.conn, w.raw)
+    shared = FIRST + '\n' + SECOND + '\n' + '이 기사는 식당 주방의 근무 경력을 설명합니다. ' * 3
+    adapter = fake_adapter(w.conn, [(FIRST, item(FIRST, '민하늘', '미토우', 'current'))], [], monkeypatch)
+    doc = fetch(native, 'native-repost-test', shared, hint='ko')
+    assert ingest(native, doc, adapter)
+    # A different publisher carries an edited copy of the same article: the body
+    # fingerprint must collapse it even though URL, quote and hash all differ.
+    finding(w, SECOND, host='newsis.com', approve=True, article_text=shared.replace('설명합니다', '소개합니다'))
+    assert run(w)['promoted'] == 1
+    edge, = jobs(read(w))
+    assert edge['lineage_status'] == 'unverified' and len(edge['evidence']) == 2
+
+
+@pytest.mark.parametrize('selector', ['extraction', 'since'])
+def test_rollback_selectors_remove_promoted_link(world, selector):
+    w = world
+    xid, rid, _ = finding(w, FIRST, approve=True)
+    assert run(w)['promoted'] == 1
+    flag = ['--extraction-id', xid] if selector == 'extraction' else ['--since', NOW[:10]]
+    subprocess.run([sys.executable, str(ROOT / 'scripts' / 'ai_review_rollback.py'), *flag,
+                    '--seed', str(w.seed_path), '--log', str(w.log), '--db', str(w.db_path)],
+                   check=True, capture_output=True)
+    assert jobs(read(w)) == []
+    assert rid in read(w)[promotion.KEY]['withdrawn']
+    assert run(w)['promoted'] == 0
+
+
 def test_native_g3_source_corroborates_review_and_survives_rollback(world, monkeypatch):
     from test_lineage_g3 import fake_adapter, fetch, ingest, item
 

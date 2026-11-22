@@ -3,7 +3,6 @@ from base64 import b64decode, b64encode
 from collections import defaultdict, deque
 import json
 
-from kg_ai.article import digest
 from kg_daemon import claims, ontology
 from kg_daemon.db import stable_id
 from . import evaluate, lineage_identity as identity
@@ -34,10 +33,11 @@ def _career_rows(conn, branch=None):
         {scope} ORDER BY a.assertion_id""", (branch,) if branch else ())
 
 
-def retained_fingerprint(shingles):
-    # The seed needs an overlap fingerprint for offline withdrawal, with
-    # neither publisher text nor unhashed shingles.
-    packed = bytes.fromhex(''.join(sorted(digest(part)[:16] for part in shingles)))
+def retained_fingerprint(hashes):
+    # Pack the native career_document recipe (digest(shingle)[:12] over casefolded
+    # shingles) so reviewed and native proofs compare on the same overlap set.
+    # The seed carries neither publisher text nor unhashed shingles.
+    packed = bytes.fromhex(''.join(sorted(hashes)))
     return b64encode(packed).decode('ascii')
 
 
@@ -47,7 +47,7 @@ def _shingle_set(value):
     if value.startswith('['):
         return set(json.loads(value))
     packed = b64decode(value)
-    return {packed[i:i + 8] for i in range(0, len(packed), 8)}
+    return {packed[i:i + 6] for i in range(0, len(packed), 6)}
 
 
 def _publisher_domain(url):
