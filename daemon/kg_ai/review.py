@@ -418,7 +418,7 @@ def review(conn, seed_path, log_path, raw_dir, *, client=None, limit=None):
         ids = {f['extraction_id'] for f in batch}
         try:
             stats['calls'] += 1
-            res = client.call(TASK, INSTRUCTION, payload_for(batch), validate_reviews(ids), max_tokens=max_tokens(batch))
+            res = client.call(TASK, INSTRUCTION, payload_for(batch), validate_reviews(ids), max_tokens=max_tokens(batch), list_key='reviews')
         except DeepSeekError as exc:
             code = getattr(exc, 'code', str(exc)).split(' ')[0]
             if code == 'attempts_exhausted':
