@@ -698,7 +698,9 @@ def events(seed, audit):
         if create:
             kind, day, event_id = 'new_alumni', link['created'], create_id
         elif link.get('upgraded') and link['gate'] == 'verified' and prior_create.get('gate') != 'verified':
-            kind, day, event_id = 'upgrade_alumni', link['upgraded'], key + ':verify'
+            # Suffix the upgrade day so a re-upgrade after a downgrade is counted
+            # again; same-day retries still dedupe against the applied ledger.
+            kind, day, event_id = 'upgrade_alumni', link['upgraded'], key + ':verify:' + link['upgraded']
         else:
             continue
         if event_id not in known and link['holder'] in holders:

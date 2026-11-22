@@ -5,7 +5,8 @@ Reviewed `feat/ai-review-promote-lineage` at `e915004` against `origin/main`
 `review.decide → _finish_delivery → promotion.backfill → site_projection.refresh/graph/compose
 → record_links → crawler/apply counters → page builders`, plus `ai_review_rollback`
 and the migration/ownership schema. Review-stage fixes (finding 1 and the selector
-tests) are applied on top of `e915004` in this commit.
+tests) are applied on top of `e915004`; the review-fix commit closes the two open
+low-severity findings (2 and 3) with regression tests.
 
 ## Method
 
@@ -52,9 +53,12 @@ or model metadata in `web/data.js` or any static page; all four new venue pages
 render 확인 중/Checking + AI 검토/AI-reviewed with no `worksFor`/`alumniOf` and no
 `addressCountry` KR fallback.
 
-Tests: **763 passed, 1 skipped, 285 subtests passed** (pre-implementation
-baseline 736; branch added 23; this review added 4). The two finding-1
-regression tests fail on `e915004` and pass with the fix.
+Tests: **766 passed, 1 skipped, 285 subtests passed** (pre-implementation
+baseline 736; branch added 23; review stage added 4; review-fix stage added 3).
+The two finding-1 regression tests fail on `e915004` and pass with the fix; the
+finding-2/3 regression tests fail without their fixes. The dry-run numbers are
+unchanged by the review-fix commit (finding 2 only renames upgrade event IDs,
+which are fresh on a first apply; finding 3 is JSON-LD keying).
 
 ## Findings
 
@@ -87,7 +91,7 @@ re-digest) and `test_native_near_repost_does_not_verify_reviewed_link`
 (end-to-end: native ingest + reviewed edited copy on another eligible host
 stays 확인 중 with two evidence refs). Dry-run numbers are unchanged by the fix.
 
-### 2. CONFIRMED — LOW — OPEN: a re-upgrade after a downgrade is not counted
+### 2. CONFIRMED — LOW — FIXED: a re-upgrade after a downgrade is not counted
 
 `promotion.events()` keys the upgrade event `link_key + ':verify'`. Sequence:
 create (checking) → publish → independent source upgrades → publish (verify
@@ -97,12 +101,14 @@ The second upgrade satisfies the `elif` gate (the historical create event still
 says checking) but its event ID is already in `crawler/applied.json`, so no
 event is emitted and `upgraded` undercounts that day's transition. The link
 itself publishes correctly at verified; only the daily counter misses it.
-Recommended fix: suffix the verify event ID with the upgrade day
+Fix: `promotion.events` now suffixes the verify event ID with the upgrade day
 (`key + ':verify:' + link['upgraded']`) — same-day retries still dedupe, and no
-ledger migration is needed because the branch is unmerged. Not applied at this
-stage to keep the review diff limited to the false-publication fix.
+ledger migration is needed because the branch is unmerged. Regression test:
+`test_reupgrade_after_downgrade_counts_again` (create → upgrade → publish →
+rollback → next-KST-day independent re-upgrade counts `upgraded=1` again, then
+a same-day re-apply dedupes to 0).
 
-### 3. CONFIRMED — LOW — OPEN: duplicate Person node in JSON-LD in one configuration
+### 3. CONFIRMED — LOW — FIXED: duplicate Person node in JSON-LD in one configuration
 
 The curated-scalar fallback in `people_jsonld` searches for a matching
 `chef_id` only in `career_affiliations`. When the curated chef matches a
@@ -111,8 +117,13 @@ at the origin kitchen with the destination employment carried solely by the
 curated scalar), the fallback keys a second Person by the curated name string
 while the first loop already created one keyed by `chef_id`. Both nodes are
 evidence-backed — no false fact — but the same human is emitted twice, with
-`alumniOf` duplicated. Recommended fix: extend the `key = next(...)` search to
-`origins` edges as well. Cosmetic structured-data issue; left open.
+`alumniOf` duplicated. Fix: the curated-scalar fallback in `people_jsonld` now
+searches `career_affiliations` then `origins` and keys by `chef_id or chef_name`
+(the first loop's keying), so the curated facts merge into the existing Person
+instead of creating a twin. Regression test:
+`test_people_jsonld_merges_curated_scalar_into_reviewed_origin_person` (KO/EN:
+one Person carrying `alumniOf` + `worksFor`; a checking curated scalar still
+omits `worksFor`).
 
 ### 4. CLOSED: rollback selector test gap
 
@@ -172,8 +183,8 @@ promotes nothing.
 - **Site output.** Both builders and the SPA render relation words (이전 근무 /
   재직 / 수련 / 개업), per-source AI badges, 확인 중/Checking and mentor names;
   checking edges stay out of `worksFor`/`alumniOf` (edge-level gate in
-  `people_jsonld`, row-level gate in the single-Person fallback, which fires
-  only when no projected edge exists); the curated-scalar preservation in
+  `people_jsonld`, row-level gate in the single-Person fallback, whose key now
+  also matches origins-only reviewed edges — finding 3); the curated-scalar preservation in
   `people_jsonld` emits only facts the curated row already supported. New
   holders get durable seed rows + `legacy_id` aliases, so the directory guard
   stays green and no orphan `kg-` page escapes the curated set. EN names fall

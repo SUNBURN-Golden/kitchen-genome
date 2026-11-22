@@ -178,7 +178,10 @@ def people_jsonld(row, kitchens, base, restaurant_id, english=False):
                        for edge in (*row['origins'], *row.get('career_affiliations', ()))
                        for ref in edge.get('evidence', ()))
     if curated and has_reviewed and not re.search('미확인|미기재|출신|팀', curated):
-        key = next((edge['chef_id'] for edge in row.get('career_affiliations', ()) if _same_chef(edge, row)), curated)
+        # Match the first loop's keying: a reviewed edge may live only in origins.
+        key = next((edge.get('chef_id') or edge.get('chef_name')
+                    for edge in (*row.get('career_affiliations', ()), *row['origins'])
+                    if _same_chef(edge, row)), curated)
         name = (row.get('chef_en') if english else None) or curated
         person = people.setdefault(key, {'@type': 'Person', 'name': name, 'jobTitle': 'Chef' if english else '셰프'})
         if not {'chef', 'kitchen'}.intersection(checks) and not row.get('closed_at'):

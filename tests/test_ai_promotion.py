@@ -6,7 +6,7 @@ import sys
 import pytest
 
 from test_ai_review import client_for
-from test_site_publication import ROOT, NOW, app, article, publication_world, run_build
+from test_site_publication import ROOT, NOW, NEXT_DAY, app, article, publication_world, run_build
 from kg_ai import promotion, review
 from kg_daemon import claims
 from kg_daemon.seed_migration import migrate_seed
@@ -356,3 +356,52 @@ def test_native_g3_source_corroborates_review_and_survives_rollback(world, monke
     rollback(w, rid, db=True)
     assert w.conn.execute("SELECT COUNT(*) FROM career_assertion WHERE state='source_claim'").fetchone()[0] == 1
     assert w.conn.execute("SELECT COUNT(*) FROM chef WHERE display_name='민하늘'").fetchone()[0] == 1
+
+
+def test_reupgrade_after_downgrade_counts_again(world, monkeypatch):
+    w = world
+    xid, _, _ = finding(w, FIRST, role='헤드 셰프')
+    assert run(w, [xid])['promoted'] == 1
+    assert daily(w, monkeypatch)['new_alumni_checking'] == 1
+    _, corroboration, _ = finding(w, '민하늘 셰프가 미토우의 주방을 이끌고 있다.', host='newsis.com',
+                                  article_text='민하늘 셰프가 미토우의 주방을 이끌고 있다. 계절마다 식재료를 연구한다.',
+                                  approve=True)
+    assert run(w)['promoted'] == 0
+    assert daily(w, monkeypatch)['upgraded'] == 1
+    rollback(w, corroboration)
+    assert jobs(read(w))[0]['lineage_status'] == 'unverified'
+    # A new independent review on the next KST day re-upgrades the link: the
+    # verify event already applied for the first upgrade must not silence it.
+    monkeypatch.setattr(review, 'utcnow', lambda: NEXT_DAY)
+    finding(w, '민하늘 셰프는 미토우의 주방을 운영하고 있다.', host='foodnews.news',
+            article_text='민하늘 셰프는 미토우의 주방을 운영하고 있다. 미토우의 저녁 코스는 제철 식재료로 구성된다.',
+            approve=True)
+    assert run(w)['promoted'] == 0
+    assert jobs(read(w))[0]['lineage_status'] == 'verified'
+    assert daily(w, monkeypatch)['upgraded'] == 1
+    assert daily(w, monkeypatch)['upgraded'] == 0
+
+
+@pytest.mark.parametrize(('english', 'name', 'org'), [(False, '민하늘', '미토우'), (True, 'Min Ha-neul', 'Mitou')])
+def test_people_jsonld_merges_curated_scalar_into_reviewed_origin_person(english, name, org):
+    import importlib.util
+    spec = importlib.util.spec_from_file_location('lineage_evidence_fixture', ROOT / 'scripts' / 'lineage_evidence.py')
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    kitchens = {'mitou': {'id': 'mitou', 'name': '미토우', 'en': 'Mitou'}}
+    # The reviewed former stint lives only in origins; the destination employment
+    # is carried solely by the curated scalar, which names the same chef.
+    edge = {'kitchen_id': 'mitou', 'chef_id': 'chef-min', 'chef_name': '민하늘', 'chef_name_en': 'Min Ha-neul',
+            'relation': 'former', 'lineage_status': 'verified', 'career_checking': [],
+            'evidence': [{'kind': 'lineage', 'src': 'https://newsis.com/food/1', 'quote': '민하늘 셰프는 미토우에서 일했다.',
+                          'badge': 'AI 검토'}]}
+    row = {'id': 'r1', 'name': '정연', 'chef': 'Min Ha-neul', 'chef_en': 'Min Ha-neul', 'kitchen': 'mitou',
+           'lineage_status': 'verified', 'career_checking': [], 'origins': [edge], 'career_affiliations': []}
+    base, rid = 'https://kg.example', 'https://kg.example/r/r1/'
+    people = module.people_jsonld(row, kitchens, base, rid, english)
+    assert people == [{'@type': 'Person', 'name': name, 'jobTitle': 'Chef' if english else '셰프',
+                       'alumniOf': [{'@type': 'Organization', 'name': org, 'url': f'{base}/k/mitou/'}],
+                       'worksFor': {'@id': rid}}]
+    row['career_checking'] = ['chef']
+    person, = module.people_jsonld(row, kitchens, base, rid, english)
+    assert 'worksFor' not in person
