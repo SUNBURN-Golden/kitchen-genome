@@ -62,3 +62,8 @@ class Budget:
     def fail(self, key, code):
         self.conn.execute('UPDATE ai_request SET error=? WHERE request_key=? AND state=?', (code, key, 'unknown'))
         self.conn.commit()
+
+    def release(self, key):
+        """Drop an unsettled reservation whose only outcome was an unbilled HTTP rejection."""
+        self.conn.execute("DELETE FROM ai_request WHERE request_key=? AND state='unknown' AND units=0", (key,))
+        self.conn.commit()

@@ -33,8 +33,12 @@ QWEN_TIMEOUT_SEC = 180
 VERSION = 'json-2'
 FALLBACK_CODES = (
     'provider_failed', 'rate_limited', 'auth_failed', 'model_unavailable',
-    'balance_low', 'balance_unavailable', 'transport_unknown',
+    'balance_low', 'balance_unavailable', 'transport_unknown', 'quota_exhausted',
 )
+# Definite HTTP rejections the provider does not bill (429 throttle/quota, 401, 404).
+# A reservation left 'unknown' with one of these errors is safe to retry in a later
+# run; anything else (timeouts, lost responses) stays replay-forbidden.
+UNBILLED_REJECTIONS = ('rate_limited', 'quota_exhausted', 'auth_failed', 'model_unavailable')
 # Chat-template overhead. Added to the UTF-8 payload length and max_tokens.
 # Token count is at most one per payload byte, so this remains an upper bound.
 FRAME_TOKENS = 4096
@@ -104,7 +108,12 @@ def http_transport(payload, key, url=URL, timeout=DEEPSEEK_TIMEOUT_SEC):
         with opener.open(req, timeout=timeout) as response:
             return response.status, response.read(MAX_BODY + 1)
     except urllib.error.HTTPError as exc:
-        return exc.code, b''
+        # Only a short error body is kept, for classification (never stored or logged).
+        try:
+            body = exc.read(4096)
+        except Exception:
+            body = b''
+        return exc.code, body
     except Exception:
         raise DeepSeekError('transport_unknown') from None
 
@@ -367,6 +376,13 @@ class Client:
                 raise DeepSeekError('cached_result_purged')
             if old['state'] == 'failed':
                 raise DeepSeekError('task_previously_rejected')
+            if (old['state'] == 'unknown' and failure_code(old['error']) in UNBILLED_REJECTIONS
+                    and old['run_id'] != self.budget.meter.run_id):
+                # An earlier run got a definite, unbilled HTTP rejection; release it and retry.
+                # Within the same run the rejection still stands (no hammering a throttled API).
+                self.budget.release(key)
+                old = None
+        if old:
             self._previous_fallback_worthy = failure_code(old['error']) not in NON_FALLBACK_CODES
             self.stopped = 'previous_attempt_unknown_or_failed'
             raise DeepSeekError(self.stopped)
@@ -408,6 +424,8 @@ class Client:
             else:
                 status, raw = transport(payload, api_key)
             if status != 200:
+                if status == 429 and b'insufficient_quota' in (raw or b''):
+                    raise DeepSeekError('quota_exhausted')
                 raise DeepSeekError({400: 'model_or_request_rejected', 401: 'auth_failed', 404: 'model_unavailable', 429: 'rate_limited'}.get(status, 'provider_failed'))
             if len(raw) > MAX_BODY:
                 raise DeepSeekError('response_limit')

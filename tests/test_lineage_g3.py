@@ -290,6 +290,10 @@ def fixture_build(repo, seed, *, deploy=False):
 def test_korea_projection_paths_both_locales_and_fixed_asset_size(world, monkeypatch, tmp_path):
     conn, _ = world
     seed = json.loads((ROOT / 'data/seed.json').read_text())
+    # The fixture DB is a fresh world: drop the live projection/promotion state that maps
+    # generated kg- ids to the production DB, or materialize() correctly refuses to run.
+    seed.pop('career_projection', None)
+    seed.pop('ai_promotion', None)
     branch(conn, 'seoul', 'Seoul Garden', 'KR', 'Seoul')
     branch(conn, 'noma', 'Noma', 'DK', 'Copenhagen')
     branch(conn, 'early', 'Lindenhof', 'DE', 'Berlin')
