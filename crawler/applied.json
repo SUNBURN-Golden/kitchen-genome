@@ -318,5 +318,65 @@
    "https://newsis.com/view/NISX20260307_0003538758",
    "https://sidae.com/article/2026031815153011619"
   ]
+ },
+ {
+  "id": "gaon",
+  "name": "가온",
+  "kind": "new_alumni",
+  "applied_at": "2026-11-24",
+  "day_kst": "2026-11-24",
+  "event_id": "ai-link_1e4a2f8ad068:create",
+  "gate": "checking",
+  "sources": [
+   "https://fnnews.com/news/201611071720222222"
+  ]
+ },
+ {
+  "id": "kg-c1e5ca85f2ab",
+  "name": "윤서울",
+  "kind": "new_alumni",
+  "applied_at": "2026-11-24",
+  "day_kst": "2026-11-24",
+  "event_id": "ai-link_26af08c1e5e1:create",
+  "gate": "checking",
+  "sources": [
+   "https://newsis.com/view/NISX20260312_0003544667"
+  ]
+ },
+ {
+  "id": "evett_r",
+  "name": "에빗",
+  "kind": "new_alumni",
+  "applied_at": "2026-11-24",
+  "day_kst": "2026-11-24",
+  "event_id": "ai-link_75b50e6840c2:create",
+  "gate": "checking",
+  "sources": [
+   "https://bntnews.co.kr/article/view/bnt202603260213"
+  ]
+ },
+ {
+  "id": "mosu_r",
+  "name": "모수",
+  "kind": "new_alumni",
+  "applied_at": "2026-11-24",
+  "day_kst": "2026-11-24",
+  "event_id": "ai-link_88cc84621429:create",
+  "gate": "checking",
+  "sources": [
+   "https://economist.co.kr/article/view/ecn202611060050"
+  ]
+ },
+ {
+  "id": "kg-b5dfdcb370e6",
+  "name": "소울",
+  "kind": "new_alumni",
+  "applied_at": "2026-11-24",
+  "day_kst": "2026-11-24",
+  "event_id": "ai-link_deb8fec527bc:create",
+  "gate": "checking",
+  "sources": [
+   "https://newsis.com/view/NISX20260312_0003544667"
+  ]
  }
 ]
