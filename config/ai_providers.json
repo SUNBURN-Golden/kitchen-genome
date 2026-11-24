@@ -1,0 +1,4 @@
+{
+  "_note": "준태님 2026-11-24 KST (t134u connect Grok; t135u connect only, do not run yet). backup: 'qwen' (current) or 'grok' (logged-in cursor-agent CLI, grok-4.7-high). Set to 'grok' to switch AI steps to Grok while Qwen's plan is exhausted (resets 2026-12-12 01:00 KST). DeepSeek stays primary and is skipped by its balance gate. KG_AI_BACKUP env overrides.",
+  "backup": "qwen"
+}

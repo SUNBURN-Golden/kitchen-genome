@@ -19,6 +19,7 @@ import urllib.error
 import urllib.request
 from kg_daemon.runner import NonRetryable
 from kg_collect.guard import Guard
+from . import grok as grok_cli
 
 URL = 'https://api.deepseek.com/chat/completions'
 QWEN_URL = 'https://token-plan.maas.qwencloudapi.com/compatible-mode/v1/chat/completions'
@@ -35,6 +36,9 @@ FALLBACK_CODES = (
     'provider_failed', 'rate_limited', 'auth_failed', 'model_unavailable',
     'balance_low', 'balance_unavailable', 'transport_unknown', 'quota_exhausted',
 )
+# Backup slot provider. 'qwen' (token plan HTTP) or 'grok' (logged-in cursor-agent CLI).
+# 준태님 2026-11-24: Grok while Qwen's plan is exhausted (resets 12/12 01:00 KST).
+BACKUPS = ('qwen', 'grok')
 # Definite HTTP rejections the provider does not bill (429 throttle/quota, 401, 404).
 # A reservation left 'unknown' with one of these errors is safe to retry in a later
 # run; anything else (timeouts, lost responses) stays replay-forbidden.
@@ -181,9 +185,25 @@ def parse_json_content(content, list_key=None):
     return value
 
 
+PROVIDERS_CONFIG = os.path.join(os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__)))),
+                                'config', 'ai_providers.json')
+
+
+def configured_backup():
+    """KG_AI_BACKUP env, else config/ai_providers.json "backup", else qwen."""
+    env = os.environ.get('KG_AI_BACKUP')
+    if env:
+        return env
+    try:
+        with open(PROVIDERS_CONFIG) as f:
+            return json.load(f).get('backup') or 'qwen'
+    except (OSError, ValueError, AttributeError):
+        return 'qwen'
+
+
 class Client:
     def __init__(self, budget, *, key=None, model=None, transport=http_transport, balance_transport=None, clock=time.monotonic,
-                 fallback_key=None, fallback_model=None, fallback_transport=None, deadline=None):
+                 fallback_key=None, fallback_model=None, fallback_transport=None, deadline=None, fallback_provider=None):
         self.deadline = deadline
         self.key = os.environ.get('DEEPSEEK_API_KEY', '') if key is None else key
         self.model = model or os.environ.get('DEEPSEEK_MODEL', 'deepseek-chat')
@@ -197,9 +217,18 @@ class Client:
         self._fatal_stops = {}
         # Custom transports (tests) stay primary-only unless a fallback is injected.
         auto = fallback_transport is None and transport is http_transport
-        self.fallback_model = fallback_model or os.environ.get('KG_QWEN_MODEL') or QWEN_MODEL
-        self.fallback_key = load_qwen_key() if fallback_key is None and auto else (fallback_key or '')
-        self.fallback_transport = (qwen_http_transport if auto and self.fallback_key else fallback_transport if self.fallback_key else None)
+        # Injected backups (tests) keep Qwen semantics unless the provider is named.
+        backup = fallback_provider or ('qwen' if fallback_transport is not None else configured_backup())
+        self.fallback_provider = backup if backup in BACKUPS else 'qwen'
+        if self.fallback_provider == 'grok':
+            self.fallback_model = fallback_model or os.environ.get('KG_GROK_MODEL') or grok_cli.GROK_MODEL
+            self.fallback_key = grok_cli.available() if fallback_key is None and auto else (fallback_key or '')
+            self.fallback_transport = (grok_cli.grok_transport if auto and self.fallback_key
+                                       else fallback_transport if self.fallback_key else None)
+        else:
+            self.fallback_model = fallback_model or os.environ.get('KG_QWEN_MODEL') or QWEN_MODEL
+            self.fallback_key = load_qwen_key() if fallback_key is None and auto else (fallback_key or '')
+            self.fallback_transport = (qwen_http_transport if auto and self.fallback_key else fallback_transport if self.fallback_key else None)
 
     @property
     def status(self):
@@ -236,12 +265,14 @@ class Client:
 
     def _payload(self, instruction, data, max_tokens, correction, *, provider='deepseek'):
         messages = self._messages(instruction, data, correction)
-        model = self.fallback_model if provider == 'qwen' else self.model
+        model = self.fallback_model if provider == self.fallback_provider else self.model
         # thinking disabled: omission enables thinking, which bills non-JSON completions.
         body = {'model': model, 'messages': messages, 'response_format': {'type': 'json_object'},
                 'temperature': 0, 'stream': False, 'max_tokens': max_tokens}
         if provider == 'deepseek':
             body['thinking'] = {'type': 'disabled'}
+        elif provider == 'grok':
+            pass  # the CLI route takes no sampling flags; the JSON-only contract is in the prompt.
         else:
             # qwen4-max-preview is a hybrid model; thinking is on by default and
             # consumes max_tokens, which showed up as truncated_json on even a 1-finding review.
@@ -252,7 +283,7 @@ class Client:
         return hashlib.sha256(task.encode() + VERSION.encode() + payload).hexdigest()
 
     def _meta(self, task, payload, user_content, *, provider='deepseek'):
-        model = self.fallback_model if provider == 'qwen' else self.model
+        model = self.fallback_model if provider == self.fallback_provider else self.model
         self.last_meta = {'request_id': self._request_key(task, payload), 'model': model, 'prompt_version': task,
                           'schema_version': VERSION, 'source_hash': hashlib.sha256(user_content.encode()).hexdigest(),
                           'provider': provider}
@@ -291,14 +322,15 @@ class Client:
         if type(max_tokens) is not int or not 0 < max_tokens <= MAX_OUTPUT_TOKENS:
             raise DeepSeekError('input_limit')
         self.use_task(task)
-        provider = 'qwen' if (self.primary_paused or not self.key) and self.fallback_available else 'deepseek'
+        backup = self.fallback_provider
+        provider = backup if (self.primary_paused or not self.key) and self.fallback_available else 'deepseek'
         if self.stopped:
             if not (self.fallback_available and self._fallback_stop):
                 return self._call(task, instruction, data, validate, max_tokens=max_tokens, provider=provider, list_key=list_key)
             self.primary_paused = self.primary_paused or self.stopped
             self.stopped = None
-            provider = 'qwen'
-        if provider == 'qwen':
+            provider = backup
+        if provider == backup:
             return self._call(task, instruction, data, validate, max_tokens=max_tokens, provider=provider, list_key=list_key)
         try:
             return self._call(task, instruction, data, validate, max_tokens=max_tokens, provider='deepseek', list_key=list_key)
@@ -307,13 +339,13 @@ class Client:
             if self._should_fallback(code, task, instruction, data, max_tokens):
                 self.primary_paused = self.primary_paused or code
                 self.stopped = None
-                return self._call(task, instruction, data, validate, max_tokens=max_tokens, provider='qwen', list_key=list_key)
+                return self._call(task, instruction, data, validate, max_tokens=max_tokens, provider=backup, list_key=list_key)
             raise
 
     def _call(self, task, instruction, data, validate, *, max_tokens, provider, list_key=None):
         if provider == 'deepseek' and not self.key:
             raise DeepSeekError('missing_key')
-        if provider == 'qwen' and not (self.fallback_key and self.fallback_transport):
+        if provider in BACKUPS and not (self.fallback_key and self.fallback_transport):
             raise DeepSeekError('missing_key')
         cached = self._cached_result(task, instruction, data, max_tokens, None, provider=provider)
         if cached is None:
@@ -396,9 +428,10 @@ class Client:
         remaining = self.deadline - time.monotonic() if self.deadline is not None else None
         if remaining is not None and remaining <= 0:
             raise DeepSeekError('deadline')
-        api_key = self.fallback_key if provider == 'qwen' else self.key
-        transport = self.fallback_transport if provider == 'qwen' else self.transport
-        model = self.fallback_model if provider == 'qwen' else self.model
+        backup = provider == self.fallback_provider
+        api_key = self.fallback_key if backup else self.key
+        transport = self.fallback_transport if backup else self.transport
+        model = self.fallback_model if backup else self.model
         bound = reservation_tokens(payload, max_tokens)
         article = data.get('_article') if isinstance(data, dict) else None
         if article and article.get('article_key'):
@@ -421,6 +454,8 @@ class Client:
                 status, raw = transport(payload, api_key, timeout=min(DEEPSEEK_TIMEOUT_SEC, remaining))
             elif remaining is not None and transport is qwen_http_transport:
                 status, raw = http_transport(payload, api_key, url=QWEN_URL, timeout=min(QWEN_TIMEOUT_SEC, remaining))
+            elif remaining is not None and transport is grok_cli.grok_transport:
+                status, raw = transport(payload, api_key, timeout=min(grok_cli.GROK_TIMEOUT_SEC, remaining))
             else:
                 status, raw = transport(payload, api_key)
             if status != 200:
