@@ -398,7 +398,7 @@ def review(conn, seed_path, log_path, raw_dir, *, client=None, limit=None):
 
     def fits(batch):
         payloads = (client._payload(INSTRUCTION, payload_for(batch), max_tokens(batch), None, provider=provider)[1]
-                    for provider in ('deepseek', 'qwen'))
+                    for provider in ('deepseek', client.fallback_provider))
         return all(len(payload) + 256 <= MAX_INPUT_BYTES for payload in payloads)
 
     def use_context(f, shared, text, segments):

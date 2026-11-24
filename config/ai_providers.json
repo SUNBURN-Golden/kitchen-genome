@@ -1,0 +1,4 @@
+{
+  "_note": "준태님 2026-11-24 KST (t134u): AI steps run on Grok while Qwen's token plan is exhausted (resets 2026-12-12 01:00 KST) and DeepSeek has no balance. backup: 'grok' (logged-in cursor-agent CLI, grok-4.7-high) or 'qwen'. DeepSeek stays primary and is skipped by its balance gate. KG_AI_BACKUP env overrides.",
+  "backup": "grok"
+}
