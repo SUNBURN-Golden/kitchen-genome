@@ -25,9 +25,16 @@ def grok_client(conn, transport, **kw):
                   fallback_model=kw.get('model', grok.GROK_MODEL))
 
 
-def test_config_selects_grok_backup():
+def test_config_backup_is_a_known_provider():
     cfg = json.loads((ROOT / 'config' / 'ai_providers.json').read_text())
-    assert cfg['backup'] == 'grok'
+    assert cfg['backup'] in ds.BACKUPS
+    assert ds.configured_backup() == cfg['backup']
+
+
+def test_config_file_selects_grok(monkeypatch, tmp_path):
+    p = tmp_path / 'ai_providers.json'
+    p.write_text('{"backup": "grok"}')
+    monkeypatch.setattr(ds, 'PROVIDERS_CONFIG', str(p))
     assert ds.configured_backup() == 'grok'
 
 
@@ -37,13 +44,15 @@ def test_env_overrides_config(monkeypatch):
 
 
 def test_auto_client_uses_grok_cli_when_present(monkeypatch, conn):
+    monkeypatch.setenv('KG_AI_BACKUP', 'grok')
     monkeypatch.setattr(grok, 'cli_path', lambda: '/usr/bin/cursor-agent')
     c = Client(Budget(meter(conn)), key='', transport=http_transport)
     assert c.fallback_provider == 'grok' and c.fallback_model == grok.GROK_MODEL
     assert c.fallback_transport is grok.grok_transport and c.fallback_available and c.configured
 
 
-def test_auto_client_without_cli_has_no_backup(conn):
+def test_auto_client_without_cli_has_no_backup(monkeypatch, conn):
+    monkeypatch.setenv('KG_AI_BACKUP', 'grok')
     c = Client(Budget(meter(conn)), key='', transport=http_transport)
     assert c.fallback_provider == 'grok' and not c.fallback_available and not c.configured
 
