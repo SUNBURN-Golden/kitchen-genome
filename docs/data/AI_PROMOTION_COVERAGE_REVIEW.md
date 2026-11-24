@@ -238,3 +238,22 @@ were extended to `0017_ai_promotion_skip.sql` in all five pinned-schema tests.
    design wording that says `rev_fee510f69783` stays unlinked.
 3. Do not pursue 40 by relaxing TEMPORARY/INSTITUTION/CONTEST/unsafe-source guards. Report the
    actual result (24/117, 0 guard hits) and the ceiling in the PR body.
+
+## Resolution (2026-11-25)
+
+All findings are addressed on `feat/ai-promote-unlinked-coverage`; the build results in
+`AI_PROMOTION_COVERAGE_DESIGN.md` and the PR body carry the replayed numbers.
+
+| Finding | Resolution |
+| --- | --- |
+| F1 | Guards retained. The replay reports 24/117, 0 guard-list hits, and the ceiling analysis; the 40 target is not reachable without weakening a named guard. |
+| F2 | The contextual branch now accepts every label-valid relation. `rev_e6020979953a` publishes (`chef_unresolved` 5 → 4). |
+| F3 | `_context()` selects the extraction's occurrence when the article is repeated; repeated text is accepted only when all occurrences share the same local context. `rev_289b78648e03` is no longer withdrawn (`withdrawn_supports: 0`). |
+| F4 | The venue-only sweep excludes `opening`/`career` annotations whose reason is `no_relation`; `rev_fee510f69783` stays unlinked and off the holder page. |
+| F5 | `restaurant_wording` strips award titles and only counts outlet wording near the venue; `rev_25620f7264c2` is blocked by CONTEST rather than creating a branch. |
+| F6 | Couple/`함께` attribution requires an operating/leadership verb in the pair sentence and the venue in that sentence or the immediately preceding one. |
+| F7 | `review.publish()` applies the same non-outlet tail guard as `_parse()`. |
+
+Replayed result: unlinked 225 → 194; 40 supports; 18 new stints; 24 new AI link records;
+`withdrawn_supports: 0`; second pass unchanged. `TZ=UTC python3 -m pytest tests` →
+**892 passed, 1 skipped, 317 subtests passed**.

@@ -8,26 +8,40 @@ Design for the Kitchen Genome collector, 2026-11-25. The unit of evidence is one
 
 The telemetry-only baseline and the implementation replayed the same pinned seed and SQLite backup. The script ran on disposable copies in `/tmp`, using the retained articles read-only. It found matching source text for 115 of the 117 cohort reviews. The baseline added zero supports and left 225 unlinked entries.
 
-The implementation published evidence from **24 of 117 cohort reviews**, 16 below the target, with **zero guard-list hits**. The backlog fell from **225 to 192**. Forty reviews gained public evidence across the entire seed, including 16 annotations already attached to site holders. Nine entries moved as annotations alone, including five from the cohort. Promotion opened 19 new stints, recorded 24 new AI link records and upgraded zero existing stints. The second run added zero supports, links or publication events and preserved the seed bytes, audit bytes and skip rows.
+The implementation, with the review fixes below, published evidence from **24 of 117 cohort reviews**, 16 below the target, with **zero guard-list hits**. The backlog fell from **225 to 194**. Forty reviews gained public evidence across the entire seed, including 16 annotations already attached to site holders. Seven entries moved as annotations alone, three from the cohort. Promotion opened 18 new stints, recorded 24 new AI link records, withdrew no previously attached support and upgraded zero existing stints. The second run added zero supports, links or publication events and preserved the seed bytes, audit bytes and skip rows.
 
-Both Korean SEOK excerpts support one Paris restaurant and the same curated chef identity used for 강민구 and Mingoo Kang. The Hankyung excerpt contributes no location of its own. The reservation roster yielded 샘킴–오스테리아 샘킴, 김희은–에그앤플라워 and 박효남–콩두 명동. The 이준–도우룸 광화문 cell identifies the pair in the article, but the retained source supplies no link to the established 이준 identity. The 가지가지 source uses port 8888 and the English Seok excerpt lacks a completed opening predicate. One previously attached 아토보이 support was withdrawn because its abbreviated chef reference occurs in a repeated excerpt.
+The target remains unreachable without weakening a guard. The ceiling analysis below decomposes the 117 into 60 guard entries (33 temporary pop-ups, 27 institutions) and 57 others. Even with the review fixes at most about 36 could move and about 31 publish. Reaching 40 would require admitting at least nine entries from the TEMPORARY, INSTITUTION, CONTEST, `no_clause` or port-8888 buckets. The gates stay in force and the shortfall is reported by reason.
+
+### Review fixes applied
+
+The build review (`AI_PROMOTION_COVERAGE_REVIEW.md`) found one acceptance shortfall and six defects. All are addressed:
+
+- **F1 — coverage ceiling.** The guards are not relaxed. The measured ceiling is reported here and in the PR body; 40/117 is not reachable under the TEMPORARY, INSTITUTION, CONTEST, source and no-clause gates.
+- **F2 — elided former/training.** The single-sentence source-attribution branch now accepts every label-valid relation, not only opening/current. The elided former claim `rev_e6020979953a` (이은지 | 정식(Jungsik)) publishes, reducing cohort `chef_unresolved` from 5 to 4.
+- **F3 — repeated article excerpt.** `_context()` uses the extraction span to select the extracted occurrence when the retained page repeats the article verbatim. Repeated text is accepted only when every occurrence has the same local context (the clause before the quote and the immediate tail), so genuinely conflicting repetitions still abstain. The 아토보이 support `rev_289b78648e03` is no longer withdrawn (`withdrawn_supports: 0`).
+- **F4 — venue-only sweep.** An `opening` or `career` annotation whose reason is `no_relation` is no longer attached to a venue holder; `rev_fee510f69783` stays in `ai_reviewed_unlinked` and does not render on the SEOK page.
+- **F5 — award titles.** `restaurant_wording` strips award/prize titles and only counts outlet wording near the venue. The 파인 다이닝 러버스상 review is now blocked by the CONTEST gate instead of creating a branch from the award sentence.
+- **F6 — couple attribution.** A `부부`/`두 셰프`/`함께` attribution requires the pair sentence itself to carry an operating or leadership verb and the venue to occur in that sentence or the immediately preceding one.
+- **F7 — publish-time tail guard.** `review.publish()` applies the same hotel/group/brand tail check as `_parse()`, so `Chef X runs Celeste Hotel` no longer attaches to a `Celeste` holder.
+
+Both Korean SEOK excerpts support one Paris restaurant and the same curated chef identity used for 강민구 and Mingoo Kang. The Hankyung excerpt contributes no location of its own. The reservation roster yielded 샘킴–오스테리아 샘킴, 김희은–에그앤플라워 and 박효남–콩두 명동. The 이준–도우룸 광화문 cell identifies the pair in the article, but the retained source supplies no link to the established 이준 identity. The 가지가지 source uses port 8888 and the English Seok excerpt lacks a completed opening predicate, so both stay unlinked. The 아토보이 support is restored by span-based occurrence selection.
 
 | Cohort outcome | Reviews |
 | --- | ---: |
 | Published affiliation evidence | 24 |
-| Annotation attached without an affiliation | 5 |
+| Annotation attached without an affiliation | 3 |
 | Temporary | 33 |
 | Institution | 27 |
-| Contest without a resolved outlet or the required restaurant wording | 6 |
-| No qualifying relation | 6 |
-| Chef unresolved | 5 |
+| Contest without a resolved outlet or the required restaurant wording | 7 |
+| No qualifying relation | 8 |
+| Chef unresolved | 4 |
 | Invalid endpoint | 5 |
 | No qualifying clause | 4 |
 | Unsafe source | 2 |
 
-The final backlog histogram was `{"chef_unresolved":5,"contest":6,"institution":27,"invalid_endpoint":5,"no_chef":6,"no_clause":4,"no_relation":6,"no_venue":12,"temporary":33,"unsafe_source":3,"unsupported_label":85}`.
+The final backlog histogram was `{"chef_unresolved":4,"contest":7,"institution":27,"invalid_endpoint":5,"no_chef":6,"no_clause":4,"no_relation":8,"no_venue":12,"temporary":33,"unsafe_source":3,"unsupported_label":85}`.
 
-`TZ=UTC python3 -m pytest tests` finished with **883 passed, 1 skipped**. To reproduce the replay with a read-only service DB, run `python3 scripts/dry_run_ai_promotion.py --db /workspace/kitchen-genome/data_store/kg_service.db --now 2026-11-25T00:00:00Z`. The replay prints each affected chef, venue and stint alongside its review IDs, publication status and source URLs.
+`TZ=UTC python3 -m pytest tests` finished with **892 passed, 1 skipped, 317 subtests passed**. To reproduce the replay with a read-only service DB, run `python3 scripts/dry_run_ai_promotion.py --db /workspace/kitchen-genome/data_store/kg_service.db --now 2026-11-25T00:00:00Z`. The replay prints each affected chef, venue and stint alongside its review IDs, publication status and source URLs.
 
 ## What the November 24 seed establishes
 

@@ -15,7 +15,7 @@ from kg_daemon.db import stable_id, utcnow
 
 from .promotion_binding import (
     CONTEST, LABELS, OUTLET, _blocked_name, _endpoint_reason, _literals, _named_subject,
-    _parse, _reject_reason, _sentences, _spellings, _venue_reason,
+    _parse, _reject_reason, _sentences, _spellings, _venue_reason, _venue_tail_reason,
 )
 
 KEY = 'ai_promotion'
@@ -60,18 +60,59 @@ def _normalized(text):
     return unicodedata.normalize('NFC', sanitize_before_store(text)[0] or '')
 
 
+def _repeated_occurrences_agree(text, quote):
+    """Repeated text is usable only when every occurrence has the same local context.
+
+    Compare the clause before the quote (which carries the subject) and the
+    immediate tail. A reposted listing can repeat the article verbatim while
+    truncating or padding the remainder of the sentence differently.
+    """
+    spans = list(_sentences(text))
+    seen = set()
+    position = -1
+    while (position := text.find(quote, position + 1)) >= 0:
+        sentence = next(((s, e) for s, e in spans if s <= position and position + len(quote) <= e), None)
+        if sentence is None:
+            return False
+        seen.add((text[sentence[0]:position], text[position + len(quote):sentence[1]][:80]))
+    return len(seen) <= 1
+
+
 def _context(raw, text, quote, details):
-    """Map a raw extraction span through sanitization to a unique occurrence."""
-    if text.count(quote) != 1:
-        return None
+    """Map a raw extraction span through sanitization to the extracted occurrence."""
     start, end = details.get('span_start'), details.get('span_end')
-    offset = text.index(quote)
-    if not isinstance(start, int) or not isinstance(end, int) or text[start:end] == quote:
+    occurrences = text.count(quote)
+    if occurrences == 1:
+        offset = text.index(quote)
+        if not isinstance(start, int) or not isinstance(end, int) or text[start:end] == quote:
+            return text, offset
+        # Map offsets from the raw fetch after whitespace, privacy and NFC edits.
+        if (0 <= start < end <= len(raw) and _normalized(raw[start:end]) == quote
+                and len(_normalized(raw[:start])) in (offset, offset - 1)):
+            return text, offset
+        return None
+    if occurrences == 0:
+        return None
+    # A listing page can repeat the whole article verbatim. Reproduce the
+    # occurrence the extraction span points at instead of rejecting every
+    # review; a span that does not match this exact quote still abstains.
+    if (not isinstance(start, int) or not isinstance(end, int)
+            or not (0 <= start < end <= len(raw)) or raw[start:end] != quote
+            or not _repeated_occurrences_agree(text, quote)):
+        return None
+    if raw.count(quote) == occurrences:
+        # Sanitization kept the occurrence count, so the span's ordinal index
+        # still identifies the same occurrence in the normalized text.
+        offset = -1
+        for _ in range(raw.count(quote, 0, start) + 1):
+            offset = text.find(quote, offset + 1)
+            if offset < 0:
+                return None
         return text, offset
-    # Map offsets from the raw fetch after whitespace, privacy and NFC edits.
-    if (0 <= start < end <= len(raw) and _normalized(raw[start:end]) == quote
-            and len(_normalized(raw[:start])) in (offset, offset - 1)):
-        return text, offset
+    offset = len(_normalized(raw[:start]))
+    for candidate in (offset - 1, offset, offset + 1):
+        if 0 <= candidate <= len(text) and text[candidate:candidate + len(quote)] == quote:
+            return text, candidate
     return None
 
 
@@ -541,8 +582,13 @@ def _promote(conn, seed, raw_dir, log, now):
     if state:
         site = Site(seed)
         for entry in list(seed.get('ai_reviewed_unlinked', ())):
-            if reasons[id(entry)] not in {'unsupported_label', 'no_chef', 'no_clause', 'no_relation',
-                                          'chef_unresolved', 'branch_unresolved'}:
+            reason = reasons[id(entry)]
+            if reason not in {'unsupported_label', 'no_chef', 'no_clause', 'no_relation',
+                              'chef_unresolved', 'branch_unresolved'}:
+                continue
+            # A tentative or unbound opening/career sentence is not evidence
+            # that this chef runs the venue; keep it in the backlog.
+            if reason == 'no_relation' and entry.get('label') in ('opening', 'career'):
                 continue
             venue = entry.get('restaurant')
             if (not isinstance(venue, str) or _venue_reason(venue)

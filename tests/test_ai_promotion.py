@@ -631,3 +631,129 @@ def test_coverage_clipped_event_roster_stays_unlinked(world):
     quote = '정연(민하늘)'
     finding(world, quote, venue='정연', approve=True, article_text='팝업 레스토랑별 셰프: ' + quote)
     assert run(world)['promotion_skips'] == {'temporary': 1}
+
+
+@pytest.mark.parametrize(('chef', 'venue', 'label', 'quote', 'previous', 'relation'), [
+    ('민하늘', '정연', 'career', '정연에서 2019년까지 일했다.', '민하늘 셰프가 파리에서 돌아왔다. ', 'former'),
+    ('Ana Baker', 'Celeste', 'mentorship_claim', 'He trained at Celeste.', 'Ana Baker returned to Paris. ', 'training'),
+])
+def test_coverage_elided_former_and_training_keep_their_relation(chef, venue, label, quote, previous, relation):
+    # F2: the contextual branch used to admit only opening/current. A former
+    # or training claim with the same source attribution must keep its relation.
+    text = previous + quote
+    row, reason = promotion._parse(dict(chef=chef, restaurant=venue, label=label, quote=quote,
+                                        extraction_id='xid'),
+                                   dict(context=(text, len(previous)), chef_text=chef, evidence_id='ev'))
+    assert reason is None
+    assert (row['relation'], row['binding_receipt']['rule']) == (relation, 'source_attribution')
+
+
+def test_context_selects_the_extraction_span_in_a_repeated_excerpt():
+    # F3: a listing page can repeat the article verbatim. The extraction span
+    # selects which occurrence is evidence; no span still abstains.
+    text = 'aXa\naXa'
+    assert promotion._context(text, text, 'X', {'span_start': 5, 'span_end': 6}) == (text, 5)
+    assert promotion._context(text, text, 'X', {'span_start': 1, 'span_end': 2}) == (text, 1)
+    assert promotion._context(text, text, 'X', {}) is None
+    # Repeated text with conflicting local subjects is not usable.
+    conflict = 'aXbXc'
+    assert promotion._context(conflict, conflict, 'X', {'span_start': 3, 'span_end': 4}) is None
+
+
+def test_coverage_repeated_article_excerpt_restores_short_subject_link(world):
+    w = world
+    quote = '박 셰프가 운영하는 캐주얼 한식당 아토보이(Atoboy)'
+    line = '박정현 셰프는 뉴욕에서 활동한다. ' + quote + ' 이 식당은 2016년 문을 열었다.'
+    body = line + ' ' + line
+    xid, rid, _ = finding(w, quote, chef='박정현', venue='아토보이', label='career',
+                          article_text=body, approve=True)
+    ref = w.conn.execute('SELECT text_ref FROM fetch_record WHERE fetch_id=(SELECT fetch_id FROM extraction '
+                         'WHERE extraction_id=?)', (xid,)).fetchone()[0]
+    raw = (w.raw.root / ref).read_text(encoding='utf-8')
+    second = raw.rindex(quote)
+    w.conn.execute('UPDATE extraction SET span_start=?,span_end=? WHERE extraction_id=?',
+                   (second, second + len(quote), xid))
+    w.conn.commit()
+    stats = run(w)
+    assert (stats['promoted'], stats['unlinked_remaining'], stats['promotion_skips']) == (1, 0, {})
+    row = read(w)[promotion.KEY]['supports'][rid]
+    assert (row['relation'], row['resolved_chef_text']) == ('current', '박정현')
+    assert row['binding_receipt']['occurrence'][0] > raw.index(quote)
+
+
+def test_coverage_unbound_opening_and_career_annotations_stay_unlinked(world):
+    # F4: the venue-only sweep must not publish a tentative opening/career
+    # annotation as an AI news card. A first valid promotion establishes the
+    # promotion state that runs the sweep.
+    w = world
+    finding(w, FIRST, approve=True)
+    assert run(w)['promoted'] == 1
+    quote = 'His first European venture followed with 기존식당 in 2026.'
+    _, rid, _ = finding(w, quote, chef='Mingoo Kang', venue='기존식당', label='opening', approve=True)
+    stats = run(w)
+    assert stats['promotion_skips'] == {'no_relation': 1}
+    assert stats['promoted'] == 0
+    seed = read(w)
+    assert [e['review_id'] for e in seed['ai_reviewed_unlinked']] == [rid]
+    holder = next(r for r in seed['restaurants'] if r['name'] == '기존식당')
+    assert holder.get('ai_reviewed') is None
+    run_build(w)
+    page = (w.repo / 'web' / 'r' / holder['id'] / 'index.html').read_text()
+    assert quote not in page
+
+
+def test_coverage_unbound_employment_annotation_still_attaches_to_its_venue(world):
+    # The F4 exclusion is limited to opening/career. An employment annotation
+    # with an unbound quote is still delivered to its matching holder.
+    w = world
+    finding(w, FIRST, approve=True)
+    assert run(w)['promoted'] == 1
+    quote = '기존식당은 민하늘 셰프가 언급한 곳이다.'
+    _, rid, _ = finding(w, quote, chef='민하늘', venue='기존식당', label='employment_claim', approve=True)
+    stats = run(w)
+    assert stats['promotion_skips'] == {}
+    seed = read(w)
+    assert not seed.get('ai_reviewed_unlinked')
+    holder = next(r for r in seed['restaurants'] if r['name'] == '기존식당')
+    assert [e['review_id'] for e in holder['ai_reviewed']] == [rid]
+
+
+def test_coverage_award_title_is_not_restaurant_wording(world):
+    # F5: an award title that contains 다이닝 must not satisfy the CONTEST gate.
+    w = world
+    quote = ("'파인 다이닝 러버스상(Fine Dining Lovers Award)'은 일본 도쿄 솔루나(SOLUNA)의 "
+             '아이 이치노세(Ai Ichinose) 셰프가 각각 수상했다.')
+    row, reason = promotion._parse(dict(chef='아이 이치노세', restaurant='솔루나', label='career',
+                                        quote=quote), {})
+    assert reason is None and row['contest'] is True and row['restaurant_wording'] is False
+    finding(w, quote, chef='아이 이치노세', venue='솔루나', label='career', approve=True)
+    stats = run(w)
+    assert (stats['promoted'], stats['promotion_skips']) == (0, {'contest': 1})
+    assert not any(holder['name'] == '솔루나' for holder in read(w)['restaurants'])
+
+
+def test_coverage_couple_attribution_needs_an_operating_verb():
+    # F6: a nearby pair sentence mentioning only 셰프 is not proof that the pair
+    # runs the venue; the pair sentence itself must state the operating relation.
+    quote = '정연은 파리에서 문을 열었다.'
+    previous = '정연은 파리에 있다. 민하늘·최가람 부부 셰프가 인사했다. '
+    row, reason = promotion._parse(dict(chef='민하늘', restaurant='정연', label='opening', quote=quote),
+                                   dict(context=(previous + quote, len(previous)), chef_text='민하늘'))
+    assert row is None and reason == 'chef_unresolved'
+
+    operating = '정연은 파리에 있다. 민하늘·최가람 부부가 정연을 운영하고 있다. '
+    row, reason = promotion._parse(dict(chef='민하늘', restaurant='정연', label='opening', quote=quote),
+                                   dict(context=(operating + quote, len(operating)), chef_text='민하늘'))
+    assert reason is None and row['relation'] == 'opening'
+
+
+def test_coverage_publish_rejects_a_non_outlet_venue_tail(world):
+    # F7: publication must apply the same hotel/group tail guard as _parse.
+    w = world
+    entry = review.annotation(dict(label='career', quote='Chef Ana Baker runs 기존식당 Hotel.',
+                                   canonical_url='https://hankyung.com/food/1', published_at=NOW,
+                                   chef_text='Ana Baker', restaurant_text='기존식당', org_text=None,
+                                   extraction_id='publish-tail'), 'rev_publish_tail', NOW)
+    target, added = review.publish(w.seed, review.Site(w.seed), entry)
+    assert (target, added) == ('unlinked', True)
+    assert w.seed['ai_reviewed_unlinked'][-1] is entry

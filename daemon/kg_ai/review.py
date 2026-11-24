@@ -248,7 +248,9 @@ def publish(seed, site, entry):
         if item.get('review_id') == entry['review_id']:
             return f'{kind[:-1]}:{holder["id"]}' if kind else 'unlinked', False
     venue = entry['restaurant']
-    m = None if venue and promotion._venue_reason(venue) else site.match({
+    blocked = venue and (promotion._venue_reason(venue) or promotion._venue_tail_reason(
+        entry.get('quote') or '', venue, other=entry.get('chef')))
+    m = None if blocked else site.match({
         'restaurant_text': venue, 'chef_text': entry['chef']})
     if m:
         target = f'{m[0]}:{m[1]["id"]}'

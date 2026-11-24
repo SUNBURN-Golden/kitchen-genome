@@ -24,6 +24,14 @@ NON_OUTLET = re.compile(r'(?:소비재|테이블웨어|분식)\s*브랜드|브�
                         r'(?:tableware|consumer|retail) brand\s*$|(?:\(주\)|㈜)\s*$', re.I)
 CONTEST = re.compile(r'대회|참가|출품|우승|수상|선정|\d위|상\(.*Award|\b(?:contest|competition|award)\b', re.I)
 OUTLET = re.compile(r'레스토랑|식당|다이닝|부티크|\b(?:restaurant|bistro|eatery)\b', re.I)
+# Award and prize titles often contain outlet words such as 다이닝. Remove the
+# title before deciding whether a clause describes a restaurant.
+AWARD_TITLE = re.compile(
+    r'[‘“\'"][^‘’“”\'".!?;]{0,100}?(?:상|어워드|award|prize)|'
+    r'\b(?:[A-Z][\w’\'\-]*\s+){1,6}(?:Awards?|Prizes?)\b', re.I)
+NON_OUTLET_TAIL = re.compile(
+    r'\s*[’\'\"”]?\s*(?:호텔|그룹|백화점|브랜드|호텔앤리조트|'
+    r'\b(?:hotels?|resorts?|group|inc|ltd|llc)\b)', re.I)
 KO_WORK = (r'이끄는|이끈|이끌고\s+있\w*|이끈다|운영(?:하는|한다|하고\s+있\w*|해\s*왔\w*)|'
            r'총괄(?:하는|한다|하고\s+있\w*)|맡(?:고\s+있\w*|은|는다)|근무(?:하는|한다| 중)|일하는|재직 중')
 KO_OPEN = r'문을\s*열(?:었\w*|었다)|(?:개업|오픈|창업|개점)\s*했\w*|열었다'
@@ -169,6 +177,30 @@ def _venue_reason(venue, alias=None):
     if any(INSTITUTION.search(n) for n in names):
         return 'institution'
     return None
+
+
+def _non_outlet_tail(tail):
+    return bool(NON_OUTLET_TAIL.match(tail))
+
+
+def _venue_tail_reason(quote, venue, alias=None, other=None):
+    """Reject an outlet spelling followed by a non-restaurant head noun."""
+    for name in _spellings(venue, alias):
+        for span in _spans(name, other or '', quote):
+            if _non_outlet_tail(quote[span.end:]):
+                return 'institution'
+    return None
+
+
+def _outlet_wording(work, employer):
+    """Outlet wording counts only when it describes the venue, not an award."""
+    text = work
+    for match in reversed(list(AWARD_TITLE.finditer(work))):
+        text = text[:match.start()] + ' ' * (match.end() - match.start()) + text[match.end():]
+    if employer is None:
+        return bool(OUTLET.search(text))
+    start, end = employer.start(), employer.end()
+    return bool(OUTLET.search(text[max(0, start - 50):end + 50]))
 
 
 def _opening_object(tail):
@@ -457,8 +489,12 @@ def _source_attribution(entry, details, name, venue, *, venue_subject):
         for start, end in _sentences(passage):
             sentence = passage[start:end]
             pair = re.search(r'([가-힣]{2,4})[·ㆍ]([가-힣]{2,4})\s*부부', sentence)
-            if (pair and name in pair.groups() and any(_literals(venue, nearby + ' ' + sentence))
-                    and re.search(r'운영|이끄|셰프', sentence)):
+            # The pair sentence itself must state the operating relation. The
+            # venue may be its object or the object of the immediately preceding
+            # sentence; a venue further back is not evidence for this couple.
+            if (pair and name in pair.groups()
+                    and re.search(r'운영|이끄|맡|총괄|열었|오픈', sentence)
+                    and any(_literals(venue, nearby + ' ' + sentence))):
                 return True
             nearby = sentence
     return False
@@ -497,7 +533,7 @@ def _bound_row(entry, details, work, subject, employer, relation, cues, chef_ali
     row = dict.fromkeys(('role_id', 'role_text', 'valid_from', 'valid_to', 'mentor_id', 'previous_branch_id'))
     row.update(chef_text=entry['chef'], venue_text=entry['restaurant'], relation=relation, quote=entry['quote'],
                city=city, country_code=country, bilingual_venue=venue_alias, bilingual_name=chef_alias,
-               restaurant_wording=bool(OUTLET.search(work)), contest=bool(CONTEST.search(work)))
+               restaurant_wording=_outlet_wording(work, employer), contest=bool(CONTEST.search(work)))
     if subject:
         lineage._fields(raw, work, row, subject, employer, cues)
     else:
@@ -539,10 +575,8 @@ def _parse(entry, details):
         cues = lineage.signals(work, lang)
         for employer in employers:
             reject = _venue_reason(venue, employer.alias)
-            tail = work[employer.end:].lstrip(" ’'\"”")
             if not reject and (NON_OUTLET.search(work[:employer.start].rstrip(" ‘'\"“"))
-                               or re.match(r'\s*(?:호텔|그룹|백화점|브랜드|호텔앤리조트|'
-                                           r'\b(?:hotels?|resorts?|group|inc|ltd|llc)\b)', tail, re.I)):
+                               or _non_outlet_tail(work[employer.end:])):
                 reject = 'institution'
             if reject:
                 reason = max(reason, reject, key=rank.index)
@@ -575,7 +609,7 @@ def _parse(entry, details):
                     if inherited and venue_subject:
                         inherited = any(_literals(venue, previous))
                     if not inherited:
-                        contextual = (len(sentences) == 1 and rel in ('opening', 'current')
+                        contextual = (len(sentences) == 1 and rel in allowed
                                       and _source_attribution(entry, details, full_chef or chef, venue,
                                                               venue_subject=venue_subject))
                         if not contextual:
