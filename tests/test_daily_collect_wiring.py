@@ -89,7 +89,7 @@ if 'kg_collect' in args:
         pathlib.Path('sources/registry.discovered.yaml').write_text('changed\\n')
         os.kill(int(os.environ['TEST_PIPELINE_PID']), getattr(signal, 'SIG'+os.environ['TEST_SIGNAL']))
     print(json.dumps({{'status':'succeeded','run_id':'fixture','ai':'enabled','cost_used':0.1,'ai_reason':os.environ.get('TEST_COLLECT_REASON','none')}}))
-elif 'kg_ai' in args: print('AI_REVIEW approved=0 rejected=0 published=0 reason='+os.environ.get('TEST_REVIEW_REASON','none'))
+elif 'kg_ai' in args: print('AI_REVIEW approved=0 rejected=0 published=0 reason='+os.environ.get('TEST_REVIEW_REASON','none')+' promotion_skips={{"no_chef":2,"temporary":1}}')
 elif 'kg_daemon' in args: print(json.dumps({{'status':'succeeded','ai':'enabled','ai_reason':os.environ.get('TEST_DAEMON_REASON','none')}}))
 elif 'crawler/instagram_kg.py' in args:
     if '--mark-timeout' in args: print('IG_FAILED account=kitchen.genome reason=timeout')
@@ -300,6 +300,7 @@ def test_pipeline_signal_reports_cause_and_restores_tree(local_pipeline,name):
     result=f'RESULT=FAILED stage=collect reason=signal_{name} ai_reason=balance_low'
     assert p.stdout.splitlines()[-1]==result
     assert 'reason=command_failed' not in p.stdout
+    assert 'reason=balance_low promotion_skips={"no_chef":2,"temporary":1}' in p.stdout
     log=next((local_pipeline.repo/'data_store/logs').glob('daily_pipeline_*.log'))
     assert log.read_text()==p.stdout
     assert local_pipeline.git('branch','--show-current')=='main'

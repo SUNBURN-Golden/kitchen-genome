@@ -1,5 +1,5 @@
 """Turn retained AI approvals into quote-backed G3 career evidence."""
-from collections import Counter
+from collections import Counter, defaultdict, deque
 import json
 from pathlib import Path
 import re
@@ -9,29 +9,18 @@ import unicodedata
 
 from kg_ai.article import digest
 from kg_collect import evaluate, lineage, lineage_identity as identity, site_projection, site_publish
+from kg_collect.net import host_of
 from kg_collect.targets import Gazetteer, name_key
 from kg_daemon.db import stable_id, utcnow
 
+from .promotion_binding import (
+    CONTEST, LABELS, OUTLET, _blocked_name, _endpoint_reason, _literals, _named_subject,
+    _parse, _reject_reason, _sentences, _spellings, _venue_reason,
+)
+
 KEY = 'ai_promotion'
 BADGE = 'AI 검토'
-LABELS = {'employment_claim': ('former', 'current'), 'career': ('former', 'training', 'current'),
-          'mentorship_claim': ('training',), 'opening': ('opening',)}
-INSTITUTION = re.compile(
-    r'호텔|리조트|소사이어티|그룹|아카데미|대학교|대회|팝업|페스티벌|(?:호텔|리조트)앤|'
-    r'\b(?:hotels?|resorts?|group|university|academy|competition|festival|gala|pop[- ]?up|catering)\b', re.I)
-TEMPORARY = re.compile(r'게스트\s*(?:셰프|시프트)|객원\s*셰프|한시적|단기\s*(?:근무|셰프)|일일\s*셰프|'
-                       r'초청\s*셰프|임시\s*(?:셰프|근무)|하루\s*동안|\b(?:guest|visiting|temporary)\b', re.I)
-CONTEST = re.compile(r'대회|참가|출품|우승|수상|선정|\d위|상\(.*Award|\b(?:contest|competition|award)\b', re.I)
-OUTLET = re.compile(r'레스토랑|식당|다이닝|부티크|\b(?:restaurant|bistro|eatery)\b', re.I)
-KO_WORK = r'이끄는|이끈|이끌고 있\w*|운영하는|운영하고 있\w*|총괄하\w*|맡(?:고 있\w*|은|는다)|근무(?:하는|한다| 중)|일하는|재직 중'
-TITLE = r'(?:(?:공동|총괄|오너|헤드|수석|책임|수|페이스트리)\s*)?(?:셰프|쉐프|주방장|요리사)'
-COUNTRIES = {'한국': 'KR', '대한민국': 'KR', 'South Korea': 'KR', '미국': 'US', 'United States': 'US',
-             '일본': 'JP', 'Japan': 'JP', '프랑스': 'FR', 'France': 'FR', '영국': 'GB', 'United Kingdom': 'GB',
-             '이탈리아': 'IT', 'Italy': 'IT', '독일': 'DE', 'Germany': 'DE', '스페인': 'ES', 'Spain': 'ES',
-             '싱가포르': 'SG', 'Singapore': 'SG', '아랍에미리트': 'AE', 'United Arab Emirates': 'AE',
-             '캐나다': 'CA', 'Canada': 'CA', '호주': 'AU', 'Australia': 'AU'}
-OTHER_CITIES = {'두바이', 'Dubai', '샌프란시스코', 'San Francisco', '파리', '런던', '홍콩', 'Hong Kong',
-                '싱가포르', 'Singapore'}
+MEDIA_HOSTS = ('youtube.com', 'youtu.be', 'youtube-nocookie.com')
 
 
 def annotations(seed):
@@ -58,6 +47,34 @@ def tombstones(log):
     return {r['review_id'] for r in audit_rows(log) if r.get('action') == 'rollback' and r.get('review_id')}
 
 
+def _safe_source_url(url):
+    if not site_publish.safe_url(url):
+        return False
+    host = host_of(url)
+    return not any(host == domain or host.endswith('.' + domain) for domain in MEDIA_HOSTS)
+
+
+def _normalized(text):
+    from privacy_filter import sanitize_before_store
+
+    return unicodedata.normalize('NFC', sanitize_before_store(text)[0] or '')
+
+
+def _context(raw, text, quote, details):
+    """Map a raw extraction span through sanitization to a unique occurrence."""
+    if text.count(quote) != 1:
+        return None
+    start, end = details.get('span_start'), details.get('span_end')
+    offset = text.index(quote)
+    if not isinstance(start, int) or not isinstance(end, int) or text[start:end] == quote:
+        return text, offset
+    # Map offsets from the raw fetch after whitespace, privacy and NFC edits.
+    if (0 <= start < end <= len(raw) and _normalized(raw[start:end]) == quote
+            and len(_normalized(raw[:start])) in (offset, offset - 1)):
+        return text, offset
+    return None
+
+
 def _original(conn, entry, raw_dir):
     review_id = entry['review_id']
     record = conn.execute('SELECT * FROM review_queue WHERE review_id=?', (review_id,)).fetchone()
@@ -71,13 +88,21 @@ def _original(conn, entry, raw_dir):
         if entry.get('extraction_id') != record['subject_id']:
             return None, 'no_original'
         if record['subject_type'] == 'candidate_fact':
-            original = conn.execute("""SELECT c.payload_json,c.evidence_json,d.raw_ref,d.canonical_url,d.published_at
-                FROM candidate_fact c LEFT JOIN document d USING(document_id) WHERE candidate_id=?""", (record['subject_id'],)).fetchone()
+            original = conn.execute("""SELECT c.payload_json,c.evidence_json,c.document_id,d.raw_ref,d.canonical_url,
+                d.content_hash,d.published_at,s.tier,s.enabled,p.collect_permission
+                FROM candidate_fact c LEFT JOIN document d USING(document_id)
+                LEFT JOIN source s ON s.source_id=d.source_id LEFT JOIN source_policy p ON p.source_id=s.source_id
+                WHERE candidate_id=?""", (record['subject_id'],)).fetchone()
             if original:
+                if original['enabled'] == 0 or original['collect_permission'] in ('manual_only', 'prohibited'):
+                    return None, 'unsafe_source'
+                tier = original['tier']
                 locator = json.loads(original['evidence_json'])
                 details = {**json.loads(original['payload_json']), 'quote': locator.get('quote'),
                            'canonical_url': original['canonical_url'] or locator.get('source_url'),
-                           'published_at': original['published_at']}
+                           'published_at': original['published_at'], 'evidence_id': original['document_id'],
+                           'evidence_hash': original['content_hash'],
+                           'span_start': locator.get('span_start'), 'span_end': locator.get('span_end')}
                 if original['raw_ref']:
                     try:
                         path = Path(original['raw_ref'])
@@ -89,10 +114,11 @@ def _original(conn, entry, raw_dir):
                     except (OSError, ValueError, AttributeError):
                         pass
         elif record['subject_type'] == 'extraction':
-            original = conn.execute("""SELECT e.*,f.text_ref,f.raw_ref,f.method FROM extraction e
+            original = conn.execute("""SELECT e.*,f.text_ref,f.raw_ref,f.method,f.content_hash AS evidence_hash FROM extraction e
                 LEFT JOIN fetch_record f USING(fetch_id) WHERE extraction_id=?""", (record['subject_id'],)).fetchone()
             if original:
                 details = dict(original)
+                details['evidence_id'] = details['fetch_id']
                 if original['text_ref']:
                     try:
                         text = (Path(raw_dir) / original['text_ref']).read_text(encoding='utf-8')
@@ -107,14 +133,19 @@ def _original(conn, entry, raw_dir):
                         links = parse_html((Path(raw_dir) / original['raw_ref']).read_text(encoding='utf-8', errors='replace'), entry['src'])['links']
                     except OSError:
                         pass
-        if details and (details.get('quote') != entry['quote'] or details.get('canonical_url') != entry['src']
-                    or details.get('label', entry['label']) != entry['label']):
+        if (not details or details.get('quote') != entry['quote'] or details.get('canonical_url') != entry['src']
+                or details.get('label', entry['label']) != entry['label']):
             return None, 'no_original'
+        for stated, saved in ((details.get('chef_text'), entry.get('chef')),
+                              (details.get('restaurant_text') or details.get('org_text'), entry.get('restaurant'))):
+            if stated and saved and not {name_key(n) for n in _spellings(stated)}.intersection(
+                    map(name_key, _spellings(saved))):
+                return None, 'no_original'
     if text is not None:
-        from privacy_filter import sanitize_before_store
-        text = unicodedata.normalize('NFC', sanitize_before_store(text)[0] or '')
+        raw, text = text, _normalized(text)
         if entry['quote'] not in text:
             return None, 'no_original'
+        details['context'] = _context(raw, text, entry['quote'], details)
     doc = SimpleNamespace(url=entry['src'], canonical_url=entry['src'], links=links,
                           published_at=details.get('published_at') or entry.get('date'))
     metadata = lineage._source(conn, doc, text or entry['quote'], tier)
@@ -126,188 +157,7 @@ def _original(conn, entry, raw_dir):
         digest(shingle)[:12] for shingle in evaluate.shingles(text[:3000].casefold())) if text else '[]'
     metadata['quote_key'] = digest(name_key(entry['quote']))
     metadata['snapshot_checked'] = text is not None
-    chef = entry.get('chef')
-    if text and isinstance(chef, str) and re.fullmatch(r'[가-힣]{2,4}', chef) and chef in text and chef not in entry['quote']:
-        named = set(re.findall(r'(?<![가-힣])(' + chef[0] + r'[가-힣]{1,3})\s*(?:셰프|쉐프)', text))
-        short = re.search(r'(?<![가-힣])' + chef[0] + r'\s+(?:셰프|쉐프)', entry['quote'])
-        if named == {chef} and short:
-            details['short_chef'] = short[0]
     return (details, metadata), None
-
-
-def _bilingual(tail, name):
-    match = re.match(r"\s*[’'”\"]?\s*[(（]([^()（）]{2,80})[)）]", tail)
-    if match:
-        alias = match[1].strip()
-        korean = r'[가-힣]'
-        latin = r"[A-Za-zÀ-ÖØ-öø-ÿĀ-ž][A-Za-zÀ-ÖØ-öø-ÿĀ-ž .’'\-]*"
-        if ((re.search(korean, name) and re.fullmatch(latin, alias))
-                or (re.search(latin, name) and re.fullmatch(r'[가-힣 ]+', alias))):
-            return alias
-    return None
-
-
-def _venue_suffix(clause, hit, venue):
-    tail = clause[hit.end():]
-    alias = _bilingual(tail, venue)
-    tail = re.sub(r"^\s*['’”\"]?\s*\([^()]{2,80}\)", '', tail, count=1) if alias else tail
-    return tail.lstrip("’'”\"」』"), alias
-
-
-def _korean_relation(clause, subject, employer, tail):
-    chef_first = subject.end() < employer.start()
-    gap = clause[min(subject.end(), employer.end()):max(subject.start(), employer.start())]
-    marks = " '’‘\"“”"
-    if chef_first:
-        if re.search(r'[가-힣]{2,4}\s+(?:셰프|쉐프|대표|사장)\s*[가는은이]', gap):
-            return None
-        # The named subject immediately governs this outlet and its predicate.
-        lead = rf"\s*(?:{TITLE})?(?:\s*\(사진\))?\s*[가는은이]\s*"
-        outlet = r"(?:[^,.!?;]{0,75}?[‘'\"]|(?:[^,.!?;]{0,38}?(?:식당|레스토랑|다이닝|부티크)\s+)?)"
-        if re.fullmatch(lead + outlet, gap) and re.match(rf'^[을를]\s*(?:문을 열었|개업했|오픈했|창업했)', tail):
-            return 'opening'
-        if re.fullmatch(lead, gap) and re.match(rf'^의\s*주방을\s*(?:{KO_WORK})', tail):
-            return 'current'
-        if re.fullmatch(r"\s*(?:호텔\s*신라\s*)?", gap) and re.match(TITLE, tail):
-            return 'current'
-        crew = r"(?:[·ㆍ]\s*[가-힣]{2,4}(?:\s*셰프)?)*"
-        # Adnominal leadership precedes the restaurant name, possibly with
-        # a city, hotel or culinary description between the verb and outlet.
-        if re.match(rf"^\s*{crew}{lead}\s*(?:이끄는|운영하는)\s+", gap):
-            return 'current'
-        if re.fullmatch(lead + outlet, gap) and re.match(rf'^[을를]\s*(?:{KO_WORK})', tail):
-            return 'current'
-        if re.match(rf"^\s*(?:{TITLE})?\s*(?:는|은)\s+", gap):
-            # Both named venues are objects of one shared leadership verb.
-            if re.match(r"^(?:과|와)\s+[^,.!?;]{1,60}[’'”\"]?[를을]\s*이끌고 있", tail):
-                return 'current'
-    else:
-        gap = gap.strip(marks)
-        gap = re.sub(r"^\([^()]+\)[’'”\"]?", "", gap).lstrip(marks)
-        after_chef = clause[subject.end():]
-        titled = re.match(rf'\s*{TITLE}', after_chef)
-        if re.fullmatch(r'출신\s*', gap):
-            return 'former'
-        if re.fullmatch(rf"의\s*(?:{TITLE}\s*)?", gap) and (titled or re.search(TITLE, gap)):
-            return 'current'
-        if re.fullmatch(rf"[를을]\s*(?:{KO_WORK})\s*(?:(?:미쉐린\s*\d스타\s*)?{TITLE}\s*)?", gap):
-            return 'current'
-        if re.fullmatch(rf"의\s*{TITLE}[를을]\s*(?:{KO_WORK})\s*.{{0,32}}?의\s*", gap) and titled:
-            return 'current'
-        if re.fullmatch(r"(?:과|와)\s+[^,.!?;]{1,60}?[’'”\"]?[를을]\s*이끄는\s*", gap) and titled:
-            return 'current'
-        if re.fullmatch(r'은\s*[가-힣]{2,4}[·ㆍ]\s*', gap) and re.match(
-                rf"^\s*{TITLE}[가는은이]\s*(?:{KO_WORK})\s*.{{0,15}}?(?:레스토랑|식당)", after_chef):
-            return 'current'
-        if re.fullmatch(r'[은는]\s*', gap) and re.match(
-                rf'\s*{TITLE}[가는은이]\s*(?:헤드|총괄|수석)\s*셰프로\s*있', after_chef):
-            return 'current'
-        if (re.match(r'^(?:에서|의\s*셰프로서?)\s*(?:\w+\s+){0,3}일하는\b', tail) and titled):
-            return 'current'
-    return None
-
-
-def _location(clause, employer, relation):
-    before, after = clause[:employer.start()], clause[employer.end():]
-    cities = set(site_publish.CITIES) | OTHER_CITIES
-    cities.update(re.findall(r'[가-힣]{2,5}시(?=에서|의|\s)', clause))
-    cities.update(label for label in re.findall(r"\b(?:in|at) ([A-Z][a-z]+(?: [A-Z][a-z]+)?)", after)
-                  if label not in COUNTRIES)
-    cities.update(re.findall(r'(?<![가-힣])(?:서울|광주|부산|인천|울산|대전|대구|뉴욕|도쿄)(?=에서|의|\s)', before))
-    # Only the venue modifier or an opening locative can supply geography.
-    def attached(label):
-        escaped = re.escape(label)
-        between = r"(?:\s+(?:한식당|식당|레스토랑|다이닝|restaurant|bistro|[‘'\"]))?\s*[‘'\"“]?"
-        return (re.search(r'(?<!\w)' + escaped + r'(?:의|에서)?' + between + '$', before, re.I)
-                or re.match(r"\s*[’'”\"]?[\s,]*(?:in\s+|[,（(]\s*)" + escaped + r'(?![\w-])', after, re.I)
-                or relation == 'opening' and re.search(r'(?<!\w)' + escaped + r'에서\s+[^.!?;]{0,55}$', before))
-    city = [value for value in sorted(cities) if attached(value)]
-    country = {code for label, code in COUNTRIES.items() if attached(label)}
-    return (city[0] if len(city) == 1 else None, next(iter(country)) if len(country) == 1 else None)
-
-
-def _endpoint_reason(chef, venue):
-    if not chef:
-        return 'no_chef'
-    if not venue:
-        return 'no_venue'
-    if not all(isinstance(s, str) and 2 <= len(s) <= 120 and s == s.strip()
-               and name_key(s) not in lineage.GENERIC_NAMES and any(c.isalpha() for c in s) for s in (chef, venue)):
-        return 'invalid_endpoint'
-    if name_key(chef) == name_key(venue):
-        return 'invalid_endpoint'
-    if INSTITUTION.search(venue):
-        return 'institution'
-    return None
-
-
-def _parse(entry, details):
-    quote, chef, venue = (entry[k] for k in ('quote', 'chef', 'restaurant'))
-    reason = 'no_clause'
-    subject_name = details.get('short_chef') or chef
-    lang = lineage.language(quote)
-    allowed = LABELS[entry['label']]
-    for clause in re.split(r'(?<=[.!?。！？;；])\s+|\n', quote):
-        subject, employer = lineage._literal(subject_name, clause), lineage._literal(venue, clause)
-        if not subject or not employer or (subject.start() and re.match('[가-힣]', clause[subject.start() - 1])):
-            continue
-        # A completed pop-up can precede a different, permanent opening.
-        work = re.sub(r'^.*?팝업을\s*마무리한\s+', '', clause, count=1) if allowed == ('opening',) else clause
-        if TEMPORARY.search(work):
-            reason = 'temporary'
-            continue
-        cues = lineage.signals(work, lang)
-        if any(cue['reject'].search(work) for cue in cues):
-            if reason != 'temporary':
-                reason = 'reject_cue'
-            continue
-        subject, employer = lineage._literal(subject_name, work), lineage._literal(venue, work)
-        if not subject or not employer:
-            continue
-        tail, venue_alias = _venue_suffix(work, employer, venue)
-        # Strip a local venue gloss for the G3 verb/particle binder, keeping the original quote.
-        binding = work[:employer.end()] + tail
-        chef_alias = _bilingual(work[subject.end():], chef)
-        if chef_alias:
-            binding = re.sub(r'([（(])' + re.escape(chef_alias) + r'[）)]', '', binding, count=1)
-        bs, be = lineage._literal(subject_name, binding), lineage._literal(venue, binding)
-        relation = next((rel for rel in allowed if bs and be
-                         and not (rel == 'current' and any(cue['former'].search(binding) for cue in cues))
-                         and lineage._binds(binding, cues, rel, bs, be, details.get('role_text'))), None)
-        if not relation and lang == 'ko':
-            relation = _korean_relation(work, subject, employer, tail.lstrip())
-        if relation not in allowed:
-            if reason == 'no_clause':
-                reason = 'no_relation'
-            continue
-        raw = {k: details.get(k) for k in ('role_text', 'from_text', 'to_text', 'mentor_text', 'previous_venue_text')}
-        if relation == 'training' and not raw.get('mentor_text'):
-            mentor = re.search(r'(?:under|with)\s+([A-Z][a-z]+(?:[- ]+[A-Z][a-z]+)+)\s+(?:at|in)\b', work)
-            if not mentor:
-                mentor = re.search(r'(?<![가-힣])([가-힣]{2,4})\s*(?:셰프|쉐프)\s*(?:를|을)?\s*사사', work)
-            if mentor:
-                raw['mentor_text'] = mentor[1]
-        dates = details.get('date_text')
-        if dates and dates in work:
-            if re.search(re.escape(dates) + r'\s*(?:까지|まで)', work):
-                raw['to_text'] = dates
-            else:
-                raw['from_text'] = dates
-        city, country = _location(work, employer, relation)
-        row = dict.fromkeys(('role_id', 'role_text', 'valid_from', 'valid_to', 'mentor_id', 'previous_branch_id'))
-        row.update(chef_text=chef, venue_text=venue, relation=relation, quote=quote,
-                   city=city, country_code=country, bilingual_venue=venue_alias,
-                   bilingual_name=chef_alias,
-                   restaurant_wording=bool(OUTLET.search(work)), contest=bool(CONTEST.search(work)))
-        lineage._fields(raw, work, row, subject, employer, cues)
-        return row, None
-    return None, reason
-
-
-def _spellings(name, alias=None):
-    base = re.sub(r'\s*\([^()]+\)$', '', name)
-    embedded = _bilingual(name[len(base):], base)
-    return list(dict.fromkeys(filter(None, (name, base, alias, embedded))))
 
 
 def _own(conn, kind, entity):
@@ -342,6 +192,10 @@ def _site_matches(seed, site, gaz, names):
     return matches
 
 
+def _chef_names(row):
+    return _spellings(row.get('resolved_chef_text') or row['chef_text'], row.get('bilingual_name'))
+
+
 def _branch(conn, seed, matches, row, names, gaz, support, now):
     redirect = identity.redirects(conn, 'branch')
     site, _ = site_projection._site_links(conn, seed, redirect)
@@ -368,17 +222,20 @@ def _branch(conn, seed, matches, row, names, gaz, support, now):
         # same-article naming, or an attested bilingual spelling can bind another source.
         same_venue = {name_key(n) for n in names} & {name_key(n) for n in _spellings(
             prev['venue_text'], prev.get('bilingual_venue'))}
+        bilingual_operator = (len(published) == 1 and (row.get('bilingual_venue') or prev.get('bilingual_venue'))
+                              and {name_key(n) for n in _chef_names(row)}.intersection(map(name_key, _chef_names(prev))))
         if same_venue and (row['publisher_group'] == prev['publisher_group']
                 or row['city'] and prev['city'] and name_key(row['city']) == name_key(prev['city'])
-                or row.get('bilingual_venue') and prev.get('bilingual_venue')
-                and name_key(row['bilingual_venue']) == name_key(prev['bilingual_venue'])):
+                or bilingual_operator):
             choices.add(bid)
     if len(choices) == 1 and (not mapped or choices <= mapped):
-        return next(iter(choices)), site
+        return next(iter(choices)), site, None
     # Seed names which have no branch mapping yet can anchor a new branch only
     # when they point to one holder. Contests need evidence about the outlet.
-    if published or len(matches) > 1 or (row['contest'] and not (matches or row['restaurant_wording'])):
-        return None, site
+    if published or len(matches) > 1:
+        return None, site, 'branch_unresolved'
+    if row['contest'] and not (matches or row['restaurant_wording']):
+        return None, site, 'contest'
     label = next(iter(matches.values()))[1]['name'] if matches else names[0]
     holder = next(iter(matches.values()))[1] if matches else {}
     existing = {identity.canonical(redirect, bid) for bid in identity.branch_candidates(conn, label, gaz)}
@@ -393,33 +250,71 @@ def _branch(conn, seed, matches, row, names, gaz, support, now):
             conn.execute('DELETE FROM career_branch_context WHERE branch_id=?', (branch,))
             _legacy_link(conn, branch, holder['id'], now)
             site[next(iter(matches.values()))[0]][branch].append(holder['id'])
-    return branch, site
+    return branch, site, None if branch else 'branch_unresolved'
 
 
-def _chef(conn, branch, row, gaz, supports, now):
-    names = _spellings(row['chef_text'], row.get('bilingual_name'))
+def _chef(conn, branch, row, gaz, supports, now, context):
+    name = row.get('resolved_chef_text') or row['chef_text']
+    names = _chef_names(row)
     redirects = identity.redirects(conn, 'chef')
     candidates = {identity.canonical(redirects, cid) for cid in identity.chef_candidates(conn, names, gaz)}
     keys = set().union(*(identity.candidate_keys(n) for n in names))
     previous = {identity.canonical(redirects, prior['chef_id']) for prior in supports.values()
                 if (prior['branch_id'] == branch or prior['canonical_url'] == row['canonical_url']) and keys.intersection(
-                    set().union(*(identity.candidate_keys(n) for n in _spellings(prior['chef_text'], prior.get('bilingual_name')))))}
+                    set().union(*(identity.candidate_keys(n) for n in _chef_names(prior))))}
     if len(previous) == 1 and not candidates - previous:
         return next(iter(previous))
     local = {identity.canonical(redirects, r[0]) for r in conn.execute(
         "SELECT chef_id FROM employment WHERE branch_id=? AND state<>'rejected'", (branch,))}
     if len(local & candidates) == 1:
         return next(iter(local & candidates))
+    # An attested affiliation to a curated bilingual chef can disambiguate an
+    # opening elsewhere. Limit the search to the same local source passage.
+    if context and candidates:
+        text, position = context
+        passage = text[max(0, position - 1800):position + len(row['quote']) + 190]
+        matched = set()
+        for candidate in candidates:
+            for chef_ko, chef_en, venue, venue_en in conn.execute("""
+                SELECT c.display_name,c.display_name_en,r.name,r.name_en
+                FROM chef c JOIN employment e USING(chef_id) JOIN branch b USING(branch_id)
+                JOIN restaurant r USING(restaurant_id)
+                WHERE c.chef_id=? AND e.state<>'rejected' AND c.display_name_en IS NOT NULL
+                """, (candidate,)):
+                if not {name_key(chef_ko), name_key(chef_en)}.intersection(map(name_key, names)):
+                    continue
+                # Guide pages can state the chef in a labeled restaurant header.
+                if venue_en and re.search(r'\b' + re.escape(venue_en)
+                                          + r'\b[^.!?]{0,100}\bOn the Pass\s+' + re.escape(chef_en)
+                                          + r'(?!\w)', passage, re.I):
+                    matched.add(candidate)
+                for start, end in _sentences(passage):
+                    clause = passage[start:end]
+                    if (start <= min(position, 1800) + len(row['quote']) and end >= min(position, 1800) - 250
+                            and any(_named_subject(clause, person) for person in (chef_ko, chef_en))) and any(
+                            any(_literals(outlet, clause)) for outlet in (venue, venue_en) if outlet):
+                        matched.add(candidate)
+        if len(matched) == 1:
+            return matched.pop()
     if len(candidates | previous) > 1:
         return None
-    exact = stable_id('chf', 'career', name_key(row['chef_text']), branch)
+    if len(candidates) == 1 and row.get('binding_receipt', {}).get('rule') == 'source_roster':
+        candidate = next(iter(candidates))
+        # Reuse a name-only registry entry when the approved roster supplies
+        # its first affiliation. Established identities still need local proof.
+        if conn.execute("""SELECT 1 FROM chef c WHERE c.chef_id=? AND c.display_name=? COLLATE NOCASE
+                AND NOT EXISTS (SELECT 1 FROM employment e WHERE e.chef_id=c.chef_id AND e.state<>'rejected')
+                AND NOT EXISTS (SELECT 1 FROM career_assertion a WHERE a.chef_id=c.chef_id)""",
+                        (candidate, name)).fetchone():
+            return candidate
+    exact = stable_id('chf', 'career', name_key(name), branch)
     if candidates == {exact} and conn.execute(
             "SELECT 1 FROM ai_promotion_identity WHERE kind='chef' AND entity_id=?", (exact,)).fetchone():
         return exact
     # The G3 resolver can also use a dated native stint to disambiguate.
     # Bilingual evidence is retained on this support. There is no need to
     # redirect another identity to publish it.
-    chef, plausible = identity.resolve_chef(conn, {**row, 'bilingual_name': None}, branch, gaz, row, None, now,
+    chef, plausible = identity.resolve_chef(conn, {**row, 'chef_text': name, 'bilingual_name': None}, branch, gaz, row, None, now,
                                             allow_redirect=False)
     if chef and not plausible:
         _own(conn, 'chef', chef)
@@ -477,27 +372,75 @@ def _eligibility(entry, denied, blocked):
         return 'invalid_annotation'
     if not isinstance(entry.get('label'), str) or entry['label'] not in LABELS:
         return 'unsupported_label'
-    if not site_publish.safe_url(entry.get('src')):
+    if not _safe_source_url(entry.get('src')):
         return 'unsafe_source'
     if not isinstance(entry.get('quote'), str) or not site_publish._public_quote(entry['quote']):
         return 'unsafe_quote'
-    return _endpoint_reason(entry.get('chef'), venue)
-
-
-def _blocked_name(names, blocked):
-    return any(name_key(name) in blocked for name in names)
+    return _endpoint_reason(entry.get('chef'), venue, entry['quote'])
 
 
 def _write_skips(conn, entries, reasons):
     conn.execute('DELETE FROM ai_promotion_skip')
-    conn.executemany('INSERT INTO ai_promotion_skip VALUES (?,?,?,?,?)', (
-        (i, _identifier(entry.get('review_id')), reasons[id(entry)], _identifier(entry.get('extraction_id')),
-         digest(name_key(entry['quote'])) if isinstance(entry.get('quote'), str) else None)
-        for i, entry in enumerate(entries)))
+    rows = []
+    for i, entry in enumerate(entries):
+        rid, xid, quote_key = _skip_fingerprint(entry)
+        rows.append((i, rid, reasons[id(entry)], xid, quote_key))
+    conn.executemany('INSERT INTO ai_promotion_skip VALUES (?,?,?,?,?)', rows)
+
+
+def _skip_fingerprint(entry):
+    quote = entry.get('quote')
+    return (_identifier(entry.get('review_id')), _identifier(entry.get('extraction_id')),
+            digest(name_key(quote)) if isinstance(quote, str) else None)
 
 
 def skip_histogram(conn):
     return dict(conn.execute('SELECT reason,COUNT(*) FROM ai_promotion_skip GROUP BY reason ORDER BY reason'))
+
+
+def _venue_tombstones(seed):
+    return {name_key(n) for tomb in seed.get(site_publish.TOMBSTONES, ())
+            for n in (*tomb.get('aliases', ()), tomb.get('creation_event', {}).get('name') or '')}
+
+
+def reconcile_withdrawal_skips(conn, previous, seed, raw_dir, log):
+    """Reindex unchanged skip decisions after rollback shifts the backlog."""
+    known = defaultdict(deque)
+    old = previous.get('ai_reviewed_unlinked', ())
+    for i, rid, reason, xid, quote_key in conn.execute('SELECT * FROM ai_promotion_skip ORDER BY unlinked_index'):
+        if i < len(old) and _skip_fingerprint(old[i]) == (rid, xid, quote_key):
+            known[json.dumps(old[i], sort_keys=True)].append(reason)
+    denied = tombstones(log) | set(seed.get(KEY, {}).get('withdrawn', ()))
+    blocked = _venue_tombstones(seed)
+    entries = seed.get('ai_reviewed_unlinked', ())
+    reasons = {}
+    for entry in entries:
+        prior = known.get(json.dumps(entry, sort_keys=True))
+        reason = _eligibility(entry, denied, blocked)
+        if reason != 'tombstoned' and prior:
+            reason = prior.popleft()
+        if not reason:
+            original, reason = _original(conn, entry, raw_dir)
+            if original:
+                _, reason = _parse(entry, original[0])
+        # An otherwise valid quote can return to the backlog when rollback
+        # removes the only proof that supported its holder.
+        reasons[id(entry)] = reason or 'branch_unresolved'
+    _write_skips(conn, entries, reasons)
+
+
+def _retained_binding(old, entry, details, source):
+    receipt = old.get('binding_receipt')
+    if (not receipt or source['snapshot_checked'] or not old.get('snapshot_checked')
+            or not old.get('content_hash') or not details.get('evidence_id')
+            or receipt['subject_id'] != entry['extraction_id'] or receipt['evidence_id'] != details['evidence_id']
+            or receipt.get('evidence_hash') != details.get('evidence_hash')
+            or receipt.get('chef_text') != details.get('chef_text')
+            or any(old.get(key) != entry[annotation] for key, annotation in (
+                ('quote', 'quote'), ('src', 'src'), ('chef_text', 'chef'), ('venue_text', 'restaurant')))
+            or old['relation'] not in LABELS[entry['label']]):
+        return None
+    return {**old, 'contest': bool(CONTEST.search(entry['quote'])), 'restaurant_wording': bool(OUTLET.search(entry['quote']))}
 
 
 def _promote(conn, seed, raw_dir, log, now):
@@ -509,8 +452,7 @@ def _promote(conn, seed, raw_dir, log, now):
     gaz = Gazetteer(conn)
     entries = sorted(annotations(seed), key=lambda entry: entry[1] is None)
     touched, reasons, seen = {}, {}, set()
-    blocked = {name_key(n) for tomb in seed.get(site_publish.TOMBSTONES, ())
-               for n in (*tomb.get('aliases', ()), tomb.get('creation_event', {}).get('name') or '')}
+    blocked = _venue_tombstones(seed)
     invalid = set(supports) - {_identifier(entry.get('review_id')) for _, _, entry in entries}
     invalid.update(set(supports) & denied)
     for _, before, entry in entries:
@@ -535,31 +477,35 @@ def _promote(conn, seed, raw_dir, log, now):
             invalid.add(rid)
             continue
         details, source = original
+        old = supports.get(rid, {})
         row, reason = _parse(entry, details)
+        if reason in ('no_original', 'no_relation', 'no_clause', 'chef_unresolved'):
+            row = _retained_binding(old, entry, details, source)
+            if row:
+                reason = None
         if reason:
             reasons[id(entry)] = reason
             invalid.add(rid)
             continue
         row.update(source, src=entry['src'], assertion_id=rid, ai_reviewed=True)
         # Text retention must not lower a previously checked proof's quality.
-        old = supports.get(rid)
         if old and old['quote'] == row['quote'] and old['src'] == row['src'] and not row['snapshot_checked']:
             for key in ('independent_eligible', 'content_hash', 'body_fingerprint', 'publisher_group', 'origin_group', 'snapshot_checked'):
                 row[key] = old[key]
         names = _spellings(row['venue_text'], row.get('bilingual_venue'))
-        if _blocked_name(names, blocked):
-            reasons[id(entry)] = 'tombstoned'
+        excluded = ('tombstoned' if _blocked_name(names, blocked) else
+                    _venue_reason(row['venue_text'], row.get('bilingual_venue')))
+        if excluded:
+            reasons[id(entry)] = excluded
             invalid.add(rid)
             continue
         site = Site(seed)
         matches = _site_matches(seed, site, gaz, names)
         conn.execute('SAVEPOINT promote_review')
-        branch, by_kind = _branch(conn, seed, matches, row, names, gaz, supports, now)
-        chef = _chef(conn, branch, row, gaz, supports, now) if branch else None
+        branch, by_kind, branch_reason = _branch(conn, seed, matches, row, names, gaz, supports, now)
+        chef = _chef(conn, branch, row, gaz, supports, now, details.get('context')) if branch else None
         if not chef:
-            reasons[id(entry)] = ('chef_unresolved' if branch else
-                                  'contest' if row['contest'] and not (matches or row['restaurant_wording'])
-                                  else 'branch_unresolved')
+            reasons[id(entry)] = branch_reason or 'chef_unresolved'
             conn.execute('ROLLBACK TO promote_review')
             conn.execute('RELEASE promote_review')
             continue
@@ -599,16 +545,18 @@ def _promote(conn, seed, raw_dir, log, now):
                                           'chef_unresolved', 'branch_unresolved'}:
                 continue
             venue = entry.get('restaurant')
-            if (not isinstance(venue, str) or INSTITUTION.search(venue)
-                    or not site_publish.safe_url(entry.get('src'))
+            if (not isinstance(venue, str) or _venue_reason(venue)
+                    or not _safe_source_url(entry.get('src'))
                     or not isinstance(entry.get('quote'), str) or not site_publish._public_quote(entry['quote'])
-                    or TEMPORARY.search(entry['quote'])
-                    or any(cue['reject'].search(entry['quote'])
-                           for cue in lineage.signals(entry['quote'], lineage.language(entry['quote'])))):
+                    or _reject_reason(entry['quote'], lineage.language(entry['quote']))):
                 continue
             matches = _site_matches(seed, site, gaz, _spellings(venue))
             if len(matches) == 1:
-                _move(seed, None, next(iter(matches.values()))[1], entry)
+                _, source_reason = _original(conn, entry, raw_dir)
+                if not source_reason:
+                    _move(seed, None, next(iter(matches.values()))[1], entry)
+                elif source_reason == 'tombstoned':
+                    reasons[id(entry)] = source_reason
     _write_skips(conn, seed.get('ai_reviewed_unlinked', ()), reasons)
 
 
@@ -695,7 +643,7 @@ def refresh_holder_fields(seed, snapshot, branches):
 def _legacy_pair(seed, snapshot, branch, row):
     from kg_collect.targets import chef_names
 
-    names = set().union(*(identity.candidate_keys(n) for n in _spellings(row['chef_text'], row.get('bilingual_name'))))
+    names = set().union(*(identity.candidate_keys(n) for n in _chef_names(row)))
     site = snapshot['site']
     restaurants = set(site['restaurants'].get(branch, ()))
     kitchens = set(site['kitchens'].get(branch, ()))
@@ -814,6 +762,8 @@ def withdraw(seed, ids, now, *, tombstone=True):
     _, _, _, paths, _, reviewed = site_projection.graph(seed, snapshot)
     native = {r['branch_id'] for r in snapshot['careers']}
     restaurants = reviewed | native | {b for dest, source, _ in paths for b in (dest, source)}
+    # The snapshot can predate branches created earlier in the same pass.
+    restaurants.update(identity.canonical(snapshot['branch_redirects'], row['branch_id']) for row in supports.values())
     kitchens = {source for _, source, _ in paths}
     retained = {'restaurants': restaurants, 'kitchens': kitchens}
     for sid, owner in list(state.get('holders', {}).items()):

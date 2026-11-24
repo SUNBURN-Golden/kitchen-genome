@@ -52,8 +52,7 @@ def _replay(conn, seed, raw_dir, log_path, now):
     assert sum(skips.values()) == len(seed.get('ai_reviewed_unlinked', ())) == len(rows)
     for i, (row, entry) in enumerate(zip(rows, seed.get('ai_reviewed_unlinked', ()))):
         assert (row['unlinked_index'], row['review_id'], row['extraction_id'], row['quote_key']) == (
-            i, promotion._identifier(entry.get('review_id')), promotion._identifier(entry.get('extraction_id')),
-            promotion.digest(name_key(entry['quote'])) if isinstance(entry.get('quote'), str) else None)
+            i, *promotion._skip_fingerprint(entry))
     return promoted, skips, rows
 
 
@@ -84,32 +83,38 @@ def run(conn, seed_path, log_path, ledger_path, raw_dir, now):
             for edge in holder.get('career_affiliations', ()):
                 for evidence in edge['evidence']:
                     if evidence.get('badge') == promotion.BADGE:
-                        key = (holder['id'], edge['chef_id'], evidence['src'], evidence['quote'])
+                        key = (holder['id'], edge['chef_id'], edge['relation'], evidence['src'], evidence['quote'])
                         public[key] = edge
     covered = set()
     linked = set()
-    guard_hits = set(guarded & gained)
+    guard_hits = guarded & gained
+    guard_hits.update(rid for rid in gained if _guarded(supports[rid]['venue_text'], supports[rid].get('bilingual_venue')))
+    holders = {row['id']: row for kind in ('restaurants', 'kitchens') for row in seed[kind]}
     for lid, link in sorted(links.items()):
+        if lid not in prior.get('links', {}) and (row := holders.get(link['holder'])):
+            if _guarded(row['name'], row.get('name_en') or row.get('en')):
+                guard_hits.update(link['reviews'])
         if not (review_ids := set(link['reviews']) & gained):
             continue
         linked.update(review_ids)
         for rid in review_ids:
             row = supports[rid]
-            if (row['holder'], row['chef_id'], row['src'], row['quote']) in public:
+            if (row['holder'], row['chef_id'], row['relation'], row['src'], row['quote']) in public:
                 covered.add(rid)
-            if _guarded(row['venue_text'], row.get('bilingual_venue')):
-                guard_hits.add(rid)
         row = supports[min(review_ids)]
-        _print(dict(link=lid, chef=row['chef_text'], venue=row['venue_text'], relation=link['relation'],
+        _print(dict(link=lid, chef=row.get('resolved_chef_text') or row['chef_text'], chef_id=link['chef'],
+                    venue=row['venue_text'], branch_id=link['branch'], relation=link['relation'],
                     gate=link['gate'], review_ids=sorted(review_ids),
                     sources=sorted({url for src in link['sources'] if (url := _diagnostic_url(src))})))
     remains = {e.get('review_id') for e in seed.get('ai_reviewed_unlinked', ())}
     events = promotion.events(seed, ledger)
+    annotation_only = {e['review_id'] for e in before} - remains - gained
     one = dict(seed_sha256=hashlib.sha256(seed_bytes).hexdigest(), unlinked_before=len(before),
                unlinked_after=len(skip_rows), cohort_size=len(cohort), cohort_matched_originals=checked_originals,
                cohort_published=len(covered & cohort), new_supports=len(gained),
-               annotation_only_moves=len({e['review_id'] for e in before} - remains - gained),
+               annotation_only_moves=len(annotation_only), cohort_annotation_only=len(cohort & annotation_only),
                support_only=len(gained - covered), support_without_link=len(gained - linked),
+               withdrawn_supports=len(prior.get('supports', {}).keys() - supports.keys()),
                promoted=promoted, new_link_records=len(links.keys() - prior.get('links', {}).keys()),
                upgrades=sum(l.get('gate') == 'verified' and prior.get('links', {}).get(k, {}).get('gate') == 'checking'
                             for k, l in links.items()),
@@ -125,7 +130,9 @@ def run(conn, seed_path, log_path, ledger_path, raw_dir, now):
     second_events = promotion.events(seed, ledger)
     stable = (first_bytes == seed_path.read_bytes() and audit_bytes == log_path.read_bytes()
               and skip_rows == second_rows and skips == second_skips)
-    _print(dict(second_pass=dict(promoted=second, pending_publication_events=len(second_events), unchanged=stable)))
+    _print(dict(second_pass=dict(promoted=second, pending_publication_events=len(second_events), unchanged=stable,
+                                 new_supports=len(seed.get(promotion.KEY, {}).get('supports', {}).keys() - supports.keys()),
+                                 new_link_records=len(seed.get(promotion.KEY, {}).get('links', {}).keys() - links.keys()))))
     return 0 if stable and not second and not second_events and not guard_hits else 1
 
 

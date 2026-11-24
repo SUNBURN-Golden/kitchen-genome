@@ -102,6 +102,8 @@ def main(argv=None):
                 site_projection.refresh(conn, seed)
                 if seed.get(promotion.KEY, {}).get('supports'):
                     promotion.record_links(seed, now)
+                promotion.reconcile_withdrawal_skips(
+                    conn, previous, seed, os.path.join(os.path.dirname(os.path.abspath(a.db)), 'raw'), a.log)
         if seed != previous:
             atomic_json(a.seed, seed)
         if removed or pending:

@@ -247,7 +247,9 @@ def publish(seed, site, entry):
     for kind, holder, item in promotion.annotations(seed):
         if item.get('review_id') == entry['review_id']:
             return f'{kind[:-1]}:{holder["id"]}' if kind else 'unlinked', False
-    m = site.match({'restaurant_text': entry['restaurant'], 'chef_text': entry['chef']})
+    venue = entry['restaurant']
+    m = None if venue and promotion._venue_reason(venue) else site.match({
+        'restaurant_text': venue, 'chef_text': entry['chef']})
     if m:
         target = f'{m[0]}:{m[1]["id"]}'
         lst = m[1].setdefault('ai_reviewed', [])
@@ -284,8 +286,9 @@ def _finish_delivery(conn, seed, seed_path, log_path, raw_dir, stats, now):
     if seed != prior:
         atomic_json(seed_path, seed)
     if pending:
-        targets = {entry.get('review_id'): f'{kind[:-1]}:{holder["id"]}' if kind else 'unlinked'
-                   for kind, holder, entry in promotion.annotations(seed)}
+        targets = {rid: f'{kind[:-1]}:{holder["id"]}' if kind else 'unlinked'
+                   for kind, holder, entry in promotion.annotations(seed)
+                   if (rid := promotion._identifier(entry.get('review_id')))}
     for rec, review_id in pending:
         if (rec['action'], review_id) not in audit and review_id not in denied:
             if rec['action'] == 'approve' and review_id in targets:
