@@ -4,7 +4,7 @@
  2 incremental_fetch         IMPLEMENTED for local crawler outputs (crawler/vault.json, crawler/out/ig-*.json); network fetchers: STUB (injected, absent = recorded as stubbed)
  3 change_detection          IMPLEMENTED  new / modified per canonical URL via content hash
  4 extraction                IMPLEMENTED  rule extractor over vault facts + IG findings; DeepSeek bounded extraction (candidates only, asserted_by=ai_inference)
- 5 entity_resolution         IMPLEMENTED  exact name/alias + homonym scope; never auto-creates chefs; fuzzy matching: STUB
+ 5 entity_resolution         IMPLEMENTED  exact/alias/name-key + stored Michelin/Wikipedia spellings; strips role parentheticals; refuses non-person names; never auto-creates chefs; fuzzy matching: STUB
  6 evidence_verification     IMPLEMENTED  status from tier + independent trusted hosts; social/search leads never exceed 'unverified'
  7 state_history_update      IMPLEMENTED  status events, chef moves (close+add), mentorship (source-asserted only), conflicts
  8 service_output_recompute  IMPLEMENTED  current_employment + branch status as-of today (service_output table)
@@ -17,6 +17,7 @@ import os
 import sys
 
 from kg_ai import pending
+from . import chef_resolve
 from . import collect_bridge
 from . import registry as reg_mod
 from .claims import independent_sources, add_evidence, create_claim, host_of, link_evidence, open_conflict, queue_review, RANK
@@ -281,19 +282,18 @@ def _branch_for_target(conn, target_id):
     return [x['branch_id'] for x in r]
 
 
-def _chefs_for(conn, name, origin):
-    rows = conn.execute("""SELECT DISTINCT c.chef_id, c.disambiguator FROM chef c LEFT JOIN alias a ON a.entity_type='chef' AND a.entity_id=c.chef_id
-                           WHERE c.display_name=? OR a.alias=?""", (name, name)).fetchall()
-    if origin and rows:
-        scoped = [r for r in rows if r['disambiguator'] == origin]
-        if not scoped:
-            return None            # same name exists but under a different origin: possible homonym, never guess
-        rows = scoped
-    return [r['chef_id'] for r in rows]
+def _chefs_for(conn, name, origin, index=None):
+    result = chef_resolve.match_chef(conn, name, origin, index=index)
+    if result.status == 'homonym':
+        return None            # same name exists but under a different origin, or two people share it: never guess
+    if result.status == 'matched':
+        return [result.chef_id]
+    return []
 
 
 def entity_resolution(ctx: StageContext) -> StageResult:
-    res = needs = 0
+    res = needs = rejected = 0
+    index = chef_resolve.ChefIndex(ctx.conn)
     for c in ctx.conn.execute("SELECT * FROM candidate_fact WHERE resolution='pending' ORDER BY rowid").fetchall():
         p = json.loads(c['payload_json'])
         if pending(p) or pending(c):
@@ -315,7 +315,13 @@ def entity_resolution(ctx: StageContext) -> StageResult:
             branch_id = bs[0] if len(bs) == 1 else None
             reason = None if branch_id else 'unknown_destination'
         if not reason and p.get('chef_name'):
-            cs = _chefs_for(ctx.conn, p['chef_name'], p.get('origin_kitchen'))
+            classified = chef_resolve.classify_chef_name(p['chef_name'])
+            if classified.status == 'reject':
+                ctx.conn.execute("UPDATE candidate_fact SET resolution='rejected' WHERE candidate_id=?", (c['candidate_id'],))
+                chef_resolve._reject_candidate_targets(ctx.conn, (p.get('chef_name') or '').strip(), utcnow(), classified.reason or 'generic_name')
+                rejected += 1
+                continue
+            cs = _chefs_for(ctx.conn, p['chef_name'], p.get('origin_kitchen'), index=index)
             if cs is None:
                 reason = 'homonym'
             elif len(cs) == 1:
@@ -331,8 +337,10 @@ def entity_resolution(ctx: StageContext) -> StageResult:
         else:
             ctx.conn.execute("UPDATE candidate_fact SET resolution='resolved', resolved_chef_id=?, resolved_branch_id=? WHERE candidate_id=?", (chef_id, branch_id, c['candidate_id']))
             res += 1
+    backlog = chef_resolve.resolve_open_unknown_chefs(ctx.conn)
     ctx.conn.commit()
-    return StageResult({'resolved': res, 'needs_review': needs})
+    return StageResult({'resolved': res, 'needs_review': needs, 'rejected_non_person': rejected,
+                        'backlog_resolved': backlog['resolved'], 'backlog_dismissed': backlog['dismissed']})
 
 
 # ───────────── 6. evidence verification ─────────────
