@@ -1,4 +1,5 @@
 """Turn retained AI approvals into quote-backed G3 career evidence."""
+from collections import Counter
 import json
 from pathlib import Path
 import re
@@ -63,10 +64,12 @@ def _original(conn, entry, raw_dir):
     details, text, links, tier = {}, None, (), None
     if record:
         approval = json.loads(record['payload_json'] or '{}').get('ai_review', {})
-        if record['state'] != 'resolved' or approval.get('decision') != 'approve' or approval.get('rolled_back'):
-            return None
+        if approval.get('rolled_back'):
+            return None, 'tombstoned'
+        if record['state'] != 'resolved' or approval.get('decision') != 'approve':
+            return None, 'no_original'
         if entry.get('extraction_id') != record['subject_id']:
-            return None
+            return None, 'no_original'
         if record['subject_type'] == 'candidate_fact':
             original = conn.execute("""SELECT c.payload_json,c.evidence_json,d.raw_ref,d.canonical_url,d.published_at
                 FROM candidate_fact c LEFT JOIN document d USING(document_id) WHERE candidate_id=?""", (record['subject_id'],)).fetchone()
@@ -106,17 +109,17 @@ def _original(conn, entry, raw_dir):
                         pass
         if details and (details.get('quote') != entry['quote'] or details.get('canonical_url') != entry['src']
                     or details.get('label', entry['label']) != entry['label']):
-            return None
+            return None, 'no_original'
     if text is not None:
         from privacy_filter import sanitize_before_store
         text = unicodedata.normalize('NFC', sanitize_before_store(text)[0] or '')
         if entry['quote'] not in text:
-            return None
+            return None, 'no_original'
     doc = SimpleNamespace(url=entry['src'], canonical_url=entry['src'], links=links,
                           published_at=details.get('published_at') or entry.get('date'))
     metadata = lineage._source(conn, doc, text or entry['quote'], tier)
     if metadata is None:
-        return None
+        return None, 'unsafe_source'
     if text is None:
         metadata['independent_eligible'] = 0
     metadata['body_fingerprint'] = site_projection.retained_fingerprint(
@@ -129,7 +132,7 @@ def _original(conn, entry, raw_dir):
         short = re.search(r'(?<![가-힣])' + chef[0] + r'\s+(?:셰프|쉐프)', entry['quote'])
         if named == {chef} and short:
             details['short_chef'] = short[0]
-    return details, metadata
+    return (details, metadata), None
 
 
 def _bilingual(tail, name):
@@ -223,13 +226,24 @@ def _location(clause, employer, relation):
     return (city[0] if len(city) == 1 else None, next(iter(country)) if len(country) == 1 else None)
 
 
-def _parse(entry, details):
-    quote, chef, venue = (entry.get(k) for k in ('quote', 'chef', 'restaurant'))
+def _endpoint_reason(chef, venue):
+    if not chef:
+        return 'no_chef'
+    if not venue:
+        return 'no_venue'
     if not all(isinstance(s, str) and 2 <= len(s) <= 120 and s == s.strip()
                and name_key(s) not in lineage.GENERIC_NAMES and any(c.isalpha() for c in s) for s in (chef, venue)):
-        return None
-    if name_key(chef) == name_key(venue) or INSTITUTION.search(venue):
-        return None
+        return 'invalid_endpoint'
+    if name_key(chef) == name_key(venue):
+        return 'invalid_endpoint'
+    if INSTITUTION.search(venue):
+        return 'institution'
+    return None
+
+
+def _parse(entry, details):
+    quote, chef, venue = (entry[k] for k in ('quote', 'chef', 'restaurant'))
+    reason = 'no_clause'
     subject_name = details.get('short_chef') or chef
     lang = lineage.language(quote)
     allowed = LABELS[entry['label']]
@@ -240,9 +254,12 @@ def _parse(entry, details):
         # A completed pop-up can precede a different, permanent opening.
         work = re.sub(r'^.*?팝업을\s*마무리한\s+', '', clause, count=1) if allowed == ('opening',) else clause
         if TEMPORARY.search(work):
+            reason = 'temporary'
             continue
         cues = lineage.signals(work, lang)
         if any(cue['reject'].search(work) for cue in cues):
+            if reason != 'temporary':
+                reason = 'reject_cue'
             continue
         subject, employer = lineage._literal(subject_name, work), lineage._literal(venue, work)
         if not subject or not employer:
@@ -260,6 +277,8 @@ def _parse(entry, details):
         if not relation and lang == 'ko':
             relation = _korean_relation(work, subject, employer, tail.lstrip())
         if relation not in allowed:
+            if reason == 'no_clause':
+                reason = 'no_relation'
             continue
         raw = {k: details.get(k) for k in ('role_text', 'from_text', 'to_text', 'mentor_text', 'previous_venue_text')}
         if relation == 'training' and not raw.get('mentor_text'):
@@ -281,8 +300,8 @@ def _parse(entry, details):
                    bilingual_name=chef_alias,
                    restaurant_wording=bool(OUTLET.search(work)), contest=bool(CONTEST.search(work)))
         lineage._fields(raw, work, row, subject, employer, cues)
-        return row
-    return None
+        return row, None
+    return None, reason
 
 
 def _spellings(name, alias=None):
@@ -444,6 +463,43 @@ def _move(seed, before, holder, entry):
             before.pop('ai_reviewed', None)
 
 
+def _identifier(value):
+    return value if isinstance(value, str) and value and value == value.strip() else None
+
+
+def _eligibility(entry, denied, blocked):
+    rid = _identifier(entry.get('review_id'))
+    venue = entry.get('restaurant')
+    if rid in denied or isinstance(venue, str) and _blocked_name(_spellings(venue), blocked):
+        return 'tombstoned'
+    if (not rid or not _identifier(entry.get('extraction_id'))
+            or entry.get('badge') != BADGE or entry.get('provenance') != 'ai_reviewed'):
+        return 'invalid_annotation'
+    if not isinstance(entry.get('label'), str) or entry['label'] not in LABELS:
+        return 'unsupported_label'
+    if not site_publish.safe_url(entry.get('src')):
+        return 'unsafe_source'
+    if not isinstance(entry.get('quote'), str) or not site_publish._public_quote(entry['quote']):
+        return 'unsafe_quote'
+    return _endpoint_reason(entry.get('chef'), venue)
+
+
+def _blocked_name(names, blocked):
+    return any(name_key(name) in blocked for name in names)
+
+
+def _write_skips(conn, entries, reasons):
+    conn.execute('DELETE FROM ai_promotion_skip')
+    conn.executemany('INSERT INTO ai_promotion_skip VALUES (?,?,?,?,?)', (
+        (i, _identifier(entry.get('review_id')), reasons[id(entry)], _identifier(entry.get('extraction_id')),
+         digest(name_key(entry['quote'])) if isinstance(entry.get('quote'), str) else None)
+        for i, entry in enumerate(entries)))
+
+
+def skip_histogram(conn):
+    return dict(conn.execute('SELECT reason,COUNT(*) FROM ai_promotion_skip GROUP BY reason ORDER BY reason'))
+
+
 def _promote(conn, seed, raw_dir, log, now):
     from .review import Site
 
@@ -452,25 +508,36 @@ def _promote(conn, seed, raw_dir, log, now):
     denied = tombstones(log) | set(state.get('withdrawn', ()))
     gaz = Gazetteer(conn)
     entries = sorted(annotations(seed), key=lambda entry: entry[1] is None)
-    touched = {}
-    invalid = set(supports) - {entry.get('review_id') for _, _, entry in entries}
+    touched, reasons, seen = {}, {}, set()
+    blocked = {name_key(n) for tomb in seed.get(site_publish.TOMBSTONES, ())
+               for n in (*tomb.get('aliases', ()), tomb.get('creation_event', {}).get('name') or '')}
+    invalid = set(supports) - {_identifier(entry.get('review_id')) for _, _, entry in entries}
     invalid.update(set(supports) & denied)
     for _, before, entry in entries:
-        rid = entry.get('review_id')
-        if rid in touched:
-            _move(seed, before, touched[rid], entry)
+        rid = _identifier(entry.get('review_id'))
+        reason = _eligibility(entry, denied, blocked)
+        if reason != 'tombstoned' and rid in seen:
+            dest, first = touched.get(rid, (None, None))
+            if dest is not None and first == entry:
+                _move(seed, before, dest, entry)
+            else:
+                reasons[id(entry)] = 'duplicate_review_id'
             continue
-        if (not rid or rid in denied or entry.get('label') not in LABELS
-                or entry.get('badge') != BADGE or entry.get('provenance') != 'ai_reviewed'
-                or not site_publish.safe_url(entry.get('src')) or not site_publish._public_quote(entry.get('quote'))):
+        if rid:
+            seen.add(rid)
+        if reason:
+            reasons[id(entry)] = reason
+            invalid.add(rid)
             continue
-        original = _original(conn, entry, raw_dir)
-        if original is None:
+        original, reason = _original(conn, entry, raw_dir)
+        if reason:
+            reasons[id(entry)] = reason
             invalid.add(rid)
             continue
         details, source = original
-        row = _parse(entry, details)
-        if not row:
+        row, reason = _parse(entry, details)
+        if reason:
+            reasons[id(entry)] = reason
             invalid.add(rid)
             continue
         row.update(source, src=entry['src'], assertion_id=rid, ai_reviewed=True)
@@ -480,9 +547,9 @@ def _promote(conn, seed, raw_dir, log, now):
             for key in ('independent_eligible', 'content_hash', 'body_fingerprint', 'publisher_group', 'origin_group', 'snapshot_checked'):
                 row[key] = old[key]
         names = _spellings(row['venue_text'], row.get('bilingual_venue'))
-        if {name_key(n) for n in names} & {
-                name_key(n) for tomb in seed.get(site_publish.TOMBSTONES, ())
-                for n in (*tomb.get('aliases', ()), tomb.get('creation_event', {}).get('name') or '')}:
+        if _blocked_name(names, blocked):
+            reasons[id(entry)] = 'tombstoned'
+            invalid.add(rid)
             continue
         site = Site(seed)
         matches = _site_matches(seed, site, gaz, names)
@@ -490,6 +557,9 @@ def _promote(conn, seed, raw_dir, log, now):
         branch, by_kind = _branch(conn, seed, matches, row, names, gaz, supports, now)
         chef = _chef(conn, branch, row, gaz, supports, now) if branch else None
         if not chef:
+            reasons[id(entry)] = ('chef_unresolved' if branch else
+                                  'contest' if row['contest'] and not (matches or row['restaurant_wording'])
+                                  else 'branch_unresolved')
             conn.execute('ROLLBACK TO promote_review')
             conn.execute('RELEASE promote_review')
             continue
@@ -511,26 +581,35 @@ def _promote(conn, seed, raw_dir, log, now):
             dest = _new_holder(conn, seed, state, 'restaurants', branch, now, alias=row.get('bilingual_venue'))
         row['holder'] = dest['id']
         supports[rid] = row
-        touched[rid] = dest
+        touched[rid] = dest, entry
+        reasons[id(entry)] = 'branch_unresolved'  # A later withdrawal can remove the holder.
         _move(seed, before, dest, entry)
     if supports:
         state['supports'] = supports
         seed[KEY] = state
-    if not state:
-        return
     discarded = (invalid - touched.keys()) & supports.keys()
     if discarded:
         withdraw(seed, discarded, now, tombstone=False)
         prune_identities(conn, seed)
-    # A venue can resolve an annotation independently of whether its claim
-    # qualifies for a graph edge. Chef-only matches cannot move it.
-    site = Site(seed)
-    for entry in list(seed.get('ai_reviewed_unlinked', ())):
-        if not entry.get('restaurant') or entry.get('review_id') in denied:
-            continue
-        matches = _site_matches(seed, site, gaz, _spellings(entry['restaurant']))
-        if len(matches) == 1:
-            _move(seed, None, next(iter(matches.values()))[1], entry)
+    # Venue-only attachment can deliver an eligible annotation without a graph edge.
+    if state:
+        site = Site(seed)
+        for entry in list(seed.get('ai_reviewed_unlinked', ())):
+            if reasons[id(entry)] not in {'unsupported_label', 'no_chef', 'no_clause', 'no_relation',
+                                          'chef_unresolved', 'branch_unresolved'}:
+                continue
+            venue = entry.get('restaurant')
+            if (not isinstance(venue, str) or INSTITUTION.search(venue)
+                    or not site_publish.safe_url(entry.get('src'))
+                    or not isinstance(entry.get('quote'), str) or not site_publish._public_quote(entry['quote'])
+                    or TEMPORARY.search(entry['quote'])
+                    or any(cue['reject'].search(entry['quote'])
+                           for cue in lineage.signals(entry['quote'], lineage.language(entry['quote'])))):
+                continue
+            matches = _site_matches(seed, site, gaz, _spellings(venue))
+            if len(matches) == 1:
+                _move(seed, None, next(iter(matches.values()))[1], entry)
+    _write_skips(conn, seed.get('ai_reviewed_unlinked', ()), reasons)
 
 
 def prune_identities(conn, seed):

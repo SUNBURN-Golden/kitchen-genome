@@ -277,9 +277,9 @@ def _finish_delivery(conn, seed, seed_path, log_path, raw_dir, stats, now):
             rec['published'] = added or (rec['action'], review_id) not in audit
             stats['published'] += int(added)
         pending.append((rec, review_id))
-    if any(True for _ in promotion.annotations(seed)) or seed.get(promotion.KEY):
-        with write(conn):
-            stats['promoted'] += promotion.backfill(conn, seed, raw_dir, log_path, now)
+    with write(conn):
+        stats['promoted'] += promotion.backfill(conn, seed, raw_dir, log_path, now)
+        stats['promotion_skips'] = promotion.skip_histogram(conn)
     stats['unlinked_remaining'] = len(seed.get('ai_reviewed_unlinked', ()))
     if seed != prior:
         atomic_json(seed_path, seed)
@@ -522,9 +522,10 @@ def main(argv=None):
     raw_dir = a.raw_dir or os.path.join(os.path.dirname(os.path.abspath(a.db)), 'raw')
     with seed_lock(a.seed):
         s = review(conn, a.seed, a.log, raw_dir, limit=a.limit)
-    print('AI_REVIEW approved=%s rejected=%s published=%s prechecked=%s calls=%s remaining=%s stopped=%s cost=%s reason=%s skipped_no_targets=%s skipped_balance=%s unreviewed_candidate_findings=%s bundle_approved=%s bundle_rejected=%s bundle_remaining=%s promoted=%s unlinked_remaining=%s' % (
+    print('AI_REVIEW approved=%s rejected=%s published=%s prechecked=%s calls=%s remaining=%s stopped=%s cost=%s reason=%s skipped_no_targets=%s skipped_balance=%s unreviewed_candidate_findings=%s bundle_approved=%s bundle_rejected=%s bundle_remaining=%s promoted=%s unlinked_remaining=%s promotion_skips=%s' % (
         s['approved'], s['rejected'], s['published'], s['prechecked_rejects'], s['calls'], s.get('remaining'), s['stopped'] or 'none', s.get('cost_used', 0), s.get('reason','none'), s['skipped_no_targets'], s['skipped_balance'], s.get('unreviewed_candidate_findings',0),
-        s.get('bundle_approved', 0), s.get('bundle_rejected', 0), s.get('bundle_remaining', 0), s.get('promoted', 0), s.get('unlinked_remaining', 0)))
+        s.get('bundle_approved', 0), s.get('bundle_rejected', 0), s.get('bundle_remaining', 0), s.get('promoted', 0), s.get('unlinked_remaining', 0),
+        json.dumps(s.get('promotion_skips', {}), sort_keys=True, separators=(',', ':'))))
     return 0
 
 
