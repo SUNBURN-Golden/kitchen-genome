@@ -409,12 +409,20 @@ def _short_subject(chef, quote, context):
     return (next(iter(full)) if len(full) == 1 else None), (short[0] if short else chef)
 
 
-def _named_subject(text, name):
+def _named_subject(text, name, *, subject_only=False):
     for hit in _literals(name, text):
         before, after = text[:hit.start()], text[hit.end():]
+        if subject_only and re.match(r'\s*[를을에게께의와과랑도만보다처럼같이]', after):
+            continue
+        # An object, benefactive or genitive marker means this person is acted
+        # upon or merely associated, not the subject of the clause. Keep the
+        # broader reading for identity disambiguation (photo credits and
+        # headings are useful there), but not for attribution.
+        titled = (re.match(rf'\s*{TITLE}(?!\s*[를을에게께의와과랑도만보다처럼같이])', after)
+                  if subject_only else re.match(rf'\s*{TITLE}', after))
         if (re.match(rf'\s*(?:{TITLE}|부부)?\s*[가는은이](?=\s|$)', after)
                 or re.search(rf'(?:{TITLE}|\bchef)\s*$', before, re.I)
-                or re.match(rf'\s*{TITLE}', after)
+                or titled
                 or not before.strip() and re.match(r"\s+(?:opened|returned|runs|was|is|trained|worked)\b", after, re.I)):
             return True
     return False
@@ -453,7 +461,7 @@ def _different_actor(lead, name):
 
 
 def _unique_antecedent(text, name):
-    if not _named_subject(text, name) or _competing_subject(text, name):
+    if not _named_subject(text, name, subject_only=True) or _competing_subject(text, name):
         return False
     korean = re.findall(rf'(?<!\w)([가-힣]{{2,4}})\s+{TITLE}', text)
     english = re.findall(r'\b[Cc]hef\s+([A-Z][a-z]+\s+[A-Z][a-z]+)\b', text)
@@ -469,11 +477,11 @@ def _source_attribution(entry, details, name, venue, *, venue_subject):
         return False
     if EVENT_ROSTER.search(prefix + suffix) or _reject_reason(prefix + suffix, lineage.language(prefix + suffix)):
         return False
-    if _named_subject(prefix, name):
+    if _named_subject(prefix, name, subject_only=True):
         return True
     # An adjacent sentence may explicitly identify the chef who presented
     # this outlet even when the restaurant is subject of the quoted sentence.
-    if (_named_subject(following, name)
+    if (_named_subject(following, name, subject_only=True)
             and re.search(r'(?:선보인|개업한|오픈한)\s*(?:레스토랑|식당)(?:이다|입니다)|'
                           r'\b(?:opened|founded|launched) (?:it|the restaurant)\b', following, re.I)):
         return True

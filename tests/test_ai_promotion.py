@@ -245,6 +245,43 @@ def test_standalone_candidate_uses_source_body(world):
     assert len(jobs(read(w))[0]['evidence']) == 1
 
 
+def test_standalone_candidate_uses_nested_locator_span(world):
+    # Candidate evidence stores the extraction position inside evidence.locator.
+    # A repeated article excerpt still selects the approved occurrence.
+    w = world
+    source, url = 'promotion-fixture-press', 'https://newsis.com/repeated'
+    w.conn.execute("INSERT INTO source(source_id,name,kind,host,tier,created_at) VALUES (?,?,'press',?,'press',?)",
+                   (source, 'Fixture press', 'newsis.com', NOW))
+    prefix, quote = '민하늘 셰프가 파리에서 돌아왔다. ', '정연을 열었다.'
+    body = prefix + quote + '\n' + prefix + quote
+    raw = w.raw.root / 'document-repeated.json'
+    raw.write_text(json.dumps({'title': '주방 기사', 'body': body}, ensure_ascii=False))
+    w.conn.execute("""INSERT INTO document(document_id,source_id,url,canonical_url,content_hash,fetched_at,raw_ref)
+                   VALUES (?,?,?,?,?,?,?)""", ('repeated', source, url, url, 'repeated', NOW, str(raw)))
+    # _original() reads the retained title and body as one text.
+    second = ('주방 기사\n' + body).rindex(quote)
+    w.conn.execute("""INSERT INTO candidate_fact(candidate_id,idempotency_key,document_id,source_id,fact_type,
+                     payload_json,evidence_json,extractor,asserted_by,created_at)
+                     VALUES (?,?,?,?,'opening',?,?,'fixture','ai_inference',?)""",
+                   ('repeated', 'repeated', 'repeated', source,
+                    json.dumps({'label': 'opening', 'chef_text': '민하늘', 'restaurant_text': '정연'}),
+                    json.dumps({'quote': quote, 'source_url': url,
+                                'locator': {'span_start': second, 'span_end': second + len(quote)}}), NOW))
+    review_id = claims.queue_review(w.conn, 'ai_inference', 'candidate_fact', 'repeated', {},
+                                    dedupe_key='repeated')
+    review._close(w.conn, review_id, 'approve', 'fixture approval', None, NOW)
+    seed = read(w)
+    seed.setdefault('ai_reviewed_unlinked', []).append(dict(
+        label='opening', quote=quote, src=url, chef='민하늘', restaurant='정연', badge='AI 검토',
+        provenance='ai_reviewed', review_id=review_id, extraction_id='repeated'))
+    w.seed_path.write_text(json.dumps(seed, ensure_ascii=False))
+    w.conn.commit()
+    stats = run(w)
+    assert stats['promoted'] == 1, stats
+    support = read(w)[promotion.KEY]['supports'][review_id]
+    assert support['binding_receipt']['rule'] == 'source_attribution'
+
+
 def test_named_hotel_outlet_and_bilingual_chef_alias(world):
     w = world
     quote = '민하늘(Min Ha-neul) 셰프는 별빛호텔 한식당 미토우에서 근무하고 있다.'
@@ -543,6 +580,11 @@ def test_coverage_source_short_name(world, chef, venue, quote, prefix, expected)
     ('최가람 셰프는 정연을 열었다.', 'chef_unresolved'),
     ('민하늘 셰프는 정연을 열었다. 최가람 셰프는 정연을 열었다.', 'no_original'),
     ('사진: 정연을 열었다. 민하늘 셰프가 사진을 소개했다.', 'chef_unresolved'),
+    # An object or benefactive marker does not make the chef the actor.
+    ('민하늘 셰프를 만난 뒤 정연을 열었다.', 'chef_unresolved'),
+    ('민하늘 셰프에게 인사를 건넨 뒤 정연을 열었다.', 'chef_unresolved'),
+    ('민하늘 셰프의 가게에서 정연을 열었다.', 'chef_unresolved'),
+    ('셰프 민하늘을 만난 뒤 정연을 열었다.', 'chef_unresolved'),
 ])
 def test_coverage_exact_source_attribution(world, body, expected):
     finding(world, '정연을 열었다.', venue='정연', label='opening', article_text=body, approve=True)
@@ -718,6 +760,22 @@ def test_coverage_unbound_employment_annotation_still_attaches_to_its_venue(worl
     assert [e['review_id'] for e in holder['ai_reviewed']] == [rid]
 
 
+def test_coverage_unbound_opening_without_venue_stays_unlinked(world):
+    # A chef-only quote has no venue literal and must not become a venue news
+    # card even when its restaurant field matches one holder.
+    w = world
+    finding(w, FIRST, approve=True)
+    assert run(w)['promoted'] == 1
+    quote = '민하늘 셰프가 총괄하고 있다.'
+    _, rid, _ = finding(w, quote, chef='민하늘', venue='기존식당', label='career', approve=True)
+    stats = run(w)
+    assert stats['promotion_skips'] == {'no_clause': 1}
+    seed = read(w)
+    assert [e['review_id'] for e in seed['ai_reviewed_unlinked']] == [rid]
+    holder = next(r for r in seed['restaurants'] if r['name'] == '기존식당')
+    assert holder.get('ai_reviewed') is None
+
+
 def test_coverage_award_title_is_not_restaurant_wording(world):
     # F5: an award title that contains 다이닝 must not satisfy the CONTEST gate.
     w = world
@@ -730,6 +788,25 @@ def test_coverage_award_title_is_not_restaurant_wording(world):
     stats = run(w)
     assert (stats['promoted'], stats['promotion_skips']) == (0, {'contest': 1})
     assert not any(holder['name'] == '솔루나' for holder in read(w)['restaurants'])
+
+
+def test_coverage_retained_binding_ignores_award_title_wording():
+    # The retained-proof path must use the same award-stripped outlet wording
+    # as a fresh parse; otherwise the CONTEST gate can be satisfied by a prize
+    # name after raw retention expires.
+    quote = ("'파인 다이닝 러버스상(Fine Dining Lovers Award)'은 일본 도쿄 솔루나(SOLUNA)의 "
+             '아이 이치노세(Ai Ichinose) 셰프가 각각 수상했다.')
+    old = {'relation': 'current', 'quote': quote, 'src': 'https://segye.com/newsView/1',
+           'chef_text': '아이 이치노세', 'venue_text': '솔루나', 'snapshot_checked': True,
+           'content_hash': 'hash',
+           'binding_receipt': {'subject_id': 'xid', 'evidence_id': 'ev', 'evidence_hash': 'hash',
+                               'chef_text': '아이 이치노세'}}
+    entry = {'extraction_id': 'xid', 'quote': quote, 'src': 'https://segye.com/newsView/1',
+             'chef': '아이 이치노세', 'restaurant': '솔루나', 'label': 'career'}
+    row = promotion._retained_binding(old, entry, {'evidence_id': 'ev', 'evidence_hash': 'hash',
+                                                   'chef_text': '아이 이치노세'},
+                                      {'snapshot_checked': False})
+    assert row['contest'] is True and row['restaurant_wording'] is False
 
 
 def test_coverage_couple_attribution_needs_an_operating_verb():

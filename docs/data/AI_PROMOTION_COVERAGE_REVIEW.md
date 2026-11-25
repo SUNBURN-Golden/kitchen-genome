@@ -256,4 +256,21 @@ All findings are addressed on `feat/ai-promote-unlinked-coverage`; the build res
 
 Replayed result: unlinked 225 → 194; 40 supports; 18 new stints; 24 new AI link records;
 `withdrawn_supports: 0`; second pass unchanged. `TZ=UTC python3 -m pytest tests` →
-**892 passed, 1 skipped, 317 subtests passed**.
+**899 passed, 1 skipped, 317 subtests passed**.
+
+## Final re-review (2026-11-25)
+
+A second review of the fixed diff found no false links in the replay, but hardened five paths:
+
+| Finding | Resolution |
+| --- | --- |
+| Elided attribution treated `X 셰프를` / `셰프에게` / `셰프의` as a subject, so a chef merely met, greeted or associated could inherit the next sentence's opening. | Attribution now requires a subject reading; identity disambiguation keeps the broader title/photo-credit reading. Added positive and negative source-attribution tests, including title-first `셰프 X를`. |
+| Standalone `candidate_fact` evidence stores `span_start/span_end` under `evidence_json.locator`, so a repeated article excerpt could not select the approved occurrence. | Candidate spans are read from the nested locator, with a top-level fallback; added a repeated-excerpt candidate test. |
+| A `no_clause` opening/career annotation (chef-only quote, venue absent) was still moved onto a matching venue holder and rendered as an AI card. | The venue-only sweep now keeps `no_clause` opening/career annotations in the backlog, matching F4. Added a regression test. |
+| `_retained_binding()` recomputed `restaurant_wording` with a raw outlet regex, letting an award title satisfy the CONTEST gate after raw retention expired. | The retained path uses the same award-stripped, near-venue outlet wording as a fresh parse. Added a regression test. |
+| The sweep's later source re-check left a stale skip reason, and the replay tool assumed every review ID was a hashable string. | The sweep records the earlier source gate; the replay filters malformed or missing IDs instead of crashing. |
+
+The final replay is unchanged: unlinked 225 → 194, cohort **24 / 117**, 40 new supports,
+18 new stints, 24 new AI link records, 0 guard-list hits, `withdrawn_supports: 0`, and a
+byte-stable second pass. `TZ=UTC python3 -m pytest tests` → **899 passed, 1 skipped,
+317 subtests passed**.

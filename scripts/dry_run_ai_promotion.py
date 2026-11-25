@@ -33,6 +33,10 @@ def _guarded(venue, alias=None):
     return bool(venue and GUARDED_VENUES.intersection(map(name_key, promotion._spellings(venue, alias))))
 
 
+def _rid(entry):
+    return promotion._identifier(entry.get('review_id'))
+
+
 def _diagnostic_url(url):
     if not safe_url(url):
         return None
@@ -60,9 +64,10 @@ def run(conn, seed_path, log_path, ledger_path, raw_dir, now):
     seed_bytes, audit_bytes = seed_path.read_bytes(), log_path.read_bytes()
     seed, ledger = json.loads(seed_bytes), json.loads(ledger_path.read_bytes())
     before = deepcopy(seed.get('ai_reviewed_unlinked', ()))
-    cohort = {e['review_id'] for e in before if e.get('label') in promotion.LABELS
-              and e.get('chef') and e.get('restaurant') and e.get('review_id')}
-    guarded = {e['review_id'] for _, _, e in promotion.annotations(seed) if _guarded(e.get('restaurant'))}
+    cohort = {rid for e in before if (rid := _rid(e)) and e.get('label') in promotion.LABELS
+              and e.get('chef') and e.get('restaurant')}
+    guarded = {rid for _, _, e in promotion.annotations(seed)
+               if (rid := _rid(e)) and _guarded(e.get('restaurant'))}
     prior = deepcopy(seed.get(promotion.KEY, {}))
     checked_originals = 0
     for entry in before:
@@ -106,9 +111,9 @@ def run(conn, seed_path, log_path, ledger_path, raw_dir, now):
                     venue=row['venue_text'], branch_id=link['branch'], relation=link['relation'],
                     gate=link['gate'], review_ids=sorted(review_ids),
                     sources=sorted({url for src in link['sources'] if (url := _diagnostic_url(src))})))
-    remains = {e.get('review_id') for e in seed.get('ai_reviewed_unlinked', ())}
+    remains = {_rid(e) for e in seed.get('ai_reviewed_unlinked', ())} - {None}
     events = promotion.events(seed, ledger)
-    annotation_only = {e['review_id'] for e in before} - remains - gained
+    annotation_only = {_rid(e) for e in before} - {None} - remains - gained
     one = dict(seed_sha256=hashlib.sha256(seed_bytes).hexdigest(), unlinked_before=len(before),
                unlinked_after=len(skip_rows), cohort_size=len(cohort), cohort_matched_originals=checked_originals,
                cohort_published=len(covered & cohort), new_supports=len(gained),

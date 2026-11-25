@@ -1,5 +1,5 @@
 """Turn retained AI approvals into quote-backed G3 career evidence."""
-from collections import Counter, defaultdict, deque
+from collections import defaultdict, deque
 import json
 from pathlib import Path
 import re
@@ -14,8 +14,9 @@ from kg_collect.targets import Gazetteer, name_key
 from kg_daemon.db import stable_id, utcnow
 
 from .promotion_binding import (
-    CONTEST, LABELS, OUTLET, _blocked_name, _endpoint_reason, _literals, _named_subject,
-    _parse, _reject_reason, _sentences, _spellings, _venue_reason, _venue_tail_reason,
+    CONTEST, LABELS, _blocked_name, _endpoint_reason, _literals, _named_subject,
+    _outlet_wording, _parse, _reject_reason, _sentences, _spellings, _venue_reason,
+    _venue_tail_reason,
 )
 
 KEY = 'ai_promotion'
@@ -138,12 +139,14 @@ def _original(conn, entry, raw_dir):
                 if original['enabled'] == 0 or original['collect_permission'] in ('manual_only', 'prohibited'):
                     return None, 'unsafe_source'
                 tier = original['tier']
-                locator = json.loads(original['evidence_json'])
-                details = {**json.loads(original['payload_json']), 'quote': locator.get('quote'),
-                           'canonical_url': original['canonical_url'] or locator.get('source_url'),
+                evidence = json.loads(original['evidence_json'])
+                locator = evidence.get('locator') or {}
+                details = {**json.loads(original['payload_json']), 'quote': evidence.get('quote'),
+                           'canonical_url': original['canonical_url'] or evidence.get('source_url'),
                            'published_at': original['published_at'], 'evidence_id': original['document_id'],
                            'evidence_hash': original['content_hash'],
-                           'span_start': locator.get('span_start'), 'span_end': locator.get('span_end')}
+                           'span_start': locator.get('span_start', evidence.get('span_start')),
+                           'span_end': locator.get('span_end', evidence.get('span_end'))}
                 if original['raw_ref']:
                     try:
                         path = Path(original['raw_ref'])
@@ -481,7 +484,8 @@ def _retained_binding(old, entry, details, source):
                 ('quote', 'quote'), ('src', 'src'), ('chef_text', 'chef'), ('venue_text', 'restaurant')))
             or old['relation'] not in LABELS[entry['label']]):
         return None
-    return {**old, 'contest': bool(CONTEST.search(entry['quote'])), 'restaurant_wording': bool(OUTLET.search(entry['quote']))}
+    return {**old, 'contest': bool(CONTEST.search(entry['quote'])),
+            'restaurant_wording': _outlet_wording(entry['quote'], None)}
 
 
 def _promote(conn, seed, raw_dir, log, now):
@@ -587,8 +591,9 @@ def _promote(conn, seed, raw_dir, log, now):
                               'chef_unresolved', 'branch_unresolved'}:
                 continue
             # A tentative or unbound opening/career sentence is not evidence
-            # that this chef runs the venue; keep it in the backlog.
-            if reason == 'no_relation' and entry.get('label') in ('opening', 'career'):
+            # that this chef runs the venue; keep it in the backlog, including
+            # a quote that never names the venue at all.
+            if reason in ('no_relation', 'no_clause') and entry.get('label') in ('opening', 'career'):
                 continue
             venue = entry.get('restaurant')
             if (not isinstance(venue, str) or _venue_reason(venue)
@@ -602,6 +607,10 @@ def _promote(conn, seed, raw_dir, log, now):
                 if not source_reason:
                     _move(seed, None, next(iter(matches.values()))[1], entry)
                 elif source_reason == 'tombstoned':
+                    reasons[id(entry)] = source_reason
+                elif reason not in ('unsupported_label', 'no_chef', 'no_venue'):
+                    # A later source rejection is an earlier failing gate than
+                    # the binding issue already recorded for this entry.
                     reasons[id(entry)] = source_reason
     _write_skips(conn, seed.get('ai_reviewed_unlinked', ()), reasons)
 

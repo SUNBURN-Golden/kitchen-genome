@@ -41,7 +41,7 @@ Both Korean SEOK excerpts support one Paris restaurant and the same curated chef
 
 The final backlog histogram was `{"chef_unresolved":4,"contest":7,"institution":27,"invalid_endpoint":5,"no_chef":6,"no_clause":4,"no_relation":8,"no_venue":12,"temporary":33,"unsafe_source":3,"unsupported_label":85}`.
 
-`TZ=UTC python3 -m pytest tests` finished with **892 passed, 1 skipped, 317 subtests passed**. To reproduce the replay with a read-only service DB, run `python3 scripts/dry_run_ai_promotion.py --db /workspace/kitchen-genome/data_store/kg_service.db --now 2026-11-25T00:00:00Z`. The replay prints each affected chef, venue and stint alongside its review IDs, publication status and source URLs.
+A final re-review hardened the new paths without changing the replay result: attribution now rejects object/benefactive/genitive markers on an elided predicate, candidate evidence spans are read from `evidence.locator`, a `no_clause` opening/career annotation stays out of the venue-only sweep, the retained-binding path strips award titles from `restaurant_wording`, and the sweep refreshes a stale skip reason when its source re-check fails. `TZ=UTC python3 -m pytest tests` finished with **899 passed, 1 skipped, 317 subtests passed**. To reproduce the replay with a read-only service DB, run `python3 scripts/dry_run_ai_promotion.py --db /workspace/kitchen-genome/data_store/kg_service.db --now 2026-11-25T00:00:00Z`. The replay prints each affected chef, venue and stint alongside its review IDs, publication status and source URLs.
 
 ## What the November 24 seed establishes
 
