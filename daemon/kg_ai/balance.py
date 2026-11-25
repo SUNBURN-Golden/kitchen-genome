@@ -58,18 +58,26 @@ class BalanceGate:
         self.transport, self.clock = transport, clock
         self.valid_until = 0
         self.reason = None
+        self.reason_until = 0
 
     def check(self, key):
         if not key:
             return 'missing_key'
         if self.reason:
-            return self.reason
+            # A failed probe is a snapshot, not a verdict: re-probe after the TTL so one
+            # transient timeout (or a top-up) does not pin the whole process to the backup.
+            # balance_low stays latched on purpose; only an unavailable probe expires.
+            if self.reason == 'balance_low' or self.clock() < self.reason_until:
+                return self.reason
+            self.reason = None
         if self.clock() < self.valid_until:
             return None
         try:
             self.reason = parse_balance(*self.transport(key)) if self.transport else 'balance_unavailable'
         except Exception:
             self.reason = 'balance_unavailable'
-        if not self.reason:
+        if self.reason:
+            self.reason_until = self.clock() + BALANCE_TTL_SEC
+        else:
             self.valid_until = self.clock() + BALANCE_TTL_SEC
         return self.reason

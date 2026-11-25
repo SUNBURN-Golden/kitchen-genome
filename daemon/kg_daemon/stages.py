@@ -416,6 +416,13 @@ def state_history_update(ctx: StageContext) -> StageResult:
             queue_review(ctx.conn, 'unknown_chef', 'candidate_fact', c['candidate_id'], {'fact_type': ft, 'payload': p}, dedupe_key=f'unknown_chef:{c["candidate_id"]}')
             held += 1
             continue
+        if ft in ('employment', 'chef_move') and not c['resolved_branch_id']:
+            # employment needs a branch (or employer_label) by CHECK constraint; a source that names a restaurant we could not
+            # resolve to a branch (2026-11-25: 'mosu' target_id, branch NULL) would raise IntegrityError every run. Review it instead.
+            ctx.conn.execute("UPDATE candidate_fact SET resolution='needs_review' WHERE candidate_id=?", (c['candidate_id'],))
+            queue_review(ctx.conn, 'unknown_branch', 'candidate_fact', c['candidate_id'], {'fact_type': ft, 'payload': p}, dedupe_key=f'unknown_branch:{c["candidate_id"]}')
+            held += 1
+            continue
         if ft in ('closure', 'opening', 'relocation', 'pause'):
             claim = _apply_status_event(ctx, c, p, {'closure': 'close', 'opening': 'open', 'relocation': 'move', 'pause': 'pause'}[ft])
         elif ft in ('menu', 'collab'):
