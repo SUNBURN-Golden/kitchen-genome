@@ -396,3 +396,53 @@ def test_qwen_only_reviews_without_deepseek_credentials(env, monkeypatch):
     assert stats['approved'] == 1 and stats['reason'] == 'none'
     assert tuple(conn.execute('SELECT provider,model FROM ai_request').fetchone()) == ('qwen', 'qwen-fixture-model')
     assert SECRET not in log.read_text()
+
+
+def test_exhausted_backup_returns_to_healthy_primary(conn):
+    """A dead backup (quota_exhausted) must not pause AI while the primary is healthy."""
+    calls = {'ds': 0, 'qw': 0}
+    def deepseek(payload, key):
+        calls['ds'] += 1
+        return (503, b'') if calls['ds'] == 1 else response({'ok': True})
+    def qwen(payload, key):
+        calls['qw'] += 1
+        return 429, b'{"error":{"code":"insufficient_quota"}}'
+    client = fallback_client(conn, deepseek, qwen)
+    # item 1: primary blip -> backup quota_exhausted; that item is skipped (no replay) ...
+    with pytest.raises(DeepSeekError, match='task_previously_rejected'):
+        client.call('task', 'JSON', {'n': 1}, lambda o: o)
+    # ... but AI stays enabled on the primary and the backup is retired for the run.
+    assert client.backup_dead == 'quota_exhausted' and client.status == 'enabled' and client.stopped is None
+    for n in (2, 3, 4, 5, 6):
+        assert client.call('task', 'JSON', {'n': n}, lambda o: o) == {'ok': True}
+        assert client.last_meta['provider'] == 'deepseek'
+    assert calls['qw'] == 1
+
+
+def test_exhausted_backup_with_dead_primary_still_pauses(conn):
+    def lowbal(key):
+        return wallet('0')
+    client = fallback_client(conn, lambda p, k: (503, b''), lambda p, k: (429, b'insufficient_quota'),
+                             balance_transport=lowbal)
+    with pytest.raises(DeepSeekError):
+        client.call('task', 'JSON', {'n': 1}, lambda o: o)
+    assert client.stopped == 'balance_low' and client.status == 'paused'
+
+
+def test_primary_paused_by_transient_balance_probe_recovers(conn):
+    now = [0]
+    seq = iter([(0, b'')])
+    from tests_balance_fake import healthy_balance as hb
+    def balance(key):
+        try:
+            return next(seq)
+        except StopIteration:
+            return hb(key)
+    client = Client(Budget(meter(conn)), key='ds-key', transport=lambda p, k: response({'ok': True}),
+                    balance_transport=balance, clock=lambda: now[0],
+                    fallback_key=SECRET, fallback_transport=lambda p, k: response({'ok': 'qwen'}))
+    client.call('t', 'JSON', {'n': 1}, lambda o: o)
+    assert client.last_meta['provider'] == 'qwen' and client.primary_paused == 'balance_unavailable'
+    now[0] = 100
+    client.call('t', 'JSON', {'n': 2}, lambda o: o)
+    assert client.last_meta['provider'] == 'deepseek' and client.primary_paused is None

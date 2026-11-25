@@ -523,3 +523,20 @@ def test_chef_fact_without_resolved_chef_goes_back_to_review_instead_of_crashing
     assert c.execute('SELECT resolution FROM candidate_fact WHERE candidate_id=?', (cid,)).fetchone()[0] == 'needs_review'
     assert counts(c)['employment'] == emp_before
     assert c.execute("SELECT COUNT(*) FROM failure_queue WHERE state='open'").fetchone()[0] == 0
+
+
+def test_employment_without_resolved_branch_goes_to_review_instead_of_crashing(world):
+    # 2026-11-25: employment candidate (chef resolved, branch NULL, source named an unresolved restaurant) hit
+    # employment CHECK(branch_id IS NOT NULL OR employer_label IS NOT NULL) -> IntegrityError x3 -> stage failed.
+    c, env, _ = world
+    assert daemon(c, env).run()['status'] == 'succeeded'
+    cid, chef = c.execute("SELECT candidate_id, resolved_chef_id FROM candidate_fact WHERE resolved_chef_id IS NOT NULL ORDER BY rowid LIMIT 1").fetchone()
+    c.execute("UPDATE candidate_fact SET fact_type='employment', resolution='resolved', verification='unverified', resolved_branch_id=NULL, applied_claim_id=NULL, "
+              "payload_json='{\"current\": false, \"past\": true, \"role_text\": \"셰프\"}' WHERE candidate_id=?", (cid,))
+    emp_before = counts(c)['employment']
+    rep = daemon(c, env).run(resume=False)
+    assert rep['status'] == 'succeeded'
+    assert c.execute('SELECT resolution FROM candidate_fact WHERE candidate_id=?', (cid,)).fetchone()[0] == 'needs_review'
+    assert c.execute("SELECT COUNT(*) FROM review_queue WHERE reason='unknown_branch' AND subject_id=?", (cid,)).fetchone()[0] == 1
+    assert counts(c)['employment'] == emp_before
+    assert c.execute("SELECT COUNT(*) FROM failure_queue WHERE state='open'").fetchone()[0] == 0

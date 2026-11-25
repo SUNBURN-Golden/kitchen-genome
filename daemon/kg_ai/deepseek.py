@@ -39,6 +39,12 @@ FALLBACK_CODES = (
 # Backup slot provider. 'qwen' (token plan HTTP) or 'grok' (logged-in cursor-agent CLI).
 # 준태님 2026-11-24: Grok while Qwen's plan is exhausted (resets 12/12 01:00 KST).
 BACKUPS = ('qwen', 'grok')
+# A backup answering with one of these is dead for the rest of the run (plan exhausted / bad
+# credentials): stop routing to it and return to the primary instead of pausing all AI.
+BACKUP_DEAD_CODES = ('quota_exhausted', 'auth_failed')
+# Primary pauses that are snapshots; the primary is probed again after PRIMARY_REPROBE_SEC.
+PRIMARY_TRANSIENT = ('balance_unavailable', 'transport_unknown', 'provider_failed', 'rate_limited')
+PRIMARY_REPROBE_SEC = 60
 # Definite HTTP rejections the provider does not bill (429 throttle/quota, 401, 404).
 # A reservation left 'unknown' with one of these errors is safe to retry in a later
 # run; anything else (timeouts, lost responses) stays replay-forbidden.
@@ -210,6 +216,8 @@ class Client:
         self.budget, self.transport, self.stopped = budget, transport, None
         self._schema_rejections = 0
         self.primary_paused = None
+        self.backup_dead = None
+        self._reprobe_at = 0
         self._previous_fallback_worthy = False
         self.last_meta = {}
         self.balance = BalanceGate(balance_transport if balance_transport is not None else (http_balance if transport is http_transport else None), clock)
@@ -241,7 +249,7 @@ class Client:
 
     @property
     def fallback_available(self):
-        return bool(self.fallback_key and self.fallback_transport)
+        return bool(self.fallback_key and self.fallback_transport) and not self.backup_dead
 
     @property
     def _fallback_stop(self):
@@ -323,6 +331,12 @@ class Client:
             raise DeepSeekError('input_limit')
         self.use_task(task)
         backup = self.fallback_provider
+        if (self.primary_paused in PRIMARY_TRANSIENT and self.key and self.fallback_available
+                and self.balance.clock() >= self._reprobe_at):
+            # Give the primary another chance instead of staying on the backup all run.
+            self._reprobe_at = self.balance.clock() + PRIMARY_REPROBE_SEC
+            self.primary_paused = None
+            self.stopped = None
         provider = backup if (self.primary_paused or not self.key) and self.fallback_available else 'deepseek'
         if self.stopped:
             if not (self.fallback_available and self._fallback_stop):
@@ -331,7 +345,7 @@ class Client:
             self.stopped = None
             provider = backup
         if provider == backup:
-            return self._call(task, instruction, data, validate, max_tokens=max_tokens, provider=provider, list_key=list_key)
+            return self._backup_call(task, instruction, data, validate, max_tokens, list_key)
         try:
             return self._call(task, instruction, data, validate, max_tokens=max_tokens, provider='deepseek', list_key=list_key)
         except DeepSeekError as exc:
@@ -339,8 +353,34 @@ class Client:
             if self._should_fallback(code, task, instruction, data, max_tokens):
                 self.primary_paused = self.primary_paused or code
                 self.stopped = None
-                return self._call(task, instruction, data, validate, max_tokens=max_tokens, provider=backup, list_key=list_key)
+                return self._backup_call(task, instruction, data, validate, max_tokens, list_key)
             raise
+
+    def _backup_call(self, task, instruction, data, validate, max_tokens, list_key):
+        if not self._reprobe_at:
+            self._reprobe_at = self.balance.clock() + PRIMARY_REPROBE_SEC
+        try:
+            return self._call(task, instruction, data, validate, max_tokens=max_tokens, provider=self.fallback_provider, list_key=list_key)
+        except DeepSeekError as exc:
+            code = failure_code(stored_error(exc))
+            if code not in BACKUP_DEAD_CODES or not self.key:
+                raise
+            # Backup is exhausted: disable it for this run and go back to the primary.
+            # If the primary is genuinely unavailable (e.g. balance_low) that call raises
+            # and pauses AI with the primary's own reason.
+            self.backup_dead = code
+            self.primary_paused = None
+            self.stopped = None
+            self.balance.reason = None
+            try:
+                return self._call(task, instruction, data, validate, max_tokens=max_tokens, provider='deepseek', list_key=list_key)
+            except DeepSeekError as again:
+                if str(again) == 'previous_attempt_unknown_or_failed':
+                    # This item's primary attempt already failed and cannot be replayed; skip
+                    # the item only, the primary stays usable for the rest of the queue.
+                    self.stopped = None
+                    raise DeepSeekError('task_previously_rejected') from None
+                raise
 
     def _call(self, task, instruction, data, validate, *, max_tokens, provider, list_key=None):
         if provider == 'deepseek' and not self.key:
