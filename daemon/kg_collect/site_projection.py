@@ -420,7 +420,7 @@ def graph(seed, snapshot):
     reviewed = [row for row in reviewed if consistent(row)]
     for row in reviewed:
         person = people[row['chef_id']]
-        for value in (row['chef_text'], row.get('bilingual_name')):
+        for value in (row.get('resolved_chef_text') or row['chef_text'], row.get('bilingual_name')):
             if value and not person.get('display_name_en') and value.isascii():
                 person['display_name_en'] = value
             if value and not person.get('name_ko') and any('가' <= ch <= '힣' for ch in value):

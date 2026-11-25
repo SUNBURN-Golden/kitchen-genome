@@ -201,4 +201,4 @@ def test_main_summary_without_bundle_stats(monkeypatch, tmp_path, capsys):
     assert rv.main(['--db', str(tmp_path / 'x.db'), '--seed', str(tmp_path / 'seed.json')]) == 0
     summary = capsys.readouterr().out
     assert summary.startswith('AI_REVIEW ')
-    assert 'promoted=0 unlinked_remaining=0' in summary
+    assert 'promoted=0 unlinked_remaining=0 promotion_skips={}' in summary
