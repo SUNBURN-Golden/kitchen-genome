@@ -62,6 +62,7 @@ def _official(conn) -> dict:
 # USD per million input, output and cached-input tokens. Qwen uses the G1 design
 # estimate for the Token Plan route. Other routes are unpriced until configured.
 RATE_VERSION = 'global-genome-2026-11-20'
+_UNBILLED_SQL = ','.join("'%s'" % c for c in ('rate_limited', 'quota_exhausted', 'auth_failed', 'model_unavailable'))  # kg_ai.deepseek.UNBILLED_REJECTIONS
 MODEL_RATES = {('qwen', 'qwen4-max-preview'): (1.50, 4.50, 1.50)}
 
 
@@ -160,18 +161,22 @@ def daily_summary(conn, *, now=None, rule_path=GOLD_SYNTH, heldout_path=None, se
     models = []
     for r in conn.execute("""WITH attribution AS (
           SELECT *, COALESCE(provider,CASE WHEN model LIKE 'qwen%' THEN 'qwen'
-             WHEN model LIKE 'deepseek%' THEN 'deepseek' ELSE 'unknown' END) AS route
+             WHEN model LIKE 'deepseek%' THEN 'deepseek' ELSE 'unknown' END) AS route,
+             -- a definite provider rejection (e.g. plan quota exhausted) is not billed and carries no usage
+             (state='unknown' AND prompt_tokens IS NULL AND CASE WHEN instr(COALESCE(error,''),' ')>0
+                THEN substr(error,1,instr(error,' ')-1) ELSE COALESCE(error,'') END IN ({unbilled})) AS unbilled
           FROM ai_request
         )
         SELECT route AS provider,a.model,
           SUM(a.day=?) AS requests,
-          SUM(a.day=? AND (prompt_tokens IS NULL OR completion_tokens IS NULL)) AS missing_usage,
+          SUM(a.day=? AND (prompt_tokens IS NULL OR completion_tokens IS NULL) AND NOT unbilled) AS missing_usage,
+          SUM(a.day=? AND unbilled) AS unbilled_rejections,
           SUM(CASE WHEN a.day=? THEN COALESCE(prompt_tokens,0) ELSE 0 END) AS input_tokens,
           SUM(CASE WHEN a.day=? THEN COALESCE(completion_tokens,0) ELSE 0 END) AS output_tokens,
           SUM(CASE WHEN a.day=? THEN COALESCE(cache_tokens,0) ELSE 0 END) AS cache_input_tokens,
           SUM(COALESCE(c.hits,0)) AS cache_hits
         FROM attribution a LEFT JOIN ai_cache_day c ON a.request_key=c.request_key AND c.day=?
-        WHERE a.day=? OR c.hits IS NOT NULL GROUP BY route,a.model ORDER BY route,a.model""", (day,) * 7):
+        WHERE a.day=? OR c.hits IS NOT NULL GROUP BY route,a.model ORDER BY route,a.model""".replace('{unbilled}', _UNBILLED_SQL), (day,) * 8):
         row = dict(r)
         rates = MODEL_RATES.get((r['provider'], r['model']))
         if not r['requests']:

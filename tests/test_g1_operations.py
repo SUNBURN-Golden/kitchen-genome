@@ -143,6 +143,12 @@ def test_closed_kst_summary_counts_first_transitions_and_prices_only_known_usage
     assert data['models'][0]['missing_usage'] == 1
     assert data['usd_per_newly_resolved_chef'] == 'unknown'
 
+    budget.reserve('quota', 'extract', 'deepseek-chat', 5000, provider='deepseek')
+    budget.fail('quota', 'quota_exhausted')
+    data = scoreboard.daily_summary(conn, now=now)
+    deepseek_row = next(m for m in data['models'] if m['model'] == 'deepseek-chat')
+    assert deepseek_row['missing_usage'] == 1 and deepseek_row['unbilled_rejections'] == 1
+
 
 def test_gold_scores_saved_model_output_and_prefilter_misses(conn, tmp_path):
     conn.execute("""INSERT INTO fetch_record(fetch_id,url,canonical_url,host,method,outcome,fetched_at,fetcher_version,extractor_version)
