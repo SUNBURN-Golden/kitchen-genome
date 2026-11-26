@@ -145,3 +145,79 @@ def test_evaluate_skips_unchanged_hosts_until_stale(conn):
     assert conn.execute("SELECT trial_fetches FROM domain_profile WHERE host='same.test'").fetchone()['trial_fetches'] == 2
     evaluate.score_host(conn, 'same.test', Net(), Raw(), g, set(), now='2026-11-09T03:00:00Z')
     assert len(calls) == 3                                   # a week old: re-scored even without new fetches
+
+
+def _host_fetches(conn, host, n, outcome='ok'):
+    for i in range(n):
+        conn.execute("""INSERT INTO fetch_record(fetch_id,url,canonical_url,host,method,outcome,text_ref,fetcher_version,extractor_version,fetched_at)
+                        VALUES (?,?,?,?,?,?,?,?,?,?)""", (f'{host}-{i}', f'https://{host}/{i}', f'https://{host}/{i}', host, 'html', outcome,
+                                                          f'{host}-{i}', 't', 't', f'2026-11-25T00:00:{i:02d}Z'))
+
+
+class _Raw:
+    def __init__(self):
+        self.reads = []
+
+    def read_text(self, ref):
+        self.reads.append(ref)
+        return f'셰프 레스토랑 오픈 {ref} ' * 40
+
+
+def test_repost_refs_are_read_once_per_stage_not_per_document(conn):
+    """Re-scoring a host with many documents must not re-read the 400 reference documents for every document."""
+    from kg_collect import evaluate
+    from kg_collect.targets import Gazetteer
+
+    class Net:
+        def robots_info(self, url):
+            return {'allowed': True, 'crawl_delay': None}
+
+    _host_fetches(conn, 'big.test', 30)
+    _host_fetches(conn, 'other.test', 10)
+    raw, g = _Raw(), Gazetteer(conn)
+    refs = evaluate.RepostRefs(conn, raw)
+    evaluate.score_host(conn, 'big.test', Net(), raw, g, set(), now='2026-11-26T00:00:00Z', refs=refs)
+    evaluate.score_host(conn, 'other.test', Net(), raw, g, set(), now='2026-11-26T00:00:00Z', refs=refs)
+    # 40 own documents + each reference document shingled once (shared across hosts)
+    assert len(raw.reads) == 40 + 40
+    # same answer as the uncached path
+    text = raw.read_text('other.test-1')
+    assert evaluate.is_repost(conn, 'big.test', text, raw) == evaluate.is_repost(conn, 'big.test', text, raw, refs=refs.for_host('big.test'))
+
+
+def test_unread_robots_defers_host_instead_of_deprioritizing(conn):
+    """A robots.txt not read because the run deadline passed is unknown, not a disallow (2026-11-24: 175 press hosts deprioritized)."""
+    from kg_collect import evaluate
+    from kg_collect.targets import Gazetteer
+
+    class Net:
+        def robots_info(self, url):
+            return {'allowed': False, 'crawl_delay': None, 'unknown': True}
+
+    _host_fetches(conn, 'press.test', 4)
+    out = evaluate.score_host(conn, 'press.test', Net(), _Raw(), Gazetteer(conn), set(), now='2026-11-26T00:00:00Z')
+    assert out.get('deferred')
+    row = conn.execute("SELECT state,evaluated_at FROM domain_profile WHERE host='press.test'").fetchone()
+    assert row['state'] != 'deprioritized' and row['evaluated_at'] is None
+
+
+def test_robots_info_marks_block_end_unknown(conn):
+    from kg_collect.net import PoliteNet
+    net = PoliteNet(conn=conn, transport=lambda *a, **k: (_ for _ in ()).throw(AssertionError('no dispatch past deadline')),
+                    korean_press_hosts=('press.test',), deadline=0)
+    info = net.robots_info('https://press.test/')
+    assert info['allowed'] is False and info.get('unknown') is True
+
+
+def test_evaluate_stage_stops_at_deadline_and_leaves_hosts_due(conn, tmp_path):
+    import time
+    _host_fetches(conn, 'late.test', 3)
+    conn.execute("UPDATE fetch_record SET extracted_at='2026-11-25T00:00:00Z'")
+    bot = cycle.Bot(conn, data_dir=str(tmp_path), registry_path=str(tmp_path / 'reg.yaml'), deadline=time.monotonic() - 1)
+
+    class Ctx:
+        env = {'bot': bot}
+    res = cycle.stage_evaluate(Ctx())
+    out = res.output
+    assert out['evaluated'] == 0 and out['deferred_hosts'] >= 1
+    assert conn.execute("SELECT evaluated_at FROM domain_profile WHERE host='late.test'").fetchone() is None

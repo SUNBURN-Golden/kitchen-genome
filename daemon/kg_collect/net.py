@@ -422,8 +422,11 @@ class PoliteNet:
         if not self.korean_press(host_of(url)):
             return {'allowed': True, 'crawl_delay': None}
         self._ensure_run()
-        rp, _ = self._robots_for(url)
-        return {'allowed': rp is not None and rp.can_fetch(UA, url), 'crawl_delay': _crawl_delay(rp) if rp else None}
+        rp, r = self._robots_for(url)
+        info = {'allowed': rp is not None and rp.can_fetch(UA, url), 'crawl_delay': _crawl_delay(rp) if rp else None}
+        if rp is None and r is not None and r.error == 'block_end':
+            info['unknown'] = True   # not attempted (deadline/host lock); still disallowed for fetching
+        return info
 
     def site_maps(self, url):
         url = to_uri(url)

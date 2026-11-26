@@ -33,7 +33,7 @@ class Bot:
 
     def __init__(self, conn, data_dir=None, net=None, browser=None, seeds=None, model_hook=None, today=None, ocr=True,
                  registry_path=None, seeds_path=None, deepseek=False, seed_path=None, clock=None, deadline=None, fetch_deadline=None,
-                 roster_config=None):
+                 roster_config=None, extract_deadline=None):
         self.conn = conn
         self.data_dir = data_dir or os.path.join(ROOT, 'data_store')
         self.raw = RawStore(os.path.join(self.data_dir, 'raw'))
@@ -48,6 +48,9 @@ class Bot:
         self.seed_path = Path(seed_path or Path(ROOT) / 'data' / 'seed.json')
         self.ocr = ocr
         self.deadline, self.fetch_deadline = deadline, fetch_deadline or deadline
+        # Extraction stops here so evaluate/gaps/apply/quality still fit before the hard deadline (2026-11-26: extract
+        # ran to the deadline and the unbounded evaluate stage was killed by the collect timeout).
+        self.extract_deadline = extract_deadline or deadline
         self.registry_path = registry_path or evaluate.DISCOVERED_REGISTRY
         self.initial = discover.initial_hosts()
         net_mod.SEARCH_HOSTS.add(host_of(self.seeds['keyword_search']['endpoint'].format(q='x')))
@@ -496,7 +499,7 @@ def stage_extract(ctx):
         from .deepseek import Adapters
         bot.ai = bot.ai or Adapters.for_meter(ctx.cost)
         bot.ai.client.budget.meter = ctx.cost
-        bot.ai.client.deadline = bot.deadline
+        bot.ai.client.deadline = bot.extract_deadline
         bot.ai.client.use_task('web-extract-2')
     tier_of = _tier_of(conn)
     from .lineage import VERSION as lineage_version
@@ -512,7 +515,7 @@ def stage_extract(ctx):
                                lineage_version, michelin.VERSION)).fetchall()
     stats = {'docs': 0, 'new_extractions': 0, 'labels': {}, 'alerts': []}
     for f in rows:
-        if bot.expired():
+        if bot.expired(bot.extract_deadline):
             stats['deferred_deadline'] = True
             break
         attempt = recheck.active_for_fetch(conn, f)
@@ -548,7 +551,7 @@ def stage_extract(ctx):
         for k, v in r['labels'].items():
             stats['labels'][k] = stats['labels'].get(k, 0) + v
     stats['host_alerts'] = reconcile_host_yield_alerts(conn, bot.raw, gaz)
-    stats['profile'] = profile_scan(conn, bot.raw, expired=bot.expired)
+    stats['profile'] = profile_scan(conn, bot.raw, expired=lambda: bot.expired(bot.extract_deadline))
     recheck.reconcile(conn)
     return runner.StageResult(stats)
 
@@ -578,20 +581,41 @@ def profile_scan(conn, raw, expired=lambda: False) -> dict:
 
 # ───────────────────────── stage: evaluate ─────────────────────────
 def stage_evaluate(ctx):
+    """Bounded by bot.deadline. A host not reached (or whose robots.txt could not be read in time) keeps its
+    previous decision and stays due, so the next cycle picks it up."""
     bot: Bot = ctx.env['bot']
     conn = bot.conn
     gaz, off = bot.gaz(), official_hosts(conn)
-    res = []
-    for r in conn.execute("""SELECT DISTINCT host FROM fetch_record
-        WHERE fetcher_version<>? OR extracted_at IS NOT NULL""", (michelin.VERSION,)).fetchall():
-        h = r['host']
-        if discover.is_search_host(h):
-            continue
-        res.append(evaluate.score_host(conn, h, bot.net, bot.raw, gaz, off, in_initial=h in bot.initial))
+    res, deferred = [], 0
+    refs = evaluate.RepostRefs(conn, bot.raw)
+    previous_net_deadline = getattr(bot.net, 'deadline', None)
+    if bot.deadline is not None and previous_net_deadline is not None and hasattr(bot.net, 'clock'):
+        # Fetching ended at fetch_deadline; robots.txt reads for scoring may use the evaluate window.
+        bot.net.deadline = max(previous_net_deadline, bot.net.clock() + max(0, bot.deadline - time.monotonic()))
+    try:
+        for r in conn.execute("""SELECT DISTINCT host FROM fetch_record
+            WHERE fetcher_version<>? OR extracted_at IS NOT NULL""", (michelin.VERSION,)).fetchall():
+            h = r['host']
+            if discover.is_search_host(h):
+                continue
+            if bot.expired():
+                deferred += 1
+                continue
+            out = evaluate.score_host(conn, h, bot.net, bot.raw, gaz, off, in_initial=h in bot.initial, refs=refs, expired=bot.expired)
+            if out.get('deferred'):
+                deferred += 1
+                continue
+            res.append(out)
+    finally:
+        if hasattr(bot.net, 'deadline'):
+            bot.net.deadline = previous_net_deadline
     promoted = evaluate.grow_registry(conn, bot.registry_path)
     conn.commit()
     new = [x for x in res if x.get('state') in ('promoted', 'deprioritized', 'blocked') and x.get('host') not in bot.initial]
-    return runner.StageResult({'evaluated': len(res), 'decisions': {x['host']: [x['state'], x.get('score')] for x in new}, 'registry_discovered': promoted})
+    out = {'evaluated': len(res), 'decisions': {x['host']: [x['state'], x.get('score')] for x in new}, 'registry_discovered': promoted}
+    if deferred:
+        out['deferred_hosts'] = deferred
+    return runner.StageResult(out)
 
 
 # ───────────────────────── stage: gaps ─────────────────────────

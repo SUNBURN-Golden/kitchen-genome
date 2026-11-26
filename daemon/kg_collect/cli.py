@@ -49,8 +49,10 @@ def main(argv=None) -> int:
         now = time.monotonic()
         wall = float(os.environ.get('KG_COLLECT_TIMEOUT', '1500'))
         work_until = max(0, wall - min(120, wall / 5))
+        # evaluate/gaps/apply/quality get the last part of the work window; extraction resumes next cycle.
+        extract_until = max(0, work_until - min(240, work_until / 6))
         bot = cycle.Bot(conn, data_dir=data_dir, deepseek=a.deepseek,
-                        deadline=now + work_until, fetch_deadline=now + work_until / 2,
+                        deadline=now + work_until, fetch_deadline=now + work_until / 2, extract_deadline=now + extract_until,
                         roster_config=michelin.load_config())
         from . import proxynet
         daily_scope = os.environ.get('KG_WEB_RUN_ID')

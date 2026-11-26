@@ -42,18 +42,35 @@ def jaccard(a: set, b: set) -> float:
     return len(a & b) / len(a | b) if a and b else 0.0
 
 
-def is_repost(conn, host: str, text: str, raw_store, threshold: float = REPOST_THRESHOLD) -> bool:
+class RepostRefs:
+    """Shingle sets of the recent reference documents, read once per evaluate stage instead of once per scored document
+    (400 file reads + shingling per document made re-scoring a large host take minutes)."""
+
+    def __init__(self, conn, raw_store, limit: int = 400):
+        self.conn, self.raw, self.limit, self._cache = conn, raw_store, limit, {}
+
+    def _shingles(self, ref):
+        if ref not in self._cache:
+            try:
+                self._cache[ref] = frozenset(shingles(self.raw.read_text(ref)[:3000]))
+            except OSError:
+                self._cache[ref] = None
+        return self._cache[ref]
+
+    def for_host(self, host: str) -> list:
+        rows = self.conn.execute("SELECT text_ref FROM fetch_record WHERE host<>? AND outcome='ok' AND text_ref IS NOT NULL ORDER BY fetched_at DESC LIMIT ?",
+                                 (host, self.limit))
+        return [sh for sh in (self._shingles(r['text_ref']) for r in rows) if sh is not None]
+
+
+def is_repost(conn, host: str, text: str, raw_store, threshold: float = REPOST_THRESHOLD, refs: list | None = None) -> bool:
     """Near-duplicate of a document we already hold from ANOTHER host (syndication/repost)."""
     sh = shingles(text[:3000])
     if not sh:
         return False
-    for r in conn.execute("SELECT text_ref FROM fetch_record WHERE host<>? AND outcome='ok' AND text_ref IS NOT NULL ORDER BY fetched_at DESC LIMIT 400", (host,)):
-        try:
-            if jaccard(sh, shingles(raw_store.read_text(r['text_ref'])[:3000])) >= threshold:
-                return True
-        except OSError:
-            continue
-    return False
+    if refs is None:
+        refs = RepostRefs(conn, raw_store).for_host(host)
+    return any(jaccard(sh, other) >= threshold for other in refs)
 
 
 def guess_tier(host: str, jsonld_types: list, official: set, has_dates: bool) -> str:
@@ -85,7 +102,8 @@ def _novel_fraction(conn, host: str) -> tuple[int, int]:
     return novel, len(rows)
 
 
-def score_host(conn, host: str, net: PoliteNet, raw_store, gaz: Gazetteer, official: set, now=None, in_initial: bool = False) -> dict:
+def score_host(conn, host: str, net: PoliteNet, raw_store, gaz: Gazetteer, official: set, now=None, in_initial: bool = False,
+               refs: RepostRefs | None = None, expired=lambda: False) -> dict:
     """Decide on a host from its TRIAL fetches (fetch_record rows) + what the rules extracted from them. No extra network except robots.txt."""
     now = now or utcnow()
     ensure_profile(conn, host, in_registry=in_initial, now=now)
@@ -105,18 +123,24 @@ def score_host(conn, host: str, net: PoliteNet, raw_store, gaz: Gazetteer, offic
         perm = 0.0
     else:
         info = net.robots_info(f'https://{host}/')
+        if info.get('unknown'):
+            # robots.txt was not read (run deadline or host lock), which is not a disallow: keep the previous decision.
+            return {**dict(prof), 'deferred': True}
         robots = info['allowed']
         perm = 0.0 if not info['allowed'] else (0.5 if (info['crawl_delay'] or 0) > 30 else 1.0)
     n = len(oks)
     rel = ext = rep = 0
     types = []
     has_dates = False
+    ref_sets = (refs or RepostRefs(conn, raw_store)).for_host(host) if oks else []
     for r in oks:
+        if expired():
+            return {**dict(prof), 'deferred': True}
         text = raw_store.read_text(r['text_ref']) if r['text_ref'] else ''
         men = conn.execute('SELECT COALESCE(SUM(mentions),0) m FROM doc_target WHERE fetch_id=?', (r['fetch_id'],)).fetchone()['m']
         rel += int(men > 0 or len(FOOD_CUES.findall(text)) >= 3)
         ext += int(conn.execute('SELECT 1 FROM extraction WHERE fetch_id=? LIMIT 1', (r['fetch_id'],)).fetchone() is not None)
-        rep += int(is_repost(conn, host, text, raw_store))
+        rep += int(is_repost(conn, host, text, raw_store, refs=ref_sets))
         has_dates = has_dates or bool(r['published_at'])
     novel, tot_ext = _novel_fraction(conn, host)
     scores = {'relevance': rel / n if n else 0.0, 'novelty': (novel / tot_ext) if tot_ext else 0.0, 'extractability': ext / n if n else 0.0,
