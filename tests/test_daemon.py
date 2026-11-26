@@ -540,3 +540,31 @@ def test_employment_without_resolved_branch_goes_to_review_instead_of_crashing(w
     assert c.execute("SELECT COUNT(*) FROM review_queue WHERE reason='unknown_branch' AND subject_id=?", (cid,)).fetchone()[0] == 1
     assert counts(c)['employment'] == emp_before
     assert c.execute("SELECT COUNT(*) FROM failure_queue WHERE state='open'").fetchone()[0] == 0
+
+
+def test_state_history_quarantines_one_bad_item_and_applies_the_rest(world):
+    # A single fact that raises mid-apply (corrupt payload, unexpected IntegrityError, ...) must go to
+    # review as apply_error. Other pending facts in the same stage still apply, and the run succeeds.
+    c, env, _ = world
+    assert daemon(c, env).run()['status'] == 'succeeded'
+    src, doc = c.execute('SELECT source_id, document_id FROM candidate_fact LIMIT 1').fetchone()
+    chef_id, branch_id = c.execute("SELECT resolved_chef_id, resolved_branch_id FROM candidate_fact WHERE resolved_chef_id IS NOT NULL AND resolved_branch_id IS NOT NULL LIMIT 1").fetchone()
+    ev = '{"source_url": "https://press.example.test/quarantine", "collected_at": "2026-10-27T00:00:00Z", "quote": "근무", "locator": {}}'
+    good = '{"current": false, "past": true, "role_text": "셰프"}'
+    emp_before = counts(c)['employment']
+    c.execute("""INSERT INTO candidate_fact(candidate_id,idempotency_key,document_id,source_id,fact_type,payload_json,evidence_json,extractor,asserted_by,resolution,resolved_chef_id,resolved_branch_id,verification,created_at)
+                 VALUES ('cnd_good_apply','idem:good_apply',?,?,'employment',?,?,'rule:test','source','resolved',?,?,'unverified','2026-10-27T00:00:00Z')""",
+              (doc, src, good, ev, chef_id, branch_id))
+    c.execute("""INSERT INTO candidate_fact(candidate_id,idempotency_key,document_id,source_id,fact_type,payload_json,evidence_json,extractor,asserted_by,resolution,resolved_chef_id,resolved_branch_id,verification,created_at)
+                 VALUES ('cnd_bad_apply','idem:bad_apply',?,?,'employment','not-json',?,'rule:test','source','resolved',?,?,'unverified','2026-10-27T00:00:00Z')""",
+              (doc, src, ev, chef_id, branch_id))
+    c.commit()
+    rep = daemon(c, env).run(resume=False)
+    assert rep['status'] == 'succeeded' and rep['stages']['state_history_update'] == 'done'
+    assert c.execute("SELECT resolution, applied_claim_id FROM candidate_fact WHERE candidate_id='cnd_bad_apply'").fetchone()[0] == 'needs_review'
+    assert c.execute("SELECT COUNT(*) FROM review_queue WHERE reason='apply_error' AND subject_id='cnd_bad_apply'").fetchone()[0] == 1
+    good_row = c.execute("SELECT resolution, applied_claim_id FROM candidate_fact WHERE candidate_id='cnd_good_apply'").fetchone()
+    assert good_row[0] == 'resolved' and good_row[1]
+    assert counts(c)['employment'] >= emp_before
+    assert c.execute("SELECT COUNT(*) FROM failure_queue WHERE state='open'").fetchone()[0] == 0
+

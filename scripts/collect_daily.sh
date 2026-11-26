@@ -12,7 +12,7 @@ AI_ARGS=()
 if [ "${KG_COLLECT:-1}" = 1 ] && [ -f "$KG_DB" ]; then
   COLLECT_JSON=$(mktemp)
   COLLECT_RC=0
-  KG_COLLECT_TIMEOUT="${KG_COLLECT_TIMEOUT:-1500}" PYTHONPATH=daemon timeout "${KG_COLLECT_TIMEOUT:-1500}" python3 -m kg_collect --db "$KG_DB" cycle \
+  KG_COLLECT_TIMEOUT="${KG_COLLECT_TIMEOUT:-1680}" PYTHONPATH=daemon timeout "${KG_COLLECT_TIMEOUT:-1680}" python3 -m kg_collect --db "$KG_DB" cycle \
     --no-browser "${AI_ARGS[@]}" >"$COLLECT_JSON" 2>/dev/null || COLLECT_RC=$?
   if [ "$COLLECT_RC" = 0 ]; then
     COLLECT_OUT=$(python3 -c 'import json,sys; d=json.load(open(sys.argv[1])); s=d.get("ai_stats") or {}; print("COLLECT="+d["status"], "run="+str(d.get("run_id")), "ai="+d.get("ai","disabled"), "reason="+d.get("ai_reason","none"), "cost="+str(d.get("cost_used")), "egress="+str(d.get("egress","unknown")), "egress_reason="+str(d.get("egress_reason","unknown")), "ai_docs=%s/%s/%s/%s/%s" % (s.get("considered",0), s.get("skipped_filter",0), s.get("called",0), s.get("failed",0), s.get("findings",0)), "ai_skipped_no_targets="+str(s.get("skipped_no_targets",0)), "ai_skipped_balance="+str(s.get("skipped_balance",0)))' "$COLLECT_JSON") || COLLECT_OUT='COLLECT=failed reason=invalid_summary'

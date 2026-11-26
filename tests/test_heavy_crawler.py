@@ -331,6 +331,7 @@ def test_extract_order_prefers_heavy_priority(world):
 def test_cron_script_is_plain_and_ig_free():
     s = open(os.path.join(ROOT, 'scripts', 'heavy_crawl.sh'), encoding='utf-8').read()
     assert 'flock -n' in s and 'KG_IG=0' in s and 'kg_collect.heavy' in s
+    assert 'exec python3 -m kg_collect.heavy' in s  # cron timeout must reach the interpreter
     for bad in ('deepseek', 'instagram', 'git ', 'deploy', 'ig_blocked'):
         assert bad not in s.lower().replace('never touches deepseek, git, deploy or instagram', '')
 

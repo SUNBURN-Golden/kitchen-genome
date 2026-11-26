@@ -221,3 +221,19 @@ def test_evaluate_stage_stops_at_deadline_and_leaves_hosts_due(conn, tmp_path):
     out = res.output
     assert out['evaluated'] == 0 and out['deferred_hosts'] >= 1
     assert conn.execute("SELECT evaluated_at FROM domain_profile WHERE host='late.test'").fetchone() is None
+
+
+def test_collect_windows_reserves_360s_on_default_wall():
+    from kg_collect.cli import DEFAULT_COLLECT_TIMEOUT, EVALUATE_RESERVE_SEC, collect_windows
+    assert DEFAULT_COLLECT_TIMEOUT == 1680 and EVALUATE_RESERVE_SEC == 360
+    work, extract = collect_windows(DEFAULT_COLLECT_TIMEOUT)
+    assert work == 1560 and extract == 1200 and (work - extract) == 360
+    # 120s remains after the work window before the shell timeout, so scoring cannot cause exit 124.
+    assert DEFAULT_COLLECT_TIMEOUT - work == 120
+
+
+def test_collect_windows_scales_reserve_down_on_a_short_wall():
+    from kg_collect.cli import collect_windows
+    work, extract = collect_windows(30)
+    assert work == 24 and extract == 18 and (work - extract) == 6
+

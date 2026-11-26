@@ -207,7 +207,7 @@ runs, production jobs or access to `/workspace/kitchen-genome` and its data stor
   snapshots through the existing extractor where eligible; foreign extraction jobs wait for the G3 extractor version.
   The heavy service writes only private DB/raw state, without publishing, building or using Instagram. Stop dispatch with time
   for bounded in-flight completion before the existing cron timeout. SIGTERM commits progress or leaves a reclaimable lease.
-- At **07:00 KST**, keep the current `daily_pipeline.sh` and `collect_daily.sh` flow and `KG_COLLECT_TIMEOUT=1500`.
+- At **07:00 KST**, keep the current `daily_pipeline.sh` and `collect_daily.sh` flow and `KG_COLLECT_TIMEOUT=1680` (360s reserved for source scoring after extract).
   Use a monotonic soft deadline inside `cycle.run_cycle` to yield before the shell timeout, reserving room for local integration.
   Run Korea refresh, due edition/link deltas and new announcement leads, then process available extraction jobs by relevance
   and urgency. Make any unused time available to due worldwide work. Publish from the latest committed graph in the existing
