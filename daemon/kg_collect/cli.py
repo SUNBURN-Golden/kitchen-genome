@@ -10,6 +10,28 @@ from kg_daemon.db import DEFAULT_DB, connect, migrate, utcnow
 
 from . import cycle, michelin
 
+# Shell `timeout` (scripts/collect_daily.sh) is the hard wall. Leave FINALIZE_RESERVE_SEC
+# after the work window so wrap-up can finish before exit 124. EVALUATE_RESERVE_SEC is
+# reserved after extract for scoring/gaps/apply/quality (2026-11-26: extract ran to the
+# deadline and a 120s leftover was not enough; 240s was then capped by work/6 at 230s
+# under the old 1500s wall). The default wall is 1680s so a full 360s reserve still
+# leaves 1200s for extract: 120 finalize + 360 evaluate + 1200 extract.
+DEFAULT_COLLECT_TIMEOUT = 1680
+FINALIZE_RESERVE_SEC = 120
+EVALUATE_RESERVE_SEC = 360
+
+
+def collect_windows(wall: float, evaluate_reserve: float = EVALUATE_RESERVE_SEC,
+                    finalize_reserve: float = FINALIZE_RESERVE_SEC) -> tuple[float, float]:
+    """Return (work_until, extract_until) offsets from cycle start, in seconds.
+
+    On a short wall (tests) the evaluate reserve shrinks so it never takes more than
+    a quarter of the work window. On the default 1680s wall it is the full 360s.
+    """
+    work = max(0.0, float(wall) - min(finalize_reserve, float(wall) / 5))
+    reserved = min(evaluate_reserve, work / 4)
+    return work, max(0.0, work - reserved)
+
 
 def main(argv=None) -> int:
     ap = argparse.ArgumentParser(prog='kg-collect')
@@ -47,10 +69,8 @@ def main(argv=None) -> int:
     data_dir = os.path.dirname(os.path.abspath(a.db))
     if a.cmd == 'cycle':
         now = time.monotonic()
-        wall = float(os.environ.get('KG_COLLECT_TIMEOUT', '1500'))
-        work_until = max(0, wall - min(120, wall / 5))
-        # evaluate/gaps/apply/quality get the last part of the work window; extraction resumes next cycle.
-        extract_until = max(0, work_until - min(240, work_until / 6))
+        wall = float(os.environ.get('KG_COLLECT_TIMEOUT', str(DEFAULT_COLLECT_TIMEOUT)))
+        work_until, extract_until = collect_windows(wall)
         bot = cycle.Bot(conn, data_dir=data_dir, deepseek=a.deepseek,
                         deadline=now + work_until, fetch_deadline=now + work_until / 2, extract_deadline=now + extract_until,
                         roster_config=michelin.load_config())

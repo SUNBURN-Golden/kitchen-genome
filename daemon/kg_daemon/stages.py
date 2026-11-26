@@ -398,115 +398,154 @@ def _apply_status_event(ctx, c, p, kind):
     return claim
 
 
+def _hold_apply_error(ctx, c, payload, exc: BaseException) -> None:
+    """Park a single fact for review after a failed apply; the rest of the stage continues."""
+    err = type(exc).__name__
+    detail = str(exc).strip().replace('\n', ' ')[:300]
+    ctx.conn.execute("UPDATE candidate_fact SET resolution='needs_review' WHERE candidate_id=?", (c['candidate_id'],))
+    queue_review(ctx.conn, 'apply_error', 'candidate_fact', c['candidate_id'],
+                 {'fact_type': c['fact_type'], 'payload': payload, 'error': err, 'detail': detail},
+                 dedupe_key=f'apply_error:{c["candidate_id"]}')
+
+
 def state_history_update(ctx: StageContext) -> StageResult:
     applied = held = 0
     for c in ctx.conn.execute("SELECT * FROM candidate_fact WHERE resolution='resolved' AND verification IS NOT NULL AND applied_claim_id IS NULL ORDER BY rowid").fetchall():
-        p = json.loads(c['payload_json'])
-        claim = None
-        if c['verification'] == 'ai_inference' or pending(c) or pending(p):        # AI inference is never materialised as a fact
-            ctx.conn.execute("UPDATE candidate_fact SET resolution='needs_review' WHERE candidate_id=?", (c['candidate_id'],))
-            queue_review(ctx.conn, 'ai_inference', 'candidate_fact', c['candidate_id'], {'fact_type': c['fact_type'], 'payload': p}, dedupe_key=f'ai_inference:{c["candidate_id"]}')
-            held += 1
-            continue
-        ft = c['fact_type']
-        if ft in ('employment', 'chef_move', 'mentorship') and not c['resolved_chef_id']:
-            # a chef fact without a resolved chef (e.g. a reviewer split the name and applied it by hand) cannot be
-            # materialised; hand it back to review instead of crashing the whole stage on employment.chef_id NOT NULL.
-            ctx.conn.execute("UPDATE candidate_fact SET resolution='needs_review' WHERE candidate_id=?", (c['candidate_id'],))
-            queue_review(ctx.conn, 'unknown_chef', 'candidate_fact', c['candidate_id'], {'fact_type': ft, 'payload': p}, dedupe_key=f'unknown_chef:{c["candidate_id"]}')
-            held += 1
-            continue
-        if ft in ('employment', 'chef_move') and not c['resolved_branch_id']:
-            # employment needs a branch (or employer_label) by CHECK constraint; a source that names a restaurant we could not
-            # resolve to a branch (2026-11-25: 'mosu' target_id, branch NULL) would raise IntegrityError every run. Review it instead.
-            ctx.conn.execute("UPDATE candidate_fact SET resolution='needs_review' WHERE candidate_id=?", (c['candidate_id'],))
-            queue_review(ctx.conn, 'unknown_branch', 'candidate_fact', c['candidate_id'], {'fact_type': ft, 'payload': p}, dedupe_key=f'unknown_branch:{c["candidate_id"]}')
-            held += 1
-            continue
-        if ft in ('closure', 'opening', 'relocation', 'pause'):
-            claim = _apply_status_event(ctx, c, p, {'closure': 'close', 'opening': 'open', 'relocation': 'move', 'pause': 'pause'}[ft])
-        elif ft in ('menu', 'collab'):
-            # menus and collab / pop-up / guest events are dated EVENTS of a branch. Working alongside someone is never mentorship.
-            claim = create_claim(ctx.conn, 'menu_event', c['verification'], f'daemon:{c["extractor"]}', claim_id=stable_id('clm', 'cand', c['candidate_id']))
-            link_evidence(ctx.conn, claim, add_evidence(ctx.conn, **_evidence_of(ctx, c)))
-            kind = 'popup' if '팝업' in (p.get('title') or '') else ft
-            ctx.conn.execute('INSERT OR IGNORE INTO menu_event(menu_event_id,branch_id,kind,title,starts_on,claim_id,created_at) VALUES (?,?,?,?,?,?,?)',
-                             (stable_id('mev', c['candidate_id']), c['resolved_branch_id'], kind, (p.get('title') or ft)[:120], p.get('effective_date'), claim, utcnow()))
-        elif ft == 'rename':       # recorded as a dated status event carrying the new name; the display name is never auto-changed
-            p = {**p, 'excerpt': f"rename -> {p.get('new_name') or '(new name not extracted)'}"[:200]}
-            claim = _apply_status_event(ctx, c, p, 'rename')
-        elif ft == 'employment':
-            ex = ctx.conn.execute("SELECT employment_id, claim_id, valid_to_kind, state FROM employment WHERE chef_id=? AND branch_id=? AND state<>'rejected' ORDER BY valid_to_kind='open' DESC LIMIT 1", (c['resolved_chef_id'], c['resolved_branch_id'])).fetchone()
-            if ex and p.get('past') and ex['valid_to_kind'] == 'open' and ex['state'] == 'active':
-                # source says 'ex-/출신' while we hold this tenure as current: keep both, open a conflict for a human
-                claim = create_claim(ctx.conn, 'employment_end', c['verification'], f'daemon:{c["extractor"]}', note='source describes this tenure as past',
-                                     claim_id=stable_id('clm', 'cand', c['candidate_id']))
-                link_evidence(ctx.conn, claim, add_evidence(ctx.conn, **_evidence_of(ctx, c)))
-                cf = open_conflict(ctx.conn, 'employment', ex['employment_id'], 'employment.current_vs_past', ex['claim_id'], claim)
-                queue_review(ctx.conn, 'conflict', 'conflict', cf, {'employment_id': ex['employment_id'], 'quote': json.loads(c['evidence_json']).get('quote')}, dedupe_key=f'conflict:{cf}')
-            elif ex and p.get('current') and ex['valid_to_kind'] == 'open':
-                link_evidence(ctx.conn, ex['claim_id'], add_evidence(ctx.conn, **_evidence_of(ctx, c)))
-                ctx.conn.execute('UPDATE employment SET last_confirmed_at=MAX(IFNULL(last_confirmed_at,\'\'),?) WHERE employment_id=?', (json.loads(c['evidence_json'])['collected_at'][:10], ex['employment_id']))
-                claim = ex['claim_id']
-            elif not ex and p.get('current'):
-                claim = create_claim(ctx.conn, 'employment', c['verification'], f'daemon:{c["extractor"]}', claim_id=stable_id('clm', 'cand', c['candidate_id']))
-                link_evidence(ctx.conn, claim, add_evidence(ctx.conn, **_evidence_of(ctx, c)))
-                from .ontology import add_employment
-                add_employment(ctx.conn, chef_id=c['resolved_chef_id'], branch_id=c['resolved_branch_id'], claim_id=claim, role_text=p.get('role_text'), valid_from=p.get('effective_date') if parse_iso_date(p.get('effective_date') or '') else None,
-                               valid_to_kind='open', last_confirmed_at=json.loads(c['evidence_json'])['collected_at'][:10], seed_ref=f'cand:{c["candidate_id"]}')
-            elif ex:   # already known: this document just adds supporting evidence
-                link_evidence(ctx.conn, ex['claim_id'], add_evidence(ctx.conn, **_evidence_of(ctx, c)))
-                claim = ex['claim_id']
-            else:
-                claim = create_claim(ctx.conn, 'employment', c['verification'], f'daemon:{c["extractor"]}', claim_id=stable_id('clm', 'cand', c['candidate_id']))
-                link_evidence(ctx.conn, claim, add_evidence(ctx.conn, **_evidence_of(ctx, c)))
-                from .ontology import add_employment
-                add_employment(ctx.conn, chef_id=c['resolved_chef_id'], branch_id=c['resolved_branch_id'], claim_id=claim, role_text=p.get('role_text'), valid_from=p.get('effective_date') if parse_iso_date(p.get('effective_date') or '') else None,
-                               tenure_text=p.get('tenure_text'), valid_to_kind='unknown', seed_ref=f'cand:{c["candidate_id"]}')
-        elif ft == 'chef_move':
-            if c['verification'] != 'verified':
-                # a move closes a tenure ONLY once verified (official/human source or 2 independent trusted hosts). Until then: candidate to check.
-                queue_review(ctx.conn, 'move_needs_verification', 'candidate_fact', c['candidate_id'], {'payload': p, 'verification': c['verification']},
-                             dedupe_key=f'move_needs_verification:{c["candidate_id"]}')
+        p = {}
+        try:
+            ctx.conn.execute('SAVEPOINT apply_fact')
+            p = json.loads(c['payload_json'])
+            claim = None
+            if c['verification'] == 'ai_inference' or pending(c) or pending(p):        # AI inference is never materialised as a fact
+                ctx.conn.execute("UPDATE candidate_fact SET resolution='needs_review' WHERE candidate_id=?", (c['candidate_id'],))
+                queue_review(ctx.conn, 'ai_inference', 'candidate_fact', c['candidate_id'], {'fact_type': c['fact_type'], 'payload': p}, dedupe_key=f'ai_inference:{c["candidate_id"]}')
+                ctx.conn.execute('RELEASE SAVEPOINT apply_fact')
+                ctx.conn.commit()
                 held += 1
                 continue
-            same = ctx.conn.execute("SELECT employment_id, claim_id FROM employment WHERE chef_id=? AND branch_id=? AND state='active' AND valid_to_kind='open'",
-                                    (c['resolved_chef_id'], c['resolved_branch_id'])).fetchone()
-            if same:     # already there: confirmation, not a move
-                link_evidence(ctx.conn, same['claim_id'], add_evidence(ctx.conn, **_evidence_of(ctx, c)))
-                ctx.conn.execute('UPDATE candidate_fact SET applied_claim_id=? WHERE candidate_id=?', (same['claim_id'], c['candidate_id']))
+            ft = c['fact_type']
+            if ft in ('employment', 'chef_move', 'mentorship') and not c['resolved_chef_id']:
+                # a chef fact without a resolved chef (e.g. a reviewer split the name and applied it by hand) cannot be
+                # materialised; hand it back to review instead of crashing the whole stage on employment.chef_id NOT NULL.
+                ctx.conn.execute("UPDATE candidate_fact SET resolution='needs_review' WHERE candidate_id=?", (c['candidate_id'],))
+                queue_review(ctx.conn, 'unknown_chef', 'candidate_fact', c['candidate_id'], {'fact_type': ft, 'payload': p}, dedupe_key=f'unknown_chef:{c["candidate_id"]}')
+                ctx.conn.execute('RELEASE SAVEPOINT apply_fact')
+                ctx.conn.commit()
+                held += 1
+                continue
+            if ft in ('employment', 'chef_move', 'menu', 'collab', 'closure', 'opening', 'relocation', 'pause', 'rename') and not c['resolved_branch_id']:
+                # employment needs a branch (or employer_label) by CHECK constraint; menu_event.branch_id is NOT NULL;
+                # a source that names a restaurant we could not resolve to a branch (2026-11-25: 'mosu' target_id, branch NULL)
+                # would raise IntegrityError every run. Review it instead.
+                ctx.conn.execute("UPDATE candidate_fact SET resolution='needs_review' WHERE candidate_id=?", (c['candidate_id'],))
+                queue_review(ctx.conn, 'unknown_branch', 'candidate_fact', c['candidate_id'], {'fact_type': ft, 'payload': p}, dedupe_key=f'unknown_branch:{c["candidate_id"]}')
+                ctx.conn.execute('RELEASE SAVEPOINT apply_fact')
+                ctx.conn.commit()
+                held += 1
+                continue
+            if ft in ('closure', 'opening', 'relocation', 'pause'):
+                claim = _apply_status_event(ctx, c, p, {'closure': 'close', 'opening': 'open', 'relocation': 'move', 'pause': 'pause'}[ft])
+            elif ft in ('menu', 'collab'):
+                # menus and collab / pop-up / guest events are dated EVENTS of a branch. Working alongside someone is never mentorship.
+                claim = create_claim(ctx.conn, 'menu_event', c['verification'], f'daemon:{c["extractor"]}', claim_id=stable_id('clm', 'cand', c['candidate_id']))
+                link_evidence(ctx.conn, claim, add_evidence(ctx.conn, **_evidence_of(ctx, c)))
+                kind = 'popup' if '팝업' in (p.get('title') or '') else ft
+                ctx.conn.execute('INSERT OR IGNORE INTO menu_event(menu_event_id,branch_id,kind,title,starts_on,claim_id,created_at) VALUES (?,?,?,?,?,?,?)',
+                                 (stable_id('mev', c['candidate_id']), c['resolved_branch_id'], kind, (p.get('title') or ft)[:120], p.get('effective_date'), claim, utcnow()))
+            elif ft == 'rename':       # recorded as a dated status event carrying the new name; the display name is never auto-changed
+                p = {**p, 'excerpt': f"rename -> {p.get('new_name') or '(new name not extracted)'}"[:200]}
+                claim = _apply_status_event(ctx, c, p, 'rename')
+            elif ft == 'employment':
+                ex = ctx.conn.execute("SELECT employment_id, claim_id, valid_to_kind, state FROM employment WHERE chef_id=? AND branch_id=? AND state<>'rejected' ORDER BY valid_to_kind='open' DESC LIMIT 1", (c['resolved_chef_id'], c['resolved_branch_id'])).fetchone()
+                if ex and p.get('past') and ex['valid_to_kind'] == 'open' and ex['state'] == 'active':
+                    # source says 'ex-/출신' while we hold this tenure as current: keep both, open a conflict for a human
+                    claim = create_claim(ctx.conn, 'employment_end', c['verification'], f'daemon:{c["extractor"]}', note='source describes this tenure as past',
+                                         claim_id=stable_id('clm', 'cand', c['candidate_id']))
+                    link_evidence(ctx.conn, claim, add_evidence(ctx.conn, **_evidence_of(ctx, c)))
+                    cf = open_conflict(ctx.conn, 'employment', ex['employment_id'], 'employment.current_vs_past', ex['claim_id'], claim)
+                    queue_review(ctx.conn, 'conflict', 'conflict', cf, {'employment_id': ex['employment_id'], 'quote': json.loads(c['evidence_json']).get('quote')}, dedupe_key=f'conflict:{cf}')
+                elif ex and p.get('current') and ex['valid_to_kind'] == 'open':
+                    link_evidence(ctx.conn, ex['claim_id'], add_evidence(ctx.conn, **_evidence_of(ctx, c)))
+                    ctx.conn.execute('UPDATE employment SET last_confirmed_at=MAX(IFNULL(last_confirmed_at,\'\'),?) WHERE employment_id=?', (json.loads(c['evidence_json'])['collected_at'][:10], ex['employment_id']))
+                    claim = ex['claim_id']
+                elif not ex and p.get('current'):
+                    claim = create_claim(ctx.conn, 'employment', c['verification'], f'daemon:{c["extractor"]}', claim_id=stable_id('clm', 'cand', c['candidate_id']))
+                    link_evidence(ctx.conn, claim, add_evidence(ctx.conn, **_evidence_of(ctx, c)))
+                    from .ontology import add_employment
+                    add_employment(ctx.conn, chef_id=c['resolved_chef_id'], branch_id=c['resolved_branch_id'], claim_id=claim, role_text=p.get('role_text'), valid_from=p.get('effective_date') if parse_iso_date(p.get('effective_date') or '') else None,
+                                   valid_to_kind='open', last_confirmed_at=json.loads(c['evidence_json'])['collected_at'][:10], seed_ref=f'cand:{c["candidate_id"]}')
+                elif ex:   # already known: this document just adds supporting evidence
+                    link_evidence(ctx.conn, ex['claim_id'], add_evidence(ctx.conn, **_evidence_of(ctx, c)))
+                    claim = ex['claim_id']
+                else:
+                    claim = create_claim(ctx.conn, 'employment', c['verification'], f'daemon:{c["extractor"]}', claim_id=stable_id('clm', 'cand', c['candidate_id']))
+                    link_evidence(ctx.conn, claim, add_evidence(ctx.conn, **_evidence_of(ctx, c)))
+                    from .ontology import add_employment
+                    add_employment(ctx.conn, chef_id=c['resolved_chef_id'], branch_id=c['resolved_branch_id'], claim_id=claim, role_text=p.get('role_text'), valid_from=p.get('effective_date') if parse_iso_date(p.get('effective_date') or '') else None,
+                                   tenure_text=p.get('tenure_text'), valid_to_kind='unknown', seed_ref=f'cand:{c["candidate_id"]}')
+            elif ft == 'chef_move':
+                if c['verification'] != 'verified':
+                    # a move closes a tenure ONLY once verified (official/human source or 2 independent trusted hosts). Until then: candidate to check.
+                    queue_review(ctx.conn, 'move_needs_verification', 'candidate_fact', c['candidate_id'], {'payload': p, 'verification': c['verification']},
+                                 dedupe_key=f'move_needs_verification:{c["candidate_id"]}')
+                    ctx.conn.execute('RELEASE SAVEPOINT apply_fact')
+                    ctx.conn.commit()
+                    held += 1
+                    continue
+                same = ctx.conn.execute("SELECT employment_id, claim_id FROM employment WHERE chef_id=? AND branch_id=? AND state='active' AND valid_to_kind='open'",
+                                        (c['resolved_chef_id'], c['resolved_branch_id'])).fetchone()
+                if same:     # already there: confirmation, not a move
+                    link_evidence(ctx.conn, same['claim_id'], add_evidence(ctx.conn, **_evidence_of(ctx, c)))
+                    ctx.conn.execute('UPDATE candidate_fact SET applied_claim_id=? WHERE candidate_id=?', (same['claim_id'], c['candidate_id']))
+                    ctx.conn.execute('RELEASE SAVEPOINT apply_fact')
+                    ctx.conn.commit()
+                    applied += 1
+                    continue
+                if not (p.get('effective_date') and parse_iso_date(p['effective_date'])):
+                    ctx.conn.execute("UPDATE candidate_fact SET resolution='needs_review' WHERE candidate_id=?", (c['candidate_id'],))
+                    queue_review(ctx.conn, 'move_without_date', 'candidate_fact', c['candidate_id'], {'payload': p}, dedupe_key=f'move_without_date:{c["candidate_id"]}')
+                    ctx.conn.execute('RELEASE SAVEPOINT apply_fact')
+                    ctx.conn.commit()
+                    held += 1
+                    continue
+                try:
+                    r = move_chef(ctx.conn, chef_id=c['resolved_chef_id'], effective_date=p['effective_date'], evidence=_evidence_of(ctx, c), status=c['verification'],
+                                  created_by=f'daemon:{c["extractor"]}', to_branch_id=c['resolved_branch_id'], to_employer_label=None if c['resolved_branch_id'] else p.get('to_label'),
+                                  role_text=p.get('role_text'))
+                    claim = r['claim_id']
+                except AmbiguousMove:
+                    ctx.conn.execute("UPDATE candidate_fact SET resolution='needs_review' WHERE candidate_id=?", (c['candidate_id'],))
+                    ctx.conn.execute('RELEASE SAVEPOINT apply_fact')
+                    ctx.conn.commit()
+                    held += 1
+                    continue
+            elif ft == 'mentorship':
+                if not p.get('assertion_text'):
+                    ctx.conn.execute("UPDATE candidate_fact SET resolution='rejected' WHERE candidate_id=?", (c['candidate_id'],))
+                    ctx.conn.execute('RELEASE SAVEPOINT apply_fact')
+                    ctx.conn.commit()
+                    continue
+                claim = create_claim(ctx.conn, 'mentorship', c['verification'], f'daemon:{c["extractor"]}', claim_id=stable_id('clm', 'cand', c['candidate_id']))
+                link_evidence(ctx.conn, claim, add_evidence(ctx.conn, **_evidence_of(ctx, c)))
+                ctx.conn.execute('INSERT OR IGNORE INTO mentorship_assertion(mentorship_id,mentee_chef_id,mentor_label,claim_id,seed_ref,created_at) VALUES (?,?,?,?,?,?)',
+                                 (stable_id('mnt', c['candidate_id']), c['resolved_chef_id'], p.get('mentor_label') or 'unspecified', claim, f'cand:{c["candidate_id"]}', utcnow()))
+            if claim:
+                ctx.conn.execute('UPDATE candidate_fact SET applied_claim_id=? WHERE candidate_id=?', (claim, c['candidate_id']))
                 applied += 1
-                continue
-            if not (p.get('effective_date') and parse_iso_date(p['effective_date'])):
-                ctx.conn.execute("UPDATE candidate_fact SET resolution='needs_review' WHERE candidate_id=?", (c['candidate_id'],))
-                queue_review(ctx.conn, 'move_without_date', 'candidate_fact', c['candidate_id'], {'payload': p}, dedupe_key=f'move_without_date:{c["candidate_id"]}')
-                held += 1
-                continue
+            ctx.conn.execute('RELEASE SAVEPOINT apply_fact')
+            ctx.conn.commit()
+        except Exception as exc:  # noqa: BLE001 — one bad fact must not fail the run
             try:
-                r = move_chef(ctx.conn, chef_id=c['resolved_chef_id'], effective_date=p['effective_date'], evidence=_evidence_of(ctx, c), status=c['verification'],
-                              created_by=f'daemon:{c["extractor"]}', to_branch_id=c['resolved_branch_id'], to_employer_label=None if c['resolved_branch_id'] else p.get('to_label'),
-                              role_text=p.get('role_text'))
-                claim = r['claim_id']
-            except AmbiguousMove:
-                ctx.conn.execute("UPDATE candidate_fact SET resolution='needs_review' WHERE candidate_id=?", (c['candidate_id'],))
-                held += 1
-                continue
-        elif ft == 'mentorship':
-            if not p.get('assertion_text'):
-                ctx.conn.execute("UPDATE candidate_fact SET resolution='rejected' WHERE candidate_id=?", (c['candidate_id'],))
-                continue
-            claim = create_claim(ctx.conn, 'mentorship', c['verification'], f'daemon:{c["extractor"]}', claim_id=stable_id('clm', 'cand', c['candidate_id']))
-            link_evidence(ctx.conn, claim, add_evidence(ctx.conn, **_evidence_of(ctx, c)))
-            ctx.conn.execute('INSERT OR IGNORE INTO mentorship_assertion(mentorship_id,mentee_chef_id,mentor_label,claim_id,seed_ref,created_at) VALUES (?,?,?,?,?,?)',
-                             (stable_id('mnt', c['candidate_id']), c['resolved_chef_id'], p.get('mentor_label') or 'unspecified', claim, f'cand:{c["candidate_id"]}', utcnow()))
-        if claim:
-            ctx.conn.execute('UPDATE candidate_fact SET applied_claim_id=? WHERE candidate_id=?', (claim, c['candidate_id']))
-            applied += 1
-    ctx.conn.commit()
+                ctx.conn.execute('ROLLBACK TO SAVEPOINT apply_fact')
+                ctx.conn.execute('RELEASE SAVEPOINT apply_fact')
+            except Exception:  # noqa: BLE001
+                ctx.conn.rollback()
+            _hold_apply_error(ctx, c, p, exc)
+            ctx.conn.commit()
+            held += 1
     return StageResult({'applied': applied, 'held_for_review': held})
 
 
-# ───────────── 8. service output recompute ─────────────
 def service_output_recompute(ctx: StageContext) -> StageResult:
     repaired = repair_timeline_dates(ctx.conn)
     day = ctx.env.get('today') or utcnow()[:10]

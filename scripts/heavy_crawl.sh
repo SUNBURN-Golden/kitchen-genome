@@ -11,6 +11,9 @@ exec 9>"$KG_HOME/data_store/heavy_crawl.lock"
 if ! flock -n 9; then echo "[$(date -Is)] HEAVY=skipped reason=locked block=${2:-?}"; exit 0; fi
 export KG_IG=0
 export KG_SERVICE_DB="${KG_SERVICE_DB:-$KG_HOME/data_store/kg_service.db}"
+export PYTHONPATH=daemon
 echo "[$(date -Is)] start block=${2:-manual} until=$1"
-PYTHONPATH=daemon python3 -m kg_collect.heavy --db "$KG_SERVICE_DB" run --until "$1" --block "${2:-manual}" ${3:-} 2>>data_store/logs/heavy_crawl.err
-echo "[$(date -Is)] end rc=$?"
+# cron wraps this script in `timeout -k 60 ...`. exec so SIGTERM/SIGKILL reach the
+# Python process; a signal to the shell alone left the interpreter running and the
+# night/midday blocks finished 1-2 hours late.
+exec python3 -m kg_collect.heavy --db "$KG_SERVICE_DB" run --until "$1" --block "${2:-manual}" ${3:-} 2>>data_store/logs/heavy_crawl.err

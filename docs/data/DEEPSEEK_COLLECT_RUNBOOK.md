@@ -141,7 +141,7 @@ rejection gets one correction that names the category.
 | Variable | Default | Effect |
 | --- | --- | --- |
 | `KG_COLLECT` | `1` | Run web collector and daemon bridge |
-| `KG_COLLECT_TIMEOUT` | `1500` | Existing shell timeout in seconds. The collector leaves time for extraction and finalization. |
+| `KG_COLLECT_TIMEOUT` | `1680` | Shell timeout in seconds (120s finalize + 360s source scoring + 1200s extract). The collector leaves time for scoring and finalization. |
 | `KG_DEEPSEEK` | `1` | Enable the configured model chain |
 | `KG_QWEN_MODEL` | `qwen4-max-preview` | Model ID on the existing Qwen Token Plan route |
 | `KG_GUARD_IDENTICAL_FAILURES` | `5` | Consecutive identical failures in one lane |
