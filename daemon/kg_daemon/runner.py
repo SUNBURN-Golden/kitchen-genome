@@ -122,6 +122,34 @@ class Daemon:
                                      AND EXISTS (SELECT 1 FROM daemon_run n WHERE n.resumed_from=daemon_run.run_id)""", (self.config['daemon_name'],))
         return cur.rowcount
 
+    def close_orphaned_runs(self, keep_run_id: str | None = None) -> int:
+        """We hold this daemon's lock, so any other 'running' row is a dead process (SIGTERM/timeout
+        without a closer, or a crash). Mark those 'abandoned' — the same status close_superseded_runs
+        uses for a leftover running predecessor. The run we are about to resume is kept so
+        _start_run can attach it via resumed_from; close_superseded_runs then finishes it.
+        Idempotent; never touches another daemon's rows or already-final statuses."""
+        now = self.clock()
+        if keep_run_id:
+            cur = self.conn.execute("""UPDATE daemon_run SET status='abandoned', finished_at=?
+                                       WHERE daemon=? AND status='running' AND run_id!=?
+                                         AND NOT EXISTS (SELECT 1 FROM daemon_run n WHERE n.resumed_from=daemon_run.run_id)""",
+                                    (now, self.config['daemon_name'], keep_run_id))
+        else:
+            cur = self.conn.execute("""UPDATE daemon_run SET status='abandoned', finished_at=?
+                                       WHERE daemon=? AND status='running'
+                                         AND NOT EXISTS (SELECT 1 FROM daemon_run n WHERE n.resumed_from=daemon_run.run_id)""",
+                                    (now, self.config['daemon_name']))
+        self.conn.commit()
+        return cur.rowcount
+
+    def _finish_if_running(self, run_id, status, failed_stage=None) -> int:
+        """Close a still-open run (SIGTERM or a timeout closer). No-op if already final."""
+        cur = self.conn.execute(
+            "UPDATE daemon_run SET status=?, failed_stage=?, finished_at=? WHERE run_id=? AND status='running'",
+            (status, failed_stage, self.clock(), run_id))
+        self.conn.commit()
+        return cur.rowcount
+
     def _start_run(self, trigger: str, resume: bool) -> str:
         prev = self._resumable() if resume else None
         run_id = new_id('run')
@@ -152,11 +180,38 @@ class Daemon:
     def run(self, trigger: str = 'manual', resume: bool = True) -> dict:
         if not self.acquire_lock():
             return {'status': 'locked', 'run_id': None}
+        import signal
+        run_id = None
+        self._active_stage = None
+        self._killed = False
+        prev_term = signal.getsignal(signal.SIGTERM)
+
+        def _on_sigterm(signum, frame):
+            self._killed = True
+            if run_id:
+                try:
+                    self.conn.rollback()
+                except Exception:
+                    pass
+                try:
+                    self._finish_if_running(run_id, 'failed', self._active_stage)
+                except Exception:
+                    pass
+            if callable(prev_term) and prev_term not in (signal.SIG_DFL, signal.SIG_IGN):
+                prev_term(signum, frame)
+            raise KeyboardInterrupt
+
         try:
+            signal.signal(signal.SIGTERM, _on_sigterm)
+            keep = self._resumable() if resume else None
+            self.close_orphaned_runs(keep_run_id=keep['run_id'] if keep else None)
             run_id = self._start_run(trigger, resume)
             cost = CostMeter(self.conn, run_id, self.config['unit_costs'])
             prev_out: dict = {}
             for st in self.stages:
+                if self._killed:
+                    break
+                self._active_stage = st
                 cp = self.conn.execute('SELECT * FROM stage_checkpoint WHERE run_id=? AND stage=?', (run_id, st)).fetchone()
                 if cp['status'] == 'done':
                     prev_out[st] = json.loads(cp['output_json'])
@@ -165,9 +220,26 @@ class Daemon:
                 if outcome != 'done':
                     return self._report(run_id)
                 prev_out[st] = json.loads(self.conn.execute('SELECT output_json FROM stage_checkpoint WHERE run_id=? AND stage=?', (run_id, st)).fetchone()['output_json'])
+            if self._killed:
+                try:
+                    self.conn.rollback()
+                except Exception:
+                    pass
+                self._finish_if_running(run_id, 'failed', self._active_stage)
+                return self._report(run_id)
             self._finish(run_id, 'succeeded')
             return self._report(run_id)
+        except KeyboardInterrupt:
+            if run_id:
+                try:
+                    self.conn.rollback()
+                except Exception:
+                    pass
+                self._finish_if_running(run_id, 'failed', self._active_stage)
+                return self._report(run_id)
+            raise
         finally:
+            signal.signal(signal.SIGTERM, prev_term)
             self.release_lock()
 
     def _run_stage(self, run_id, st, cost, prev_out) -> str:

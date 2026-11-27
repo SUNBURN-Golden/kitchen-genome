@@ -223,3 +223,28 @@ def sol_transport(payload, key=None, timeout=SOL_TIMEOUT_SEC, runner=run_cli):
     if status != 502:
         return status, b''
     return completion(result.get('text') or '', result.get('usage') or {}, model)
+
+
+def extract_call_budget(deadline, now, *, timeout=SOL_TIMEOUT_SEC, max_calls=None):
+    """How many sol extract calls may still start.
+
+    When max_calls is set (KG_SOL_EXTRACT_MAX) it is the cap. Otherwise the cap is
+    floor(remaining / timeout) so a worst-case call still finishes before deadline.
+    None means no numeric cap (no deadline and no override).
+    """
+    if max_calls is not None:
+        return max(0, int(max_calls))
+    if deadline is None:
+        return None
+    return max(0, int((deadline - now) // timeout))
+
+
+def allow_extract_call(deadline, used, now, *, timeout=SOL_TIMEOUT_SEC, max_calls=None):
+    """False when the next sol extract call would miss the deadline or exceed the cap."""
+    cap = extract_call_budget(deadline, now, timeout=timeout, max_calls=max_calls)
+    if cap is not None and used >= cap:
+        return False
+    if deadline is not None and (deadline - now) < timeout:
+        return False
+    return True
+

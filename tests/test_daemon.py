@@ -424,6 +424,70 @@ def test_close_superseded_runs_repairs_legacy_rows_and_keeps_live_or_final_ones(
     assert row('run_other') == ('running', None)                                        # another daemon's chain is its own business
 
 
+def test_close_orphaned_runs_abandons_dead_running_rows_but_keeps_resumable(world):
+    """A leftover running row with no successor is abandoned once we hold the lock,
+    except the predecessor we are about to resume."""
+    c, env, _ = world
+    ins = 'INSERT INTO daemon_run(run_id,daemon,status,trigger,cost_cap_units,resumed_from,started_at,finished_at) VALUES (?,?,?,?,?,?,?,?)'
+    c.execute(ins, ('run_old', 'kg-daemon', 'running', 'manual', 10, None, '2026-11-27T09:00:00Z', None))
+    c.execute(ins, ('run_keep', 'kg-daemon', 'running', 'manual', 10, None, '2026-11-27T09:57:33Z', None))
+    c.execute(ins, ('run_done', 'kg-daemon', 'succeeded', 'manual', 10, None, '2026-11-27T08:00:00Z', '2026-11-27T08:05:00Z'))
+    c.execute(ins, ('run_other', 'kg-collect', 'running', 'manual', 10, None, '2026-11-27T09:00:00Z', None))
+    c.commit()
+    d = daemon(c, env)
+    assert d.close_orphaned_runs(keep_run_id='run_keep') == 1
+    assert d.close_orphaned_runs(keep_run_id='run_keep') == 0
+    row = lambda r: tuple(c.execute('SELECT status, finished_at IS NOT NULL FROM daemon_run WHERE run_id=?', (r,)).fetchone())  # noqa: E731
+    assert row('run_old') == ('abandoned', 1)
+    assert row('run_keep') == ('running', 0)
+    assert row('run_done') == ('succeeded', 1)
+    assert row('run_other') == ('running', 0)
+
+
+def test_startup_sweep_abandons_orphans_when_not_resuming(world):
+    c, env, _ = world
+    c.execute('INSERT INTO daemon_run(run_id,daemon,status,trigger,cost_cap_units,resumed_from,started_at,finished_at) VALUES (?,?,?,?,?,?,?,?)',
+              ('run_stale', 'kg-daemon', 'running', 'manual', 10, None, '2026-11-27T09:57:33Z', None))
+    c.commit()
+    rep = daemon(c, env).run(resume=False)
+    assert rep['status'] == 'succeeded' and rep['resumed_from'] is None
+    stale = c.execute("SELECT status, finished_at FROM daemon_run WHERE run_id='run_stale'").fetchone()
+    assert stale['status'] == 'abandoned' and stale['finished_at']
+    assert c.execute("SELECT COUNT(*) FROM daemon_run WHERE status='running'").fetchone()[0] == 0
+
+
+def test_startup_sweep_resumes_latest_running_and_closes_older_orphan(world):
+    c, env, _ = world
+    ins = 'INSERT INTO daemon_run(run_id,daemon,status,trigger,cost_cap_units,resumed_from,started_at,finished_at) VALUES (?,?,?,?,?,?,?,?)'
+    c.execute(ins, ('run_older', 'kg-daemon', 'running', 'manual', 10, None, '2026-11-27T09:00:00Z', None))
+    c.execute(ins, ('run_latest', 'kg-daemon', 'running', 'manual', 10, None, '2026-11-27T09:57:33Z', None))
+    c.commit()
+    rep = daemon(c, env).run()
+    assert rep['status'] == 'succeeded' and rep['resumed_from'] == 'run_latest'
+    assert c.execute("SELECT status FROM daemon_run WHERE run_id='run_older'").fetchone()[0] == 'abandoned'
+    assert c.execute("SELECT status FROM daemon_run WHERE run_id='run_latest'").fetchone()[0] == 'abandoned'
+    assert c.execute("SELECT COUNT(*) FROM daemon_run WHERE status='running'").fetchone()[0] == 0
+
+
+def test_sigterm_closes_running_run_as_failed(world):
+    """timeout(1) sends SIGTERM; the closer must finish the row as failed (resumable), not leave it running."""
+    import os
+    import signal
+    c, env, _ = world
+
+    def boom(_ctx):
+        os.kill(os.getpid(), signal.SIGTERM)
+        return StageResult({})
+
+    rep = daemon(c, env, {**HANDLERS, 'source_discovery': boom}).run()
+    assert rep['status'] == 'failed' and rep['failed_stage'] == 'source_discovery'
+    row = c.execute('SELECT status, failed_stage, finished_at FROM daemon_run WHERE run_id=?', (rep['run_id'],)).fetchone()
+    assert row['status'] == 'failed' and row['failed_stage'] == 'source_discovery' and row['finished_at']
+    assert c.execute("SELECT COUNT(*) FROM daemon_run WHERE status='running'").fetchone()[0] == 0
+    # A later cycle can still resume a failed run.
+    rep2 = daemon(c, env).run()
+    assert rep2['status'] == 'succeeded' and rep2['resumed_from'] == rep['run_id']
+
 
 def test_vault_body_omits_null_provenance_but_keeps_set_flags():
     """#75 added pending_only/asserted_by/extractor/collector_account to every vault body as null,

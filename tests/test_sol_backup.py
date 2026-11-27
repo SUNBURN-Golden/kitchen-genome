@@ -163,3 +163,48 @@ def test_run_cli_stops_at_turn_completed(tmp_path):
     script.chmod(0o755)
     ev, _ = sol.run_cli([str(script)], {}, str(tmp_path), 20)
     assert ev['text'] == '{}' and ev['usage']['input_tokens'] == 10
+
+
+def test_extract_call_budget_auto_caps_to_worst_case_timeout():
+    # Default collect extract window is 1200s; worst-case sol call is 240s → 5 calls.
+    assert sol.extract_call_budget(1200, 0) == 5
+    assert sol.extract_call_budget(420, 0) == 1          # after plan+fetch ate ~780s of the 1200s window
+    assert sol.extract_call_budget(239, 0) == 0
+    assert sol.extract_call_budget(None, 0) is None      # no deadline: no numeric cap
+    assert sol.extract_call_budget(1200, 0, max_calls=2) == 2
+    assert sol.extract_call_budget(1200, 0, max_calls=0) == 0
+    assert sol.extract_call_budget(36_000, 0) == 150     # a long overnight window is not clipped
+
+
+def test_allow_extract_call_stops_before_a_call_can_overrun():
+    assert sol.allow_extract_call(1200, 0, 0) is True
+    assert sol.allow_extract_call(1200, 5, 0) is False   # cap reached
+    assert sol.allow_extract_call(200, 0, 0) is False    # remaining < 240s worst case
+    assert sol.allow_extract_call(None, 0, 0) is True
+    assert sol.allow_extract_call(1200, 1, 0, max_calls=2) is True
+    assert sol.allow_extract_call(1200, 2, 0, max_calls=2) is False
+    # Even with a high count cap, do not start if the remaining window is too short.
+    assert sol.allow_extract_call(100, 0, 0, max_calls=10) is False
+
+
+def test_sol_extract_blocked_when_backup_is_sol_and_budget_spent(monkeypatch, conn):
+    from kg_collect.deepseek import Adapters
+    c = sol_client(conn, lambda *a: pytest.fail('should not call'))
+    c.deadline = 100  # shorter than SOL_TIMEOUT_SEC, so the first call is refused
+    adapter = Adapters(c)
+    assert adapter._sol_extract_will_run() is True
+    assert adapter._sol_extract_blocked() is True
+
+
+def test_sol_extract_not_blocked_when_primary_is_usable(monkeypatch, conn):
+    from kg_collect.deepseek import Adapters
+    # DeepSeek has balance: extracts stay on the primary, no sol cap.
+    c = Client(Budget(meter(conn)), key='ds-key', transport=lambda *a: pytest.fail('unused'),
+               balance_transport=lambda key: wallet('5.00', available=True),
+               fallback_provider='sol', fallback_key=sol.LOGIN_MARKER,
+               fallback_transport=lambda *a: pytest.fail('unused'), fallback_model=sol.SOL_MODEL)
+    c.deadline = 100
+    adapter = Adapters(c)
+    assert adapter._sol_extract_will_run() is False
+    assert adapter._sol_extract_blocked() is False
+
