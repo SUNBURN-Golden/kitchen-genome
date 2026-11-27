@@ -340,6 +340,20 @@
      "review_id": "rev_3a5dbfa60a14",
      "reviewed_at": "2026-11-24T04:11:48Z",
      "src": "https://finomy.com/news/articleView.html?idxno=251559"
+    },
+    {
+     "badge": "AI 검토",
+     "chef": "엄태철",
+     "date": null,
+     "extraction_id": "ext_54170622d4bc",
+     "label": "employment_claim",
+     "label_ko": "근무",
+     "provenance": "ai_reviewed",
+     "quote": "소설한남 엄태철 셰프 등 한식과 외식 전문 2024-01-24 10:56 [정부 주요 일정]",
+     "restaurant": "소설한남",
+     "review_id": "rev_faedd95aeac2",
+     "reviewed_at": "2026-11-27T10:29:50Z",
+     "src": "https://etoday.co.kr/search?keyword=%EC%98%81%EC%85%B0%ED%94%84"
     }
    ]
   },
@@ -4166,6 +4180,20 @@
      "review_id": "rev_c8941a0bb982",
      "reviewed_at": "2026-11-25T22:53:20Z",
      "src": "https://hotelrestaurant.co.kr/news/articleList.html?sc_area=K&sc_word=%EB%AF%B8%EC%89%90%EB%A6%B03%EC%8A%A4%ED%83%80&view_type=sm"
+    },
+    {
+     "badge": "AI 검토",
+     "chef": null,
+     "date": "2026-03-08",
+     "extraction_id": "ext_86330e0246ae",
+     "label": "menu",
+     "label_ko": "메뉴",
+     "provenance": "ai_reviewed",
+     "quote": "서울신라호텔 한식당 '라연'은 예와 격을 갖춘 한식 정찬을 선보인다. 제철 식재료와 정통 조리법으로 한식을 현대적으로 풀이한다. 라연은 2016년부터 7년 연속 3스타를 받았다. 2023년부터 올해까지는 2스타를 유지하고 있다. 대표 메뉴로는 신선로와 구절판, 45일간 숙성한 한우구이가 있다.",
+     "restaurant": "라연",
+     "review_id": "rev_e1352f3e2af7",
+     "reviewed_at": "2026-11-27T10:30:35Z",
+     "src": "https://etoday.co.kr/news/view/2562901"
     }
    ]
   },
@@ -4267,6 +4295,20 @@
      "review_id": "rev_6d116378e9ba",
      "reviewed_at": "2026-11-25T22:53:27Z",
      "src": "https://etoday.co.kr/news/view/2333545?trc=view_joinnews"
+    },
+    {
+     "badge": "AI 검토",
+     "chef": "김보미",
+     "date": "2021-11-25",
+     "extraction_id": "ext_fa67c4fc08f6",
+     "label": "career",
+     "label_ko": "경력",
+     "provenance": "ai_reviewed",
+     "quote": "이날 특별상인 ‘미쉐린 영 셰프 상’에 김보미 셰프(미토우), ‘미쉐린 멘토 셰프 상’에 장명식 셰프(라미띠에)가 각각 선정됐다.",
+     "restaurant": "미토우",
+     "review_id": "rev_a4f89f2eb579",
+     "reviewed_at": "2026-11-27T10:30:17Z",
+     "src": "https://etoday.co.kr/news/view/2081355"
     }
    ]
   },
@@ -5446,6 +5488,20 @@
      "review_id": "rev_8bd52310bd83",
      "reviewed_at": "2026-11-25T22:50:56Z",
      "src": "https://hotelrestaurant.co.kr/news/articleList.html?sc_area=K&sc_word=%EC%86%90%EC%A2%85%EC%9B%90%EC%85%B0%ED%94%84&view_type=sm"
+    },
+    {
+     "badge": "AI 검토",
+     "chef": "손종원",
+     "date": "2026-03-08",
+     "extraction_id": "ext_a372cf060f49",
+     "label": "employment_claim",
+     "label_ko": "근무",
+     "provenance": "ai_reviewed",
+     "quote": "조선호텔앤리조트가 운영하는 '이타닉 가든'과 '라망 시크레'도 1스타를 지켰다. 두 곳 모두 넷플릭스 '흑백요리사2'에 나온 손종원 셰프가 총괄한다.",
+     "restaurant": "라망 시크레",
+     "review_id": "rev_b9e04cf6a7d4",
+     "reviewed_at": "2026-11-27T10:30:35Z",
+     "src": "https://etoday.co.kr/news/view/2562901"
     }
    ]
   },
@@ -6630,6 +6686,34 @@
      "review_id": "rev_75d0b8699475",
      "reviewed_at": "2026-11-25T22:50:56Z",
      "src": "https://hotelrestaurant.co.kr/news/articleList.html?sc_area=K&sc_word=%EC%86%90%EC%A2%85%EC%9B%90%EC%85%B0%ED%94%84&view_type=sm"
+    },
+    {
+     "badge": "AI 검토",
+     "chef": "손종원",
+     "date": "2026-03-08",
+     "extraction_id": "ext_1ab2973884de",
+     "label": "employment_claim",
+     "label_ko": "근무",
+     "provenance": "ai_reviewed",
+     "quote": "조선호텔앤리조트가 운영하는 '이타닉 가든'과 '라망 시크레'도 1스타를 지켰다. 두 곳 모두 넷플릭스 '흑백요리사2'에 나온 손종원 셰프가 총괄한다.",
+     "restaurant": "이타닉 가든",
+     "review_id": "rev_f95013ef2223",
+     "reviewed_at": "2026-11-27T10:30:35Z",
+     "src": "https://etoday.co.kr/news/view/2562901"
+    },
+    {
+     "badge": "AI 검토",
+     "chef": "손종원",
+     "date": null,
+     "extraction_id": "ext_f3e4fd5db0e5",
+     "label": "employment_claim",
+     "label_ko": "근무",
+     "provenance": "ai_reviewed",
+     "quote": "이타닉가든 손종원 셰프 등 한식 산업 관계자들과 가진 간담회에서 이같이 밝혔다. 이번 간담회는 한식 산업 관계자 2024-11-04 14:00 송미령 장관",
+     "restaurant": "이타닉가든",
+     "review_id": "rev_df8b2b186b2b",
+     "reviewed_at": "2026-11-27T10:30:54Z",
+     "src": "https://etoday.co.kr/search?keyword=%EC%9D%B4%ED%83%80%EB%8B%89%EA%B0%80%EB%93%A0"
     }
    ]
   },
@@ -14336,6 +14420,216 @@
    "review_id": "rev_7719073b1b89",
    "reviewed_at": "2026-11-25T22:53:45Z",
    "src": "https://etoday.co.kr/search?keyword=%ED%95%9C%EC%8B%9D%ED%8C%8C%EC%9D%B8%EB%8B%A4%EC%9D%B4%EB%8B%9D"
+  },
+  {
+   "badge": "AI 검토",
+   "chef": "김민석·성진호",
+   "date": null,
+   "extraction_id": "ext_c0415b7facfa",
+   "label": "menu",
+   "label_ko": "메뉴",
+   "provenance": "ai_reviewed",
+   "quote": "이곳에서 만난 두 명의 20대 초반 젊은 셰프 김민석·성진호 셰프는 전라도 음식과 식재료를 자신들의 색깔을 녹여 재해석해 만든 한식 다이닝 메뉴를 하나하나 정성스레 선보였다. 대학 동기이자 동갑내기인 두 셰프는 고향인 전라도에서 식당 오픈을 준비하다, 7번째 퀴진케이 팝 2025-05-31 08:00 CJ 오너 4세",
+   "restaurant": "퀴진케이",
+   "review_id": "rev_8e1bb8e1c557",
+   "reviewed_at": "2026-11-27T10:29:50Z",
+   "src": "https://etoday.co.kr/search?keyword=%EC%98%81%EC%85%B0%ED%94%84"
+  },
+  {
+   "badge": "AI 검토",
+   "chef": "배요환",
+   "date": null,
+   "extraction_id": "ext_9ae469460f16",
+   "label": "opening",
+   "label_ko": "오픈",
+   "provenance": "ai_reviewed",
+   "quote": "12:18 CJ제일제당 ‘퀴진케이’ 출신 오너 셰프 탄생 CJ제일제당의 한식 셰프 육성 프로젝트인 ‘퀴진케이(Cuisine. K)’의 성공 사례가 구축되고 있다. CJ제일제당은 퀴진케이 출신인 배요환 셰프가 모던 한식 레스토랑 ‘두리(DOORI)’를 창업한다고 24일 밝혔다.",
+   "restaurant": "두리(DOORI)",
+   "review_id": "rev_37de4e43b382",
+   "reviewed_at": "2026-11-27T10:29:50Z",
+   "src": "https://etoday.co.kr/search?keyword=%EC%98%81%EC%85%B0%ED%94%84"
+  },
+  {
+   "badge": "AI 검토",
+   "chef": null,
+   "date": null,
+   "extraction_id": "ext_fae98bb9ec07",
+   "label": "collab",
+   "label_ko": "협업",
+   "provenance": "ai_reviewed",
+   "quote": "CJ제일제당은 최근 뉴욕의 한식 파인다이닝 레스토랑 ‘NARO’에서 퀴진케이와 한국을 대표하는 스타 셰프들이 손잡고 ‘팝업 디너’를 진행했다고 27일 밝혔다. 이 행사는 뉴욕 현지 언론ㆍ미국 외식업계 오피니언 리더 등을 초청해 전통한식의 품 2024-05-27 09:08 세계적 셰프들 서울로",
+   "restaurant": "NARO",
+   "review_id": "rev_b483c0ccbea0",
+   "reviewed_at": "2026-11-27T10:29:50Z",
+   "src": "https://etoday.co.kr/search?keyword=%EC%98%81%EC%85%B0%ED%94%84"
+  },
+  {
+   "badge": "AI 검토",
+   "chef": null,
+   "date": null,
+   "extraction_id": "ext_207deec3ec8a",
+   "label": "opening",
+   "label_ko": "오픈",
+   "provenance": "ai_reviewed",
+   "quote": "09:27 CJ제일제당, 네번째 한식 팝업레스토랑 ‘두리’ 오픈 CJ제일제당이 한식 셰프 양성 프로젝트 ‘퀴진케이(Cuisine K)’를 통해 네번째 팝업 레스토랑을 선보인다. CJ제일제당은 5월 12일까지 서울 강남구 소재 ‘이노플레이’ 1층에 팝업 레스토랑 ‘두리(DOORI)’를 운영한다고 24일 밝혔다.",
+   "restaurant": "두리(DOORI)",
+   "review_id": "rev_624b00c4cad1",
+   "reviewed_at": "2026-11-27T10:29:50Z",
+   "src": "https://etoday.co.kr/search?keyword=%EC%98%81%EC%85%B0%ED%94%84"
+  },
+  {
+   "badge": "AI 검토",
+   "chef": "장명식",
+   "date": "2021-11-25",
+   "extraction_id": "ext_1341ed39affd",
+   "label": "career",
+   "label_ko": "경력",
+   "provenance": "ai_reviewed",
+   "quote": "이날 특별상인 ‘미쉐린 영 셰프 상’에 김보미 셰프(미토우), ‘미쉐린 멘토 셰프 상’에 장명식 셰프(라미띠에)가 각각 선정됐다.",
+   "restaurant": "라미띠에",
+   "review_id": "rev_00a0f78f4127",
+   "reviewed_at": "2026-11-27T10:30:17Z",
+   "src": "https://etoday.co.kr/news/view/2081355"
+  },
+  {
+   "badge": "AI 검토",
+   "chef": "토 콱 웨이",
+   "date": "2026-03-08",
+   "extraction_id": "ext_53cb3cb75ac0",
+   "label": "employment_claim",
+   "label_ko": "근무",
+   "provenance": "ai_reviewed",
+   "quote": "포시즌스 호텔 서울의 '유유안'은 광둥 요리를 전문으로 한다. 2017년부터 5년 연속 1스타를 받았다. 지난해 별을 되찾은 뒤 올해도 1스타를 유지했다. 홍콩 출신 토 콱 웨이 셰프가 식당을 이끈다.",
+   "restaurant": "유유안",
+   "review_id": "rev_4ca0b4971fd6",
+   "reviewed_at": "2026-11-27T10:30:35Z",
+   "src": "https://etoday.co.kr/news/view/2562901"
+  },
+  {
+   "badge": "AI 검토",
+   "chef": null,
+   "date": "2026-03-08",
+   "extraction_id": "ext_dfc668421d37",
+   "label": "opening",
+   "label_ko": "오픈",
+   "provenance": "ai_reviewed",
+   "quote": "'스시 카네사카'는 문을 연 지 1년 3개월 만에 처음 별을 달았다.",
+   "restaurant": "스시 카네사카",
+   "review_id": "rev_636e1be5d956",
+   "reviewed_at": "2026-11-27T10:30:35Z",
+   "src": "https://etoday.co.kr/news/view/2562901"
+  },
+  {
+   "badge": "AI 검토",
+   "chef": null,
+   "date": "2026-03-08",
+   "extraction_id": "ext_e896bcd8846c",
+   "label": "collab",
+   "label_ko": "협업",
+   "provenance": "ai_reviewed",
+   "quote": "'스시 카네사카'는 문을 연 지 1년 3개월 만에 처음 별을 달았다. 일본의 유명 스시 브랜드와 손잡고 정통 에도마에 스시를 선보인다.",
+   "restaurant": "스시 카네사카",
+   "review_id": "rev_e49d4dd0b7d6",
+   "reviewed_at": "2026-11-27T10:30:35Z",
+   "src": "https://etoday.co.kr/news/view/2562901"
+  },
+  {
+   "badge": "AI 검토",
+   "chef": null,
+   "date": "2026-03-08",
+   "extraction_id": "ext_5f858de8bd5c",
+   "label": "menu",
+   "label_ko": "메뉴",
+   "provenance": "ai_reviewed",
+   "quote": "'콜라쥬' 역시 이번에 처음 스타 레스토랑이 됐다. 여러 재료를 조합해 13가지 코스 요리를 제공한다.",
+   "restaurant": "콜라쥬",
+   "review_id": "rev_449db2c4cb73",
+   "reviewed_at": "2026-11-27T10:30:35Z",
+   "src": "https://etoday.co.kr/news/view/2562901"
+  },
+  {
+   "badge": "AI 검토",
+   "chef": "손종원",
+   "date": null,
+   "extraction_id": "ext_5ecbfe8f95f2",
+   "label": "career",
+   "label_ko": "경력",
+   "provenance": "ai_reviewed",
+   "quote": "2026-11-06 06:21 '흑백요리사2' 손종원, 대기업 임원 됐다⋯신세계그룹 파격 승진 ‘흑백요리사2’로 인기를 얻은 스타 셰프 손종원이 신세계그룹 임원으로 승진했다.",
+   "restaurant": "신세계그룹",
+   "review_id": "rev_5ad53c69385c",
+   "reviewed_at": "2026-11-27T10:30:54Z",
+   "src": "https://etoday.co.kr/search?keyword=%EC%9D%B4%ED%83%80%EB%8B%89%EA%B0%80%EB%93%A0"
+  },
+  {
+   "badge": "AI 검토",
+   "chef": "손종원",
+   "date": null,
+   "extraction_id": "ext_b9c71c114efa",
+   "label": "employment_claim",
+   "label_ko": "근무",
+   "provenance": "ai_reviewed",
+   "quote": "2026-11-06 06:21 '흑백요리사2' 손종원, 대기업 임원 됐다⋯신세계그룹 파격 승진 ‘흑백요리사2’로 인기를 얻은 스타 셰프 손종원이 신세계그룹 임원으로 승진했다. 23일 신세계그룹이 발표한 2027년도 정기 임원인사에 따르면 조선호텔앤리조트 소속 손종원 셰프가 전문임원으로 승진했다.",
+   "restaurant": "조선호텔앤리조트",
+   "review_id": "rev_665accdc56c0",
+   "reviewed_at": "2026-11-27T10:30:54Z",
+   "src": "https://etoday.co.kr/search?keyword=%EC%9D%B4%ED%83%80%EB%8B%89%EA%B0%80%EB%93%A0"
+  },
+  {
+   "badge": "AI 검토",
+   "chef": null,
+   "date": null,
+   "extraction_id": "ext_fe4ca42d2941",
+   "label": "opening",
+   "label_ko": "오픈",
+   "provenance": "ai_reviewed",
+   "quote": "2026-10-07 11:00 \"예약하려면 11월에 오세요\"…광화문 한식 다이닝 '아사달', 두 달 치 예약 끝났다 4월 개점 이후 고객 수 20배 이상 증가",
+   "restaurant": "아사달",
+   "review_id": "rev_171401cf23e2",
+   "reviewed_at": "2026-11-27T10:30:54Z",
+   "src": "https://etoday.co.kr/search?keyword=%EC%9D%B4%ED%83%80%EB%8B%89%EA%B0%80%EB%93%A0"
+  },
+  {
+   "badge": "AI 검토",
+   "chef": null,
+   "date": null,
+   "extraction_id": "ext_f2820bdef771",
+   "label": "menu",
+   "label_ko": "메뉴",
+   "provenance": "ai_reviewed",
+   "quote": "2026-10-07 11:00 \"예약하려면 11월에 오세요\"…광화문 한식 다이닝 '아사달', 두 달 치 예약 끝났다 4월 개점 이후 고객 수 20배 이상 증가…1986년 한식당 헤리티지 계승신선로·보김치 등 현대적 재해석…9월 15일부터 가을 코스 메뉴 선봬",
+   "restaurant": "아사달",
+   "review_id": "rev_7e42aea1b480",
+   "reviewed_at": "2026-11-27T10:30:54Z",
+   "src": "https://etoday.co.kr/search?keyword=%EC%9D%B4%ED%83%80%EB%8B%89%EA%B0%80%EB%93%A0"
+  },
+  {
+   "badge": "AI 검토",
+   "chef": "김대천",
+   "date": null,
+   "extraction_id": "ext_362b6d05b898",
+   "label": "employment_claim",
+   "label_ko": "근무",
+   "provenance": "ai_reviewed",
+   "quote": "세븐스도어 김대천 셰프, 이타닉가든 손종원 셰프 등 한식 산업 관계자들과 가진 간담회에서 이같이 밝혔다. 이번 간담회는 한식 산업 관계자 2024-11-04 14:00 송미령 장관",
+   "restaurant": "세븐스도어",
+   "review_id": "rev_a1600eb71786",
+   "reviewed_at": "2026-11-27T10:30:54Z",
+   "src": "https://etoday.co.kr/search?keyword=%EC%9D%B4%ED%83%80%EB%8B%89%EA%B0%80%EB%93%A0"
+  },
+  {
+   "badge": "AI 검토",
+   "chef": null,
+   "date": null,
+   "extraction_id": "ext_40f08a9d4a32",
+   "label": "collab",
+   "label_ko": "협업",
+   "provenance": "ai_reviewed",
+   "quote": "2024-06-22 06:00 조선호텔 팔보채, 이마트 키친델리서 즐긴다 이마트는 즉석조리코너 키친델리를 통해 조선호텔 셰프와 협업한 신제품 2종을 선보인다고 31일 밝혔다. 신제품은 ‘팔보채 레시피(RECIPE) BY 조선호텔’과 '난자완스 레시피 BY 조선호텔’로,",
+   "restaurant": "이마트",
+   "review_id": "rev_f82946557082",
+   "reviewed_at": "2026-11-27T10:30:54Z",
+   "src": "https://etoday.co.kr/search?keyword=%EC%9D%B4%ED%83%80%EB%8B%89%EA%B0%80%EB%93%A0"
   }
  ],
  "career_projection": {
@@ -14549,6 +14843,12 @@
         "kind": "affiliation",
         "src": "https://celebinfluencernews.com/news/articleView.html?idxno=1644",
         "quote": "손종원 셰프가 이끄는 서울의 이타닉 가든(Eatanic Garden)은 세계 72위에 올랐다.",
+        "badge": "AI 검토"
+       },
+       {
+        "kind": "affiliation",
+        "src": "https://etoday.co.kr/search?keyword=%EC%9D%B4%ED%83%80%EB%8B%89%EA%B0%80%EB%93%A0",
+        "quote": "이타닉가든 손종원 셰프 등 한식 산업 관계자들과 가진 간담회에서 이같이 밝혔다. 이번 간담회는 한식 산업 관계자 2024-11-04 14:00 송미령 장관",
         "badge": "AI 검토"
        },
        {
@@ -16354,7 +16654,29 @@
     "city": "서울",
     "area": "한남",
     "country": "KR",
-    "origins": []
+    "origins": [],
+    "career_affiliations": [
+     {
+      "chef_id": "chf_7a1aa4671cc5",
+      "chef_name": "엄태철",
+      "chef_name_en": "Eom Tae-cheol",
+      "role": null,
+      "period": null,
+      "relation": "current",
+      "lineage_status": "unverified",
+      "career_checking": [
+       "chef"
+      ],
+      "evidence": [
+       {
+        "kind": "affiliation",
+        "src": "https://etoday.co.kr/search?keyword=%EC%98%81%EC%85%B0%ED%94%84",
+        "quote": "소설한남 엄태철 셰프 등 한식과 외식 전문 2024-01-24 10:56 [정부 주요 일정]",
+        "badge": "AI 검토"
+       }
+      ]
+     }
+    ]
    },
    {
     "id": "sosuheon",
@@ -21548,6 +21870,70 @@
     "branch_id": "br_35340fc676b6",
     "chef_id": "chf_8ef703ed69f5",
     "holder": "kg-6b87159d31ff"
+   },
+   "rev_faedd95aeac2": {
+    "role_id": null,
+    "role_text": null,
+    "valid_from": null,
+    "valid_to": null,
+    "mentor_id": null,
+    "previous_branch_id": null,
+    "chef_text": "엄태철",
+    "venue_text": "소설한남",
+    "relation": "current",
+    "quote": "소설한남 엄태철 셰프 등 한식과 외식 전문 2024-01-24 10:56 [정부 주요 일정]",
+    "city": null,
+    "country_code": null,
+    "bilingual_venue": null,
+    "bilingual_name": null,
+    "canonical_url": "https://etoday.co.kr/search?keyword=%EC%98%81%EC%85%B0%ED%94%84",
+    "publisher_group": "etoday.co.kr",
+    "origin_group": "etoday.co.kr",
+    "independent_eligible": 0,
+    "source_tier": "press",
+    "published_at": null,
+    "content_hash": "dd4777efeee5bf143c388bc3399ef42e3f53f9ad977fa3cf06cb1e0f753501fe",
+    "body_fingerprint": "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",
+    "quote_key": "172a07953c8eb1c28b63263f66e1836bf7e1248e5464d75e5d392bd1605d50f7",
+    "snapshot_checked": true,
+    "src": "https://etoday.co.kr/search?keyword=%EC%98%81%EC%85%B0%ED%94%84",
+    "assertion_id": "rev_faedd95aeac2",
+    "ai_reviewed": true,
+    "branch_id": "brn_c95939177dc9",
+    "chef_id": "chf_7a1aa4671cc5",
+    "holder": "soseoul"
+   },
+   "rev_df8b2b186b2b": {
+    "role_id": null,
+    "role_text": null,
+    "valid_from": null,
+    "valid_to": null,
+    "mentor_id": null,
+    "previous_branch_id": null,
+    "chef_text": "손종원",
+    "venue_text": "이타닉가든",
+    "relation": "current",
+    "quote": "이타닉가든 손종원 셰프 등 한식 산업 관계자들과 가진 간담회에서 이같이 밝혔다. 이번 간담회는 한식 산업 관계자 2024-11-04 14:00 송미령 장관",
+    "city": null,
+    "country_code": null,
+    "bilingual_venue": null,
+    "bilingual_name": null,
+    "canonical_url": "https://etoday.co.kr/search?keyword=%EC%9D%B4%ED%83%80%EB%8B%89%EA%B0%80%EB%93%A0",
+    "publisher_group": "etoday.co.kr",
+    "origin_group": "etoday.co.kr",
+    "independent_eligible": 0,
+    "source_tier": "press",
+    "published_at": null,
+    "content_hash": "40b93a579768e661f80eb97921b5416e3285a94e0aeccb8866d06737a108c097",
+    "body_fingerprint": "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",
+    "quote_key": "88fd48f4d51fe350338abb0e271259d5822bc471dfe47df08e04fee11775925d",
+    "snapshot_checked": true,
+    "src": "https://etoday.co.kr/search?keyword=%EC%9D%B4%ED%83%80%EB%8B%89%EA%B0%80%EB%93%A0",
+    "assertion_id": "rev_df8b2b186b2b",
+    "ai_reviewed": true,
+    "branch_id": "brn_f13cec2540a2",
+    "chef_id": "chf_f64005d4ab91",
+    "holder": "eatanic"
    }
   },
   "snapshot": {
@@ -22685,6 +23071,10 @@
     }
    },
    "people": {
+    "chf_7a1aa4671cc5": {
+     "display_name": "엄태철",
+     "display_name_en": "Eom Tae-cheol"
+    },
     "chf_a91a50ebb6f0": {
      "display_name": "배경준",
      "display_name_en": "Bae Gyeong-jun"
@@ -24177,6 +24567,22 @@
     ],
     "created": "2026-11-24"
    },
+   "ai-link_0bb64f64b1f8": {
+    "relation": "current",
+    "role_id": null,
+    "valid_from": null,
+    "valid_to": null,
+    "branch": "brn_c95939177dc9",
+    "chef": "chf_7a1aa4671cc5",
+    "reviews": [
+     "rev_faedd95aeac2"
+    ],
+    "gate": "checking",
+    "holder": "soseoul",
+    "sources": [
+     "https://etoday.co.kr/search?keyword=%EC%98%81%EC%85%B0%ED%94%84"
+    ]
+   },
    "ai-link_dd9bcb63ce4b": {
     "relation": "current",
     "role_id": null,
@@ -24232,7 +24638,8 @@
      "rev_7e35c2a8805d",
      "rev_8f973e362b5a",
      "rev_d06c1b998874",
-     "rev_dce81505f4d7"
+     "rev_dce81505f4d7",
+     "rev_df8b2b186b2b"
     ],
     "gate": "verified",
     "holder": "eatanic",
@@ -24240,6 +24647,7 @@
      "https://ajunews.com/view/20261023165121710",
      "https://biz.chosun.com/distribution/channel/2026/03/06/WIZKKBS3FZGIVLLLMF5NKNPXIE",
      "https://celebinfluencernews.com/news/articleView.html?idxno=1644",
+     "https://etoday.co.kr/search?keyword=%EC%9D%B4%ED%83%80%EB%8B%89%EA%B0%80%EB%93%A0",
      "https://fnnews.com/news/202610231343319658",
      "https://hankyung.com/article/202601238486g",
      "https://mk.co.kr/news/culture/11981084",
