@@ -116,35 +116,16 @@
   "field": null,
   "value": null,
   "reliable_hosts": [
-   "msn.com"
+   "game.donga.com"
   ],
   "sources": [
-   "https://www.msn.com/ko-kr/news/other/%EB%B8%94%EB%A0%88%EC%9D%B4%EB%93%9C-%EC%86%8C%EC%9A%B8-%EB%A0%88%EB%B3%BC%EB%A3%A8%EC%85%98-8%EC%A3%BC%EB%85%84-%EC%95%9E%EB%91%90%EA%B3%A0-%EC%84%B1%EC%9E%A5-%EA%B1%B0%EB%9E%98-%EC%8B%9C%EC%8A%A4%ED%85%9C-%EA%B0%9C%ED%8E%B8-%EC%8B%A0%EA%B7%9C-%EC%84%9C%EB%B2%84-24%EC%9D%BC-%EC%98%A4%ED%94%88/ar-AA2hB8zl"
+   "https://game.donga.com/125325/"
   ],
   "dates": [
-   "2026-11-17"
+   "2026-11-26"
   ],
   "note": null,
   "first_seen": "2026-11-25"
- },
- {
-  "id": "kg-dc7deb51f2f7",
-  "name": "하네",
-  "kind": "chef_move",
-  "new_name": null,
-  "field": null,
-  "value": null,
-  "reliable_hosts": [
-   "msn.com"
-  ],
-  "sources": [
-   "https://www.msn.com/ko-kr/entertainment/%EC%9D%BC%EB%B0%98/%EA%B9%80%EC%9E%AC%EC%9A%B1-%EA%B0%95%EB%82%A8-%EB%8F%84%EA%B3%A1%EB%8F%99-%EC%B6%9C%EC%8B%A0-%EA%B3%A0%EB%B0%B1%EC%97%90-%EC%9C%A0%EC%9E%AC%EC%84%9D-%EB%90%98%EA%B2%8C-%EB%BF%8C%EB%93%AF%ED%95%B4%ED%95%98%EB%84%A4-%ED%8B%88%EB%A7%8C%EB%82%98%EB%A9%B4-%EC%A2%85%ED%95%A9/ar-AA2i7lao"
-  ],
-  "dates": [
-   "2026-11-24"
-  ],
-  "note": null,
-  "first_seen": "2026-11-27"
  },
  {
   "id": "mils",
