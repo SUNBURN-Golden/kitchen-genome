@@ -18,6 +18,7 @@ import sys
 
 from kg_ai import pending
 from . import chef_resolve
+from . import review_resolve
 from . import collect_bridge
 from . import registry as reg_mod
 from .claims import independent_sources, add_evidence, create_claim, host_of, link_evidence, open_conflict, queue_review, RANK
@@ -665,11 +666,13 @@ def quality_check(ctx: StageContext) -> StageResult:
     res = run_quality_checks(ctx.conn, day, ctx.config.get('stale_open_employment_days', 180))
     for kind, subj in res['warnings']:
         queue_review(ctx.conn, f'quality:{kind}', 'quality', subj, {'kind': kind}, dedupe_key=f'quality:{kind}:{subj}:{day[:7]}')
+    # Deterministic, non-AI closing of clear-cut review items (duplicates, unreviewable AI output, noise targets).
+    closed = review_resolve.resolve_review_backlog(ctx.conn)
     ctx.conn.commit()
     if res['violations']:
         raise NonRetryable(res['violations'][0][0])
     from collections import Counter
-    return StageResult({'warnings': dict(Counter(k for k, _ in res['warnings']))})
+    return StageResult({'warnings': dict(Counter(k for k, _ in res['warnings'])), 'review_backlog_closed': closed})
 
 
 HANDLERS = {
