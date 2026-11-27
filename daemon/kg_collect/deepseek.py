@@ -196,11 +196,44 @@ class Adapters:
         self.article_results = {}
         # Observable extraction funnel: a production no-op must not hide behind ai=enabled.
         self.stats = {'considered': 0, 'skipped_filter': 0, 'skipped_entertainment': 0, 'skipped_no_targets': 0,
-                      'eligible': 0, 'plan_skipped_targets': 0, 'skipped_balance': 0, 'skipped_not_needed': 0, 'skipped_size': 0, 'called': 0, 'failed': 0, 'findings': 0, 'findings_dropped': 0}
+                      'eligible': 0, 'plan_skipped_targets': 0, 'skipped_balance': 0, 'skipped_not_needed': 0, 'skipped_size': 0, 'skipped_deadline': 0, 'called': 0, 'failed': 0, 'findings': 0, 'findings_dropped': 0}
+        self._sol_extract_calls = 0
+        self._sol_extract_cap = None
+        self._sol_extract_cap_locked = False
 
     @classmethod
     def for_meter(cls, meter):
         return cls(Client(Budget(meter)))
+
+    def _sol_extract_will_run(self) -> bool:
+        """True when this extract would go to the sol backup (DeepSeek paused or unkeyed)."""
+        client = self.client
+        if getattr(client, 'fallback_provider', None) != 'sol' or not client.fallback_available:
+            return False
+        client.check_balance()
+        return bool(client.primary_paused or not client.key)
+
+    def _sol_extract_blocked(self) -> bool:
+        """Cap sol extracts so evaluate/finalize still fit inside the collect wall.
+
+        Auto cap is remaining-until-extract-deadline / SOL_TIMEOUT_SEC (240s worst case).
+        Override with KG_SOL_EXTRACT_MAX. A long collect (hours) therefore gets a large
+        cap; the default 1680s pipeline, after plan+fetch, typically gets 0–5 calls.
+        """
+        if not self._sol_extract_will_run():
+            return False
+        import time
+        from kg_ai import sol as sol_cli
+        client = self.client
+        if not self._sol_extract_cap_locked:
+            raw = os.environ.get('KG_SOL_EXTRACT_MAX')
+            override = int(raw) if raw not in (None, '') else None
+            self._sol_extract_cap = sol_cli.extract_call_budget(
+                client.deadline, time.monotonic(), max_calls=override)
+            self._sol_extract_cap_locked = True
+        return not sol_cli.allow_extract_call(
+            client.deadline, self._sol_extract_calls, time.monotonic(),
+            max_calls=self._sol_extract_cap)
 
     def plan(self, conn):
         self.client.use_task('gap-plan-2')
@@ -307,7 +340,7 @@ class Adapters:
             start = end - 200
         self.defer_extract = deferred
         # The funnel counts documents; request/finding counts remain separate.
-        for name in ('considered','eligible','skipped_filter','skipped_entertainment','skipped_no_targets','skipped_not_needed','skipped_size','skipped_balance'):
+        for name in ('considered','eligible','skipped_filter','skipped_entertainment','skipped_no_targets','skipped_not_needed','skipped_size','skipped_balance','skipped_deadline'):
             self.stats[name] = before[name] + int(self.stats[name] > before[name])
         if self.stats['eligible'] > before['eligible']:
             self.stats['skipped_no_targets'] = before['skipped_no_targets']
@@ -382,6 +415,13 @@ class Adapters:
         rows = []
         try:
             if cached is None:
+                if self._sol_extract_blocked():
+                    self.defer_extract = True
+                    self.stats['skipped_deadline'] += 1
+                    self.stats['called'] -= 1
+                    return []
+                if self._sol_extract_will_run():
+                    self._sol_extract_calls += 1
                 extraction = self.client.call('web-extract-2', EXTRACT_INSTRUCTION, article_data(body, text), validate, max_tokens=max_output, list_key='findings')
                 # Results cached before drop reporting contain only the row list.
                 if isinstance(extraction, list):

@@ -16,6 +16,10 @@ from . import cycle, michelin
 # deadline and a 120s leftover was not enough; 240s was then capped by work/6 at 230s
 # under the old 1500s wall). The default wall is 1680s so a full 360s reserve still
 # leaves 1200s for extract: 120 finalize + 360 evaluate + 1200 extract.
+# When the backup provider is sol, extract also caps sol calls (worst-case 240s each)
+# so a long in-flight call cannot eat the evaluate/finalize reserve and trip exit 124.
+# Override the auto cap with KG_SOL_EXTRACT_MAX; a long off-pipeline collect leaves
+# the cap unset so it scales with KG_COLLECT_TIMEOUT.
 DEFAULT_COLLECT_TIMEOUT = 1680
 FINALIZE_RESERVE_SEC = 120
 EVALUATE_RESERVE_SEC = 360
