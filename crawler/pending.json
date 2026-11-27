@@ -116,16 +116,57 @@
   "field": null,
   "value": null,
   "reliable_hosts": [
-   "game.donga.com"
+   "game.donga.com",
+   "msn.com"
   ],
   "sources": [
+   "https://www.msn.com/ko-kr/news/other/%EB%B8%94%EB%A0%88%EC%9D%B4%EB%93%9C-%EC%86%8C%EC%9A%B8-%EB%A0%88%EB%B3%BC%EB%A3%A8%EC%85%98-8%EC%A3%BC%EB%85%84-%EC%95%9E%EB%91%90%EA%B3%A0-%EC%84%B1%EC%9E%A5-%EA%B1%B0%EB%9E%98-%EC%8B%9C%EC%8A%A4%ED%85%9C-%EA%B0%9C%ED%8E%B8-%EC%8B%A0%EA%B7%9C-%EC%84%9C%EB%B2%84-24%EC%9D%BC-%EC%98%A4%ED%94%88/ar-AA2hB8zl",
    "https://game.donga.com/125325/"
   ],
   "dates": [
-   "2026-11-26"
+   "2026-11-17",
+   "2026-11-27"
   ],
   "note": null,
   "first_seen": "2026-11-25"
+ },
+ {
+  "id": "kg-dc79f444c649",
+  "name": "SEOK",
+  "kind": "chef_move",
+  "new_name": null,
+  "field": null,
+  "value": null,
+  "reliable_hosts": [
+   "mk.co.kr"
+  ],
+  "sources": [
+   "https://www.mk.co.kr/en/hot-issues/12220289"
+  ],
+  "dates": [
+   "2026-11-27"
+  ],
+  "note": null,
+  "first_seen": "2026-11-28"
+ },
+ {
+  "id": "kg-dc7deb51f2f7",
+  "name": "하네",
+  "kind": "chef_move",
+  "new_name": null,
+  "field": null,
+  "value": null,
+  "reliable_hosts": [
+   "xportsnews.com"
+  ],
+  "sources": [
+   "https://www.xportsnews.com/article/2222591"
+  ],
+  "dates": [
+   "2026-11-24"
+  ],
+  "note": null,
+  "first_seen": "2026-11-28"
  },
  {
   "id": "mils",
@@ -181,7 +222,7 @@
    "https://odrenyc.com/homepage"
   ],
   "dates": [
-   "2026-11-27"
+   "2026-11-28"
   ],
   "note": null,
   "first_seen": "2026-11-22"
