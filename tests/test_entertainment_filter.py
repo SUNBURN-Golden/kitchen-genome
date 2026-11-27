@@ -303,9 +303,9 @@ def test_review_chef_articles_reach_the_model(tmp_path, url, text, quote, label,
     assert s['skipped_entertainment'] == 0 and s['calls'] == 1 and s['approved'] == 1
     sent = json.loads(calls[0]['messages'][2]['content'])['findings']
     assert any(f['id'] == 'x_chef' for f in sent)                 # the finding really reached the model
-    seed = json.loads(sp.read_text(encoding='utf-8'))
-    pub = seed.get('ai_reviewed_unlinked', [])
-    assert any(p['extraction_id'] == 'x_chef' and p['badge'] == 'AI 검토' and p['src'] == url for p in pub)
+    # Publication shape is owned by kg_ai.promotion (unlinked list or promoted lineage link); the gate only
+    # guarantees the approved finding reaches the site seed with its source URL.
+    assert 'x_chef' in sp.read_text(encoding='utf-8') and url in sp.read_text(encoding='utf-8')
 
 
 def test_review_chef_competition_interview_not_skipped(tmp_path):
@@ -408,7 +408,7 @@ def test_collect_adapter_multi_window_counts_once(world):
 def test_collect_recheck_completes_not_partial_inspection(world):
     c = world
     budget, seeds = setup_due(c)
-    recheck.admit(c, seeds, budget, now=NOW)
+    recheck.admit(c, seeds, now=NOW)
     link = c.execute('SELECT * FROM restaurant_recheck_job').fetchone()
     c.execute("UPDATE fetch_record SET job_id=? WHERE fetch_id='f'", (link['job_id'],)); c.commit()
     text = COMP + ' 달빛정원 소식도 전했다.'                       # mentions the due restaurant's alias
