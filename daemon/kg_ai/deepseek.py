@@ -20,6 +20,7 @@ import urllib.request
 from kg_daemon.runner import NonRetryable
 from kg_collect.guard import Guard
 from . import grok as grok_cli
+from . import sol as sol_cli
 
 URL = 'https://api.deepseek.com/chat/completions'
 QWEN_URL = 'https://token-plan.maas.qwencloudapi.com/compatible-mode/v1/chat/completions'
@@ -36,9 +37,12 @@ FALLBACK_CODES = (
     'provider_failed', 'rate_limited', 'auth_failed', 'model_unavailable',
     'balance_low', 'balance_unavailable', 'transport_unknown', 'quota_exhausted',
 )
-# Backup slot provider. 'qwen' (token plan HTTP) or 'grok' (logged-in cursor-agent CLI).
-# 준태님 2026-11-24: Grok while Qwen's plan is exhausted (resets 12/12 01:00 KST).
-BACKUPS = ('qwen', 'grok')
+# Backup slot provider. 'qwen' (token plan HTTP), 'grok' (cursor-agent CLI), or
+# 'sol' (logged-in `codex` CLI, model gpt-6.2-sol).
+# 준태님 2026-11-27 (t142u): use Sol 6.2 when DeepSeek is unavailable. Qwen stays
+# in the code path but is not selected while its plan is exhausted (resets 12/12).
+# Grok stays available in code and off by default.
+BACKUPS = ('qwen', 'grok', 'sol')
 # A backup answering with one of these is dead for the rest of the run (plan exhausted / bad
 # credentials): stop routing to it and return to the primary instead of pausing all AI.
 BACKUP_DEAD_CODES = ('quota_exhausted', 'auth_failed')
@@ -233,6 +237,11 @@ class Client:
             self.fallback_key = grok_cli.available() if fallback_key is None and auto else (fallback_key or '')
             self.fallback_transport = (grok_cli.grok_transport if auto and self.fallback_key
                                        else fallback_transport if self.fallback_key else None)
+        elif self.fallback_provider == 'sol':
+            self.fallback_model = fallback_model or os.environ.get('KG_SOL_MODEL') or sol_cli.SOL_MODEL
+            self.fallback_key = sol_cli.available() if fallback_key is None and auto else (fallback_key or '')
+            self.fallback_transport = (sol_cli.sol_transport if auto and self.fallback_key
+                                       else fallback_transport if self.fallback_key else None)
         else:
             self.fallback_model = fallback_model or os.environ.get('KG_QWEN_MODEL') or QWEN_MODEL
             self.fallback_key = load_qwen_key() if fallback_key is None and auto else (fallback_key or '')
@@ -279,7 +288,7 @@ class Client:
                 'temperature': 0, 'stream': False, 'max_tokens': max_tokens}
         if provider == 'deepseek':
             body['thinking'] = {'type': 'disabled'}
-        elif provider == 'grok':
+        elif provider in ('grok', 'sol'):
             pass  # the CLI route takes no sampling flags; the JSON-only contract is in the prompt.
         else:
             # qwen4-max-preview is a hybrid model; thinking is on by default and
@@ -496,6 +505,8 @@ class Client:
                 status, raw = http_transport(payload, api_key, url=QWEN_URL, timeout=min(QWEN_TIMEOUT_SEC, remaining))
             elif remaining is not None and transport is grok_cli.grok_transport:
                 status, raw = transport(payload, api_key, timeout=min(grok_cli.GROK_TIMEOUT_SEC, remaining))
+            elif remaining is not None and transport is sol_cli.sol_transport:
+                status, raw = transport(payload, api_key, timeout=min(sol_cli.SOL_TIMEOUT_SEC, remaining))
             else:
                 status, raw = transport(payload, api_key)
             if status != 200:
