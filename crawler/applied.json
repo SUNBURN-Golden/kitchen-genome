@@ -656,5 +656,101 @@
   "sources": [
    "https://aboda.kr/entry/%ed%9d%91%eb%b0%b1%ec%9a%94%eb%a6%ac%ec%82%ac2-%eb%b0%b1%ec%88%98%ec%a0%80-%ec%85%b0%ed%94%84-%eb%9d%bc%ec%9d%b8%ec%97%85-%ec%b4%9d%ec%a0%95%eb%a6%ac-%eb%84%b7%ed%94%8c%eb%a6%ad%ec%8a%a4-%ea%b3%b5"
   ]
+ },
+ {
+  "id": "kg-d804eaffcaf6",
+  "name": "발우공양",
+  "kind": "new_alumni",
+  "applied_at": "2026-11-28",
+  "day_kst": "2026-11-28",
+  "event_id": "ai-link_205f4cf55498:create",
+  "gate": "checking",
+  "sources": [
+   "https://etoday.co.kr/news/view/2549164?trc=view_joinnews"
+  ]
+ },
+ {
+  "id": "kg-e7dc93883315",
+  "name": "제이엘 스튜디오",
+  "kind": "new_alumni",
+  "applied_at": "2026-11-28",
+  "day_kst": "2026-11-28",
+  "event_id": "ai-link_225a36757d6c:create",
+  "gate": "checking",
+  "sources": [
+   "https://etoday.co.kr/news/view/2411659"
+  ]
+ },
+ {
+  "id": "kg-a7a7cb937802",
+  "name": "더그린테이블",
+  "kind": "new_alumni",
+  "applied_at": "2026-11-28",
+  "day_kst": "2026-11-28",
+  "event_id": "ai-link_5296dbc6baf2:create",
+  "gate": "checking",
+  "sources": [
+   "https://etoday.co.kr/news/view/2549164?trc=view_joinnews"
+  ]
+ },
+ {
+  "id": "kg-28b8b7d1a7b4",
+  "name": "킨토닐",
+  "kind": "new_alumni",
+  "applied_at": "2026-11-28",
+  "day_kst": "2026-11-28",
+  "event_id": "ai-link_7116b2bf840d:create",
+  "gate": "checking",
+  "sources": [
+   "https://etoday.co.kr/news/view/2411659"
+  ]
+ },
+ {
+  "id": "kg-f41d972dd45c",
+  "name": "테이블포포",
+  "kind": "new_alumni",
+  "applied_at": "2026-11-28",
+  "day_kst": "2026-11-28",
+  "event_id": "ai-link_7232e1b4f0c3:create",
+  "gate": "checking",
+  "sources": [
+   "https://etoday.co.kr/news/view/2549164?trc=view_joinnews"
+  ]
+ },
+ {
+  "id": "kg-b84d39ce6e29",
+  "name": "모수 서울",
+  "kind": "new_alumni",
+  "applied_at": "2026-11-28",
+  "day_kst": "2026-11-28",
+  "event_id": "ai-link_b58ffc71268b:create",
+  "gate": "checking",
+  "sources": [
+   "https://spotvnews.co.kr/news/articleView.html?idxno=825320"
+  ]
+ },
+ {
+  "id": "kg-d7332b4e8da1",
+  "name": "이코이",
+  "kind": "new_alumni",
+  "applied_at": "2026-11-28",
+  "day_kst": "2026-11-28",
+  "event_id": "ai-link_e08f5b360cb1:create",
+  "gate": "checking",
+  "sources": [
+   "https://etoday.co.kr/news/view/2236732"
+  ]
+ },
+ {
+  "id": "kg-112ce21907ba",
+  "name": "한국의집",
+  "kind": "new_alumni",
+  "applied_at": "2026-11-28",
+  "day_kst": "2026-11-28",
+  "event_id": "ai-link_f54ae507a09f:create",
+  "gate": "checking",
+  "sources": [
+   "https://etoday.co.kr/news/view/2549164?trc=view_joinnews"
+  ]
  }
 ]
