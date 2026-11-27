@@ -16,6 +16,7 @@ if _CRAWLER not in sys.path:
 from privacy_filter import sanitize_before_store  # noqa: E402
 
 from . import gaps
+from .entertainment import entertainment_reason
 from .targets import eligibility
 from kg_ai.article import source, article_key
 from kg_ai.balance import PAUSES
@@ -194,7 +195,7 @@ class Adapters:
         self.defer_extract = False
         self.article_results = {}
         # Observable extraction funnel: a production no-op must not hide behind ai=enabled.
-        self.stats = {'considered': 0, 'skipped_filter': 0, 'skipped_no_targets': 0,
+        self.stats = {'considered': 0, 'skipped_filter': 0, 'skipped_entertainment': 0, 'skipped_no_targets': 0,
                       'eligible': 0, 'plan_skipped_targets': 0, 'skipped_balance': 0, 'skipped_not_needed': 0, 'skipped_size': 0, 'called': 0, 'failed': 0, 'findings': 0, 'findings_dropped': 0}
 
     @classmethod
@@ -306,7 +307,7 @@ class Adapters:
             start = end - 200
         self.defer_extract = deferred
         # The funnel counts documents; request/finding counts remain separate.
-        for name in ('considered','eligible','skipped_filter','skipped_no_targets','skipped_not_needed','skipped_size','skipped_balance'):
+        for name in ('considered','eligible','skipped_filter','skipped_entertainment','skipped_no_targets','skipped_not_needed','skipped_size','skipped_balance'):
             self.stats[name] = before[name] + int(self.stats[name] > before[name])
         if self.stats['eligible'] > before['eligible']:
             self.stats['skipped_no_targets'] = before['skipped_no_targets']
@@ -332,6 +333,9 @@ class Adapters:
         text = unicodedata.normalize('NFC', text or '')
         if not text:
             self.stats['skipped_filter'] += 1
+            return []
+        if entertainment_reason(getattr(doc, 'canonical_url', None) or doc.url, text):   # before budget/balance: fiction is never paid for
+            self.stats['skipped_entertainment'] += 1
             return []
         gate = eligibility(gaz, text)
         mentions, options = gate['spans'], gate['target_ids']
