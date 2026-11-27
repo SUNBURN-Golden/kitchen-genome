@@ -32,6 +32,13 @@ class T(unittest.TestCase):
     def setUp(self):
         self.d = tempfile.mkdtemp(); ig.OUT = self.d; ig.FLAG = os.path.join(self.d, 'ig_blocked.flag')
         ig.SESSION = os.path.join(self.d, 'secrets', 's.session'); os.environ['AGAMAJUNG_IG_PASSWORD'] = 'dummy-not-real'
+        self._ig_enabled = os.environ.get('KG_INSTAGRAM_ENABLED')
+        os.environ['KG_INSTAGRAM_ENABLED'] = '1'
+    def tearDown(self):
+        if self._ig_enabled is None:
+            os.environ.pop('KG_INSTAGRAM_ENABLED', None)
+        else:
+            os.environ['KG_INSTAGRAM_ENABLED'] = self._ig_enabled
     def test_window(self):
         self.assertFalse(ig.in_window(dt.datetime(2026, 10, 21, 17, 0, tzinfo=KST)))
         self.assertFalse(ig.in_window(dt.datetime(2026, 10, 22, 6, 44, tzinfo=KST)))
@@ -69,6 +76,22 @@ class T(unittest.TestCase):
         import io, contextlib; buf = io.StringIO()
         with contextlib.redirect_stdout(buf): ig.main(now=IN, il=fake_il(login_exc=Exception('checkpoint')), sleep=lambda s: None)
         self.assertNotIn('dummy-not-real', buf.getvalue())
+    def test_disabled_never_logs_in_or_touches_session(self):
+        import io, contextlib
+        os.environ['KG_INSTAGRAM_ENABLED'] = '0'
+        os.makedirs(os.path.dirname(ig.SESSION)); open(ig.SESSION, 'w').write('x')
+        m = fake_il(); buf = io.StringIO()
+        with contextlib.redirect_stdout(buf):
+            self.assertEqual(ig.main(now=IN, il=m, sleep=lambda s: None), 0)
+        self.assertEqual(m.calls, [])
+        self.assertIn('disabled_account_banned', buf.getvalue())
+        self.assertNotIn('dummy-not-real', buf.getvalue())
+        del os.environ['KG_INSTAGRAM_ENABLED']
+        m = fake_il(); buf = io.StringIO()
+        with contextlib.redirect_stdout(buf):
+            self.assertEqual(ig.main(now=IN, il=m, sleep=lambda s: None), 0)
+        self.assertEqual(m.calls, [])
+        self.assertIn('disabled_account_banned', buf.getvalue())
 if __name__ == '__main__': unittest.main()
 
 class TestBlackout(unittest.TestCase):

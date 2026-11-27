@@ -133,9 +133,14 @@ elif 'scripts/build_deploy.py' in args:
 
 
 @pytest.mark.parametrize('options,expected', [
-    ({}, 'IG_OK'), ({'TEST_IG': 'BLOCKED'}, 'IG_BLOCKED'), ({'TEST_IG': 'SKIPPED'}, 'IG_SKIPPED'),
-    ({'TEST_IG_TIMEOUT': '1'}, 'IG_FAILED account=kitchen.genome reason=timeout'),
-    ({'KG_IG': '0'}, 'IG_SKIPPED'), ({'TEST_COLLECT_RC': '124'}, 'COLLECT=failed'),
+    ({}, 'IG_SKIPPED account=kitchen.genome reason=disabled_account_banned'),
+    ({'KG_IG': '1'}, 'IG_SKIPPED account=kitchen.genome reason=disabled_account_banned'),
+    ({'KG_INSTAGRAM_ENABLED': '1'}, 'IG_OK'),
+    ({'KG_INSTAGRAM_ENABLED': '1', 'TEST_IG': 'BLOCKED'}, 'IG_BLOCKED'),
+    ({'KG_INSTAGRAM_ENABLED': '1', 'TEST_IG': 'SKIPPED'}, 'IG_SKIPPED'),
+    ({'KG_INSTAGRAM_ENABLED': '1', 'TEST_IG_TIMEOUT': '1'}, 'IG_FAILED account=kitchen.genome reason=timeout'),
+    ({'KG_INSTAGRAM_ENABLED': '1', 'KG_IG': '0'}, 'IG_SKIPPED'),
+    ({'TEST_COLLECT_RC': '124'}, 'COLLECT=failed'),
     ({'KG_DEEPSEEK': '0'}, 'RESULT=NO_CHANGE'),
 ])
 def test_pipeline_nonfatal_steps_have_exact_result(pipeline,options,expected):
@@ -146,9 +151,12 @@ def test_pipeline_nonfatal_steps_have_exact_result(pipeline,options,expected):
     assert not list((pipeline.repo / 'crawler/out').glob('ig*blocked.flag'))
     if options.get('KG_DEEPSEEK') == '0':
         assert '--deepseek' not in commands
-    if options.get('KG_IG') != '0':
+    ig_on = options.get('KG_INSTAGRAM_ENABLED') == '1' and options.get('KG_IG') != '0'
+    if ig_on:
         ig_command = next(line for line in commands.splitlines() if 'crawler/instagram_kg.py' in line)
         assert '--cost-cap' not in ig_command
+    else:
+        assert 'instagram_kg.py' not in commands
 
 
 def test_pipeline_squash_merges_verified_crawl_without_deploy_when_web_is_unchanged(pipeline):
@@ -380,7 +388,8 @@ def test_balance_low_survives_all_result_branches(pipeline,phase,changes):
     p,commands=pipeline(**{f'TEST_{phase}_REASON':'balance_low',**changes})
     assert p.returncode==0 and p.stdout.strip().splitlines()[-1].endswith('reason=balance_low')
     assert 'build_weekly_digest.py' in commands and 'argon_review.sh' not in commands
-    assert 'instagram_kg.py' in commands
+    assert 'instagram_kg.py' not in commands
+    assert 'IG_SKIPPED account=kitchen.genome reason=disabled_account_banned' in p.stdout
 
 
 def test_real_failure_keeps_primary_reason_and_ai_pause(pipeline):
@@ -391,6 +400,7 @@ def test_real_failure_keeps_primary_reason_and_ai_pause(pipeline):
 def test_instagram_default_and_flag_files_are_untouched():
     collect=(ROOT/'scripts/collect_daily.sh').read_text()
     daily=SH.read_text()
+    assert '${KG_INSTAGRAM_ENABLED:-0}' in collect and '${KG_INSTAGRAM_ENABLED:-0}' in daily
     assert '${KG_IG:-0}' in collect and '${KG_IG:-1}' in daily
     for flag in ('ig_blocked.flag','ig_kg_blocked.flag'):
         assert flag not in collect+daily

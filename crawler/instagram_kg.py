@@ -23,6 +23,7 @@ from kg_daemon.registry import IG_FLAG
 from kg_daemon.runner import CostMeter, DEFAULT_CONFIG
 from kg_collect.net import UA
 from privacy_filter import sanitize_before_store
+from ig_config import DISABLED_REASON, instagram_enabled
 
 LOGIN = 'kitchen.genome'
 SESSION = Path('/home/box/.secrets/kg_ig_kitchen_genome.session')
@@ -224,6 +225,8 @@ class LoaderBackend:
         self.requests.sessions.Session.send = self.original
 
     def load_session(self, session):
+        if not instagram_enabled():
+            raise Skip(DISABLED_REASON)
         if not Path(session).is_file():
             raise Skip('missing_session')
         self.loader.load_session_from_file(LOGIN, str(session))
@@ -356,6 +359,8 @@ def collect(conn, handles, backend_factory=LoaderBackend, *, client=None, flag=F
     purge(conn, out, now())
     try:
         guard.check()
+        if not instagram_enabled():
+            raise Skip(DISABLED_REASON)
         if not Path(session).is_file():
             raise Skip('missing_session')
         # Only restaurant/brand seed records enter this allowlist.
@@ -428,6 +433,8 @@ def main(argv=None):
     ap.add_argument('--deepseek', action='store_true')
     ap.add_argument('--mark-timeout', action='store_true')
     args = ap.parse_args(argv)
+    if not instagram_enabled():
+        print(f'IG_SKIPPED account={LOGIN} reason={DISABLED_REASON}'); return 0
     if args.mark_timeout:
         print(f'IG_FAILED account={LOGIN} reason=timeout'); return 1
     if not Path(args.db).is_file():

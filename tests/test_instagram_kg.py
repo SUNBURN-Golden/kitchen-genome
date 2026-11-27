@@ -66,7 +66,8 @@ class Backend:
 
 
 @pytest.fixture
-def world(tmp_path):
+def world(tmp_path, monkeypatch):
+    monkeypatch.setenv('KG_INSTAGRAM_ENABLED', '1')
     conn = connect(str(tmp_path / 'state.db'))
     migrate(conn)
     clock, calls = Clock(), []
@@ -174,6 +175,22 @@ def test_missing_session_and_private_profile(world):
     assert conn.execute('SELECT COUNT(*) FROM review_queue').fetchone()[0] == 0
     opts['session'].unlink()
     assert 'missing_session' in ig.collect(conn, handles(), lambda g: pytest.fail('contact without session'), **opts)[1]
+
+
+def test_disabled_flag_skips_without_session_or_backend(world, monkeypatch, capsys):
+    conn, clock, calls, opts = world
+    monkeypatch.delenv('KG_INSTAGRAM_ENABLED', raising=False)
+    rc, line = ig.collect(conn, handles(), lambda g: pytest.fail('backend used while disabled'), **opts)
+    assert rc == 0 and 'IG_SKIPPED' in line and 'disabled_account_banned' in line
+    assert 'missing_session' not in line and calls == []
+    monkeypatch.setenv('KG_INSTAGRAM_ENABLED', '0')
+    opts['session'].unlink()
+    rc, line = ig.collect(conn, handles(), lambda g: pytest.fail('backend used while disabled'), **opts)
+    assert rc == 0 and 'disabled_account_banned' in line and 'missing_session' not in line
+    assert ig.main(['--db', str(opts['out'] / 'missing.db')]) == 0
+    out = capsys.readouterr().out
+    assert 'IG_SKIPPED account=kitchen.genome reason=disabled_account_banned' in out
+    assert 'missing_session' not in out
 
 
 def test_dedicated_module_never_imports_legacy_crawler():

@@ -8,9 +8,11 @@ Rules (hard):
   (a human must clear it after 준태님/BabyShower check the account).
 - <=25 handles/day, >=8s between requests, profile + up to 6 recent post captions/dates only.
 - Stores excerpt <=40 chars, post URL, date. No images, no full captions. Findings are pending-only (apply.py).
-Output lines: IG_SKIPPED reason=... | IG_BLOCKED reason=... | IG_OK handles=N findings=M"""
+Output lines: IG_SKIPPED reason=... | IG_BLOCKED reason=... | IG_OK handles=N findings=M
+Collection is off unless KG_INSTAGRAM_ENABLED=1 (@kitchen.genome disabled 2026-10-22)."""
 import json, os, re, sys, time, datetime as dt
 from zoneinfo import ZoneInfo
+from ig_config import DISABLED_REASON, instagram_enabled
 H = os.path.dirname(os.path.abspath(__file__)); ROOT = os.path.dirname(H)
 OUT = os.path.join(H, 'out'); FLAG = os.path.join(OUT, 'ig_blocked.flag')
 LOGIN = 'agamajung'
@@ -23,6 +25,7 @@ BLOCK_WORDS = ('checkpoint', 'challenge', 'two-factor', 'two factor', '2fa', 've
                'too many', 'login_required', 'feedback_required', 'security code', 'confirm')
 
 class Blocked(Exception): pass
+class Disabled(Exception): pass
 
 def in_window(now=None):
     now = now or dt.datetime.now(ZoneInfo('Asia/Seoul'))
@@ -66,6 +69,8 @@ def make_loader(il):
                           max_connection_attempts=1, quiet=True, rate_controller=lambda ctx: StopRC(ctx))
 
 def login(L, il):
+    if not instagram_enabled():
+        raise Disabled(DISABLED_REASON)
     if os.path.exists(SESSION):
         L.load_session_from_file(LOGIN, SESSION)
         if L.test_login(): return
@@ -81,6 +86,8 @@ def login(L, il):
     os.chmod(SESSION, 0o600)
 
 def main(now=None, il=None, sleep=time.sleep):
+    if not instagram_enabled():
+        print(f'IG_SKIPPED reason={DISABLED_REASON}'); return 0
     if in_blackout(now): print('IG_SKIPPED reason=blackout_0930_1030_or_2030_2130_KST'); return 0
     if not in_window(now): print('IG_SKIPPED reason=outside_window_0645_0800_KST'); return 0
     if os.path.exists(FLAG): print('IG_SKIPPED reason=blocked_flag_present (clear crawler/out/ig_blocked.flag after a human check)'); return 0

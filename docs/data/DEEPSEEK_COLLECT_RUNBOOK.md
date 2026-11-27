@@ -147,7 +147,8 @@ rejection gets one correction that names the category.
 | `KG_GUARD_IDENTICAL_FAILURES` | `5` | Consecutive identical failures in one lane |
 | `KG_GUARD_NO_PROGRESS` | `10` | Runnable passes with unchanged cursor or state |
 | `KG_GUARD_MAX_ATTEMPTS` | `3` | Transient attempts per job or document version |
-| `KG_IG` | Daily pipeline `1`, heavy and standalone wrapper `0` | Read Instagram with the saved Kitchen Genome session |
+| `KG_INSTAGRAM_ENABLED` | `0` | Master switch. Off because Instagram disabled `@kitchen.genome` on 2026-10-22. Collection, login, and session creation stay skipped. |
+| `KG_IG` | `0` unless `KG_INSTAGRAM_ENABLED=1` (then daily default `1`; heavy and standalone wrapper `0`) | Additional per-run switch; ignored while the master switch is off. |
 | `KG_SERVICE_DB` | `$KG_HOME/data_store/kg_service.db` | Shared private service state |
 
 The scheduler ranks due work by priority, age and query history and rotates
@@ -192,7 +193,7 @@ for the rest of the collector invocation. Origin responses and ambiguous
 timeouts stay on the selected route. `egress` and `egress_reason` report route
 selection and the advisory exit-IP check.
 
-The daily Instagram reader uses the existing `@kitchen.genome` session under a
+The daily Instagram reader is off by default (`KG_INSTAGRAM_ENABLED=0`) after Instagram disabled `@kitchen.genome` on 2026-10-22. If re-enabled, it uses the existing saved session under a
 single-reader lock. It reads the public restaurant and brand handles in the seed
 and checks captions within the latest 30 days. A per-handle watermark marks the
 newest post in a completed scan. Interrupted scans retain committed post
