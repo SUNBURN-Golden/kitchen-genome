@@ -183,6 +183,7 @@ sources:
     adapter: none
 
   instagram_kitchen_genome:
+    # Runtime collection is off (KG_INSTAGRAM_ENABLED defaults to 0): account disabled 2026-10-22.
     name: "Instagram @kitchen.genome dedicated collection"
     kind: social
     tier: social_lead

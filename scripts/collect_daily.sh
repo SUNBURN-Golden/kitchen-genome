@@ -24,7 +24,8 @@ else
   COLLECT_OUT='COLLECT=skipped reason=disabled_or_missing_db ai=disabled'
 fi
 echo "$COLLECT_OUT"
-if [ "${KG_IG:-0}" = 1 ] && [ -f "$KG_DB" ]; then
+# Master switch wins: even KG_IG=1 does not run Instagram unless KG_INSTAGRAM_ENABLED=1.
+if [ "${KG_INSTAGRAM_ENABLED:-0}" = 1 ] && [ "${KG_IG:-0}" = 1 ] && [ -f "$KG_DB" ]; then
   IG_RC=0
   IG_OUT=$(PYTHONPATH=daemon timeout --kill-after=15 900 python3 crawler/instagram_kg.py --db "$KG_DB" \
     "${AI_ARGS[@]}" 2>/dev/null) || IG_RC=$?
@@ -35,6 +36,8 @@ if [ "${KG_IG:-0}" = 1 ] && [ -f "$KG_DB" ]; then
   if [ -z "$IG_OUT" ]; then
     IG_OUT="IG_FAILED account=kitchen.genome reason=exit_$IG_RC"
   fi
+elif [ "${KG_INSTAGRAM_ENABLED:-0}" != 1 ]; then
+  IG_OUT='IG_SKIPPED account=kitchen.genome reason=disabled_account_banned'
 else
   IG_OUT='IG_SKIPPED account=kitchen.genome reason=disabled_or_missing_db'
 fi
