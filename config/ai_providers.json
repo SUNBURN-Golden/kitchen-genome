@@ -1,4 +1,4 @@
 {
-  "_note": "준태님 2026-11-24 KST (t134u connect Grok; t135u connect only, do not run yet). backup: 'qwen' (current) or 'grok' (logged-in cursor-agent CLI, grok-4.7-high). Set to 'grok' to switch AI steps to Grok while Qwen's plan is exhausted (resets 2026-12-12 01:00 KST). DeepSeek stays primary and is skipped by its balance gate. KG_AI_BACKUP env overrides.",
-  "backup": "qwen"
+  "_note": "준태님 2026-11-27 KST (t142u: if DeepSeek does not work, use sol 6.2). backup: 'sol' (logged-in codex CLI, gpt-6.2-sol at reasoning effort high; override model with KG_SOL_MODEL, effort with KG_SOL_EFFORT) or 'qwen' (token plan, exhausted until 2026-12-12 01:00 KST) or 'grok' (logged-in cursor-agent CLI, currently off). DeepSeek stays primary and is skipped by its balance gate. KG_AI_BACKUP env overrides.",
+  "backup": "sol"
 }
