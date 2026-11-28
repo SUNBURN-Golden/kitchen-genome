@@ -202,3 +202,19 @@ def test_main_summary_without_bundle_stats(monkeypatch, tmp_path, capsys):
     summary = capsys.readouterr().out
     assert summary.startswith('AI_REVIEW ')
     assert 'promoted=0 unlinked_remaining=0 promotion_skips={}' in summary
+
+
+def test_time_budget_stops_before_new_call_and_keeps_items_open(env):
+    conn, sp, log, raw = env
+    add(conn, 'x_open', 'opening', '서울 한남동의 달빛정원은 2026-10-01 문을 열었다', rest='달빛정원', date='2026-10-01')
+    calls = []
+    ticks = iter([0.0] + [10_000.0] * 50)
+    s = rv.review(conn, str(sp), str(log), raw, client=client_for(conn, {'x_open': 'approve'}, calls),
+                  budget_sec=480, clock=lambda: next(ticks))
+    assert s['stopped'] == 'time_budget' and s['reason'] == 'time_budget' and calls == []
+    assert s['remaining'] == 1
+    status = conn.execute("SELECT status FROM daemon_run WHERE run_id=?", (s['run_id'],)).fetchone()[0]
+    assert status == 'succeeded'
+    # next pass with time left reviews the leftover
+    s2 = rv.review(conn, str(sp), str(log), raw, client=client_for(conn, {'x_open': 'approve'}, calls), budget_sec=0)
+    assert s2['approved'] == 1 and s2['remaining'] == 0 and len(calls) == 1

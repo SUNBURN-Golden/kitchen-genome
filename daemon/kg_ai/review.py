@@ -17,6 +17,7 @@ import json
 import os
 import re
 import sys
+import time
 import unicodedata
 
 from kg_ai import promotion
@@ -44,6 +45,11 @@ CONTEXT = 160
 MAX_OCC = 3
 LABEL_KO = {'career': '경력', 'employment_claim': '근무', 'opening': '오픈', 'closure': '폐업', 'relocation': '이전',
             'rename': '이름 변경', 'menu': '메뉴', 'collab': '협업', 'mentorship_claim': '사사'}
+# Wall-time budget for one review pass. daily_pipeline.sh kills kg_ai at 600 s (exit 124), which lost the
+# summary line and the delivery/reconcile tail on 2026-11-28; stop starting new calls early and finish cleanly.
+BUDGET_SEC = float(os.environ.get('KG_AI_REVIEW_BUDGET_SEC', '480'))
+CALL_RESERVE_SEC = float(os.environ.get('KG_AI_REVIEW_CALL_RESERVE_SEC', '120'))
+BUDGET_STOPS = {'time_budget', 'deadline'}
 UNIT_COSTS = {'http_request': 1.0, 'llm_tokens_k': 0.5, 'db_write': 0.0}
 INSTRUCTION = (
     'You review machine-extracted culinary findings before they are published on a Korean chef-lineage site. '
@@ -317,8 +323,10 @@ def _start_run(conn):
     return rid
 
 
-def review(conn, seed_path, log_path, raw_dir, *, client=None, limit=None):
+def review(conn, seed_path, log_path, raw_dir, *, client=None, limit=None, budget_sec=None, clock=time.monotonic):
     now = utcnow()
+    budget_sec = BUDGET_SEC if budget_sec is None else budget_sec
+    deadline = clock() + budget_sec if budget_sec and budget_sec > 0 else None
     stats = {'approved': 0, 'rejected': 0, 'published': 0, 'prechecked_rejects': 0, 'calls': 0, 'stopped': None, 'candidates_closed': 0, 'skipped_no_targets': 0, 'skipped_entertainment': 0, 'skipped_balance': 0, 'considered': 0, 'eligible': 0}
     stats.update(promoted=0, unlinked_remaining=0)
     with open(seed_path, encoding='utf-8') as stream:
@@ -340,7 +348,7 @@ def review(conn, seed_path, log_path, raw_dir, *, client=None, limit=None):
     meter = CostMeter(conn, run_id, UNIT_COSTS)
     meter.stage = 'ai_review'
     if client is None:
-        client = Client(Budget(meter))
+        client = Client(Budget(meter), deadline=deadline)
     else:
         client.budget.meter, client.budget.conn = meter, conn
 
@@ -471,6 +479,9 @@ def review(conn, seed_path, log_path, raw_dir, *, client=None, limit=None):
             decide(batch[0], 'reject', 'review_unavailable: context_too_large', None)
             examined += 1
             continue
+        if deadline is not None and clock() + CALL_RESERVE_SEC > deadline:
+            stats['stopped'] = 'time_budget'   # leftovers stay open for the next pass
+            break
         ids = {f['extraction_id'] for f in batch}
         try:
             stats['calls'] += 1
@@ -513,7 +524,7 @@ def review(conn, seed_path, log_path, raw_dir, *, client=None, limit=None):
     stats['reason'] = stats['stopped'] or 'none'
     stats['cost_used'] = round(conn.execute('SELECT cost_used_units FROM daemon_run WHERE run_id=?', (run_id,)).fetchone()[0], 3)
     conn.execute('UPDATE daemon_run SET status=?, finished_at=? WHERE run_id=?',
-                 ('succeeded' if stats['stopped'] in PAUSES else 'failed' if stats['stopped'] else 'succeeded', utcnow(), run_id))
+                 ('succeeded' if stats['stopped'] in PAUSES | BUDGET_STOPS else 'failed' if stats['stopped'] else 'succeeded', utcnow(), run_id))
     conn.commit()
     stats['run_id'] = run_id
     return stats
