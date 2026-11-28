@@ -9,7 +9,7 @@ Rules (hard):
 - <=25 handles/day, >=8s between requests, profile + up to 6 recent post captions/dates only.
 - Stores excerpt <=40 chars, post URL, date. No images, no full captions. Findings are pending-only (apply.py).
 Output lines: IG_SKIPPED reason=... | IG_BLOCKED reason=... | IG_OK handles=N findings=M
-Collection is off unless KG_INSTAGRAM_ENABLED=1 (@kitchen.genome disabled 2026-10-22)."""
+Set KG_INSTAGRAM_ENABLED=0 to skip this collector (default is on)."""
 import json, os, re, sys, time, datetime as dt
 from zoneinfo import ZoneInfo
 from ig_config import DISABLED_REASON, instagram_enabled

@@ -46,9 +46,9 @@ bash scripts/daily_pipeline.sh /tmp/kg
   2. `python3 scripts/upload_assets.py /tmp/kg_jwt.txt`
   3. user-Cloudflare `execute`에 `dist/deploy_kitchengenome.js` 내용을 code로 넣어 배포 생성 → 결과의 deployment id 기록, 사이트맵 URL 200 확인.
 
-### 인스타그램 단계 / Instagram step (`crawler/instagram_kg.py`; 모듈은 유지, 기본 비활성)
-- **계정 정지:** Instagram이 `@kitchen.genome`을 2026-10-22에 비활성화했고 재검토를 받지 않습니다. 수집·로그인·세션 생성은 기본적으로 하지 않습니다. `KG_INSTAGRAM_ENABLED` 기본값은 `0`입니다. 파이프라인과 self-check는 `IG_SKIPPED account=kitchen.genome reason=disabled_account_banned`로 조용히 보고하고, `missing_session`을 문제로 다루지 않습니다.
-- 레거시 아가마중 수집기(`crawler/instagram.py`)도 같은 플래그로 막혀 있으며, **06:45–08:00 KST에만 실행**되던 창 규칙은 코드에 남아 있습니다. 그 외 시간엔 `IG_SKIPPED`.
+### 인스타그램 단계 / Instagram step (`crawler/instagram_kg.py`)
+- 일일 수집기는 `@kitchen.genome` 저장된 세션(`/home/box/.secrets/kg_ig_kitchen_genome.session`)으로 시드 공개 핸들을 읽습니다. `KG_INSTAGRAM_ENABLED` 기본값은 `1`입니다. `0`으로 두면 로그인·세션 로드·수집을 건너뜁니다. 세션 파일이 없으면 `IG_SKIPPED account=kitchen.genome reason=missing_session`으로 보고합니다.
+- 레거시 아가마중 수집기(`crawler/instagram.py`)도 같은 플래그를 쓰며, **06:45–08:00 KST에만 실행**됩니다. 그 외 시간엔 `IG_SKIPPED`.
 - 로그인 ID는 스크립트에 고정, 비밀번호는 환경변수 `AGAMAJUNG_IG_PASSWORD`에서 실행 중에만 읽음 (출력·로그·커밋 금지). 세션은 레포 밖 `/home/box/.secrets/kg_ig_agamajung.session`(600)에 저장해 재사용. 세션 만료 시 같은 날 재로그인 안 함.
 - 체크포인트·챌린지·2FA·이메일 코드·의심 로그인·429·로그인 실패: 즉시 중단, 재시도·우회 없음, `crawler/out/ig_blocked.flag`에 사유 기록, `IG_BLOCKED reason=…` 출력. 플래그가 있으면 사람이 지울 때까지 IG 단계 안 돌림.
 - 하루 25개 핸들 이하, 요청 간 8초 이상, 프로필 + 최근 게시물 6개 캡션·날짜만. 발췌 40자 이하, 게시물 URL, 날짜만 저장. IG 결과는 검토 대기열 전용 (신뢰 출처 1곳 + IG = 2곳으로 인정).
@@ -73,5 +73,5 @@ The asset-only deploy (`upload_assets.py` + `deploy_kitchengenome.js`) does **no
 - 문서 / docs: [`docs/data/QUESTIONS.md`](docs/data/QUESTIONS.md) · [`ONTOLOGY.md`](docs/data/ONTOLOGY.md) · [`SOURCES.md`](docs/data/SOURCES.md) · [`DAEMON.md`](docs/data/DAEMON.md) · [`COLLECTION_BOT.md`](docs/data/COLLECTION_BOT.md)
 - 스키마 / schema: `schema/migrations/*.sql` (SQLite·D1 호환), 출처 레지스트리 `sources/registry.yaml`, 데몬 `daemon/kg_daemon/` (`pip install -r daemon/requirements.txt`)
 - 서비스 DB와 raw store는 git에 올리지 않습니다(`data_store/`). / The service DB and raw store are git-ignored.
-- 인스타그램 `@kitchen.genome` 계정은 2026-10-22에 비활성화되어 수집이 꺼져 있습니다(`KG_INSTAGRAM_ENABLED` 기본값 `0`). 우회(위장·계정 교체·프록시)는 구현하지 않습니다. / Instagram collection is off after the account was disabled; no evasion is implemented.
+- 인스타그램은 필수 후보 발견 출처지만, 체크포인트가 뜨면 **정지**하고 우회(위장·계정 교체·프록시)는 구현하지 않습니다. 세션이 없으면 `missing_session`으로 건너뜁니다. `KG_INSTAGRAM_ENABLED=0`으로 수집을 끌 수 있습니다. / Instagram pauses on checkpoint; no evasion is implemented. A missing session is reported as missing_session.
 - 테스트 / tests: `python3 -m pytest tests` (일부 기존 테스트가 `crawler/vault.json`을 다시 쓰므로 실행 후 `git status` 확인 / some existing tests rewrite `crawler/vault.json`; check `git status` afterwards).
