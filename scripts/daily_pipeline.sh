@@ -20,8 +20,8 @@ exec 3>&1
 # Keep logging even if the caller closes its output pipe during a timeout.
 exec > >(trap '' HUP INT TERM; exec tee -ap "$KG_HOME/data_store/logs/daily_pipeline_$DAY.log" 3>&-) 2>&1
 LOG_PID=$!
-# Instagram is off: @kitchen.genome was disabled by Instagram on 2026-10-22.
-export KG_INSTAGRAM_ENABLED="${KG_INSTAGRAM_ENABLED:-0}"
+# Instagram is on by default. Set KG_INSTAGRAM_ENABLED=0 to skip the IG step.
+export KG_INSTAGRAM_ENABLED="${KG_INSTAGRAM_ENABLED:-1}"
 if [ "$KG_INSTAGRAM_ENABLED" != 1 ]; then
   export KG_IG=0
 else

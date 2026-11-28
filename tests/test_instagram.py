@@ -84,14 +84,14 @@ class T(unittest.TestCase):
         with contextlib.redirect_stdout(buf):
             self.assertEqual(ig.main(now=IN, il=m, sleep=lambda s: None), 0)
         self.assertEqual(m.calls, [])
-        self.assertIn('disabled_account_banned', buf.getvalue())
+        self.assertIn('reason=disabled', buf.getvalue())
         self.assertNotIn('dummy-not-real', buf.getvalue())
         del os.environ['KG_INSTAGRAM_ENABLED']
         m = fake_il(); buf = io.StringIO()
         with contextlib.redirect_stdout(buf):
             self.assertEqual(ig.main(now=IN, il=m, sleep=lambda s: None), 0)
-        self.assertEqual(m.calls, [])
-        self.assertIn('disabled_account_banned', buf.getvalue())
+        self.assertIn('load', [c[0] for c in m.calls])
+        self.assertNotIn('reason=disabled', buf.getvalue())
 if __name__ == '__main__': unittest.main()
 
 class TestBlackout(unittest.TestCase):
